@@ -1,5 +1,5 @@
 /*
- * holyc_parse.c  --  My Seed HolyC Parser + AST Utilities
+ * holyc_parse.c  --  WuBuNOS HolyC Parser + AST Utilities
  *
  * Recursive descent parser: tokens → AST.
  * Ported from ZealOS/src/Compiler/ParseExp.ZC + ParseStatement.ZC

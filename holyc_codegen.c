@@ -1,5 +1,5 @@
 /*
- * holyc_codegen.c  --  My Seed HolyC Code Generator (Facade)
+ * holyc_codegen.c  --  WuBuNOS HolyC Code Generator (Facade)
  * Modular codegen: emit, expr, stmt, api submodules.
  * This file is now a thin facade - real implementation in submodules.
  */

@@ -3,8 +3,8 @@
  * Tokenizes HolyC source code into HCToken stream.
  * Self-contained, C11, minimal includes.
  */
-#ifndef MYSEED_HOLYC_LEXER_H
-#define MYSEED_HOLYC_LEXER_H
+#ifndef WUBUNOS_HOLYC_LEXER_H
+#define WUBUNOS_HOLYC_LEXER_H
 
 #include "holyc_types.h"
 
@@ -13,4 +13,4 @@ HCTokenType hc_lex_next(HCLexer *lex);
 HCTokenType hc_lex_peek(HCLexer *lex);
 int hc_lex_expect(HCLexer *lex, HCTokenType expected);
 
-#endif /* MYSEED_HOLYC_LEXER_H */
+#endif /* WUBUNOS_HOLYC_LEXER_H */

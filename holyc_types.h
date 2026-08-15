@@ -3,8 +3,8 @@
  * Opaque struct forward declarations and shared type definitions.
  * C11, no external dependencies.
  */
-#ifndef MYSEED_HOLYC_TYPES_H
-#define MYSEED_HOLYC_TYPES_H
+#ifndef WUBUNOS_HOLYC_TYPES_H
+#define WUBUNOS_HOLYC_TYPES_H
 
 #include <stdint.h>
 #include <stddef.h>
@@ -411,4 +411,4 @@ struct HCCompiler {
     char error[256];
 };
 
-#endif /* MYSEED_HOLYC_TYPES_H */
+#endif /* WUBUNOS_HOLYC_TYPES_H */

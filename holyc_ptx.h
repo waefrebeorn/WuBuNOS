@@ -4,8 +4,8 @@
  * Public API for NVIDIA Tensor Core PTX emission.
  */
 
-#ifndef MYSEED_HOLYC_PTX_H
-#define MYSEED_HOLYC_PTX_H
+#ifndef WUBUNOS_HOLYC_PTX_H
+#define WUBUNOS_HOLYC_PTX_H
 
 #include "holyc.h"
 #include <stdint.h>
@@ -59,4 +59,4 @@ int hc_exec_ptx(const char *ptx_code, void **args, int num_args);
 int64_t hc_builtin_gpu_matmul(int64_t A, int64_t B, int64_t C, 
                                int64_t M, int64_t N, int64_t K);
 
-#endif /* MYSEED_HOLYC_PTX_H */
+#endif /* WUBUNOS_HOLYC_PTX_H */

@@ -2,8 +2,8 @@
  * holyc_ast.h  --  HolyC AST Node Definitions and Utilities
  * Self-contained, C11, minimal includes.
  */
-#ifndef MYSEED_HOLYC_AST_H
-#define MYSEED_HOLYC_AST_H
+#ifndef WUBUNOS_HOLYC_AST_H
+#define WUBUNOS_HOLYC_AST_H
 
 #include "holyc_types.h"
 
@@ -66,4 +66,4 @@ void hc_ast_add_arg(HCASTNode *call, HCASTNode *arg);
 void hc_ast_add_param(HCASTNode *func, HCASTNode *param, const char *name, HCType *type);
 void hc_ast_print(const HCASTNode *node, int indent);
 
-#endif /* MYSEED_HOLYC_AST_H */
+#endif /* WUBUNOS_HOLYC_AST_H */

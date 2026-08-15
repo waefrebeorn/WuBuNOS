@@ -1,5 +1,5 @@
 /*
- * holyc_test.c  --  My Seed HolyC Compiler Test Suite
+ * holyc_test.c  --  WuBuNOS HolyC Compiler Test Suite
  */
 
 #include "holyc.h"

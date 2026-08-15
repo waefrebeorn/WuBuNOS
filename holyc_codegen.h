@@ -2,8 +2,8 @@
  * holyc_codegen.h  --  HolyC Code Generator
  * Emits x86-64 machine code from AST. Self-contained, C11.
  */
-#ifndef MYSEED_HOLYC_CODEGEN_H
-#define MYSEED_HOLYC_CODEGEN_H
+#ifndef WUBUNOS_HOLYC_CODEGEN_H
+#define WUBUNOS_HOLYC_CODEGEN_H
 
 #include "holyc_types.h"
 
@@ -35,4 +35,4 @@ void hc_register_holyc_runtime(HCGen *gen);
 void *hc_compile(const char *source, size_t *out_size);
 int64_t hc_eval(const char *source);
 
-#endif /* MYSEED_HOLYC_CODEGEN_H */
+#endif /* WUBUNOS_HOLYC_CODEGEN_H */

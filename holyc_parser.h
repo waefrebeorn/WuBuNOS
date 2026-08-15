@@ -3,8 +3,8 @@
  * Parses HCToken stream into Abstract Syntax Tree (AST).
  * Self-contained, C11, minimal includes.
  */
-#ifndef MYSEED_HOLYC_PARSER_H
-#define MYSEED_HOLYC_PARSER_H
+#ifndef WUBUNOS_HOLYC_PARSER_H
+#define WUBUNOS_HOLYC_PARSER_H
 
 #include "holyc_types.h"
 
@@ -17,4 +17,4 @@ size_t hc_type_size(const HCType *t);
 HCASTNode *hc_parse_block(HCParser *p);
 HCTokenType hc_parse_peek(HCParser *p);
 
-#endif /* MYSEED_HOLYC_PARSER_H */
+#endif /* WUBUNOS_HOLYC_PARSER_H */
