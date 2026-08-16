@@ -1,0 +1,11 @@
+{
+  "integer": 1516,
+  "control": 765,
+  "bitwise": 500,
+  "comparison": 1331,
+  "memory": 46,
+  "float": 252,
+  "string": 40,
+  "stress": 0,
+  "uncategorized": 0
+}
