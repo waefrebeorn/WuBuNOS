@@ -11,6 +11,14 @@
 void *jit_alloc_exec(size_t size);
 void jit_free_exec(void *ptr, size_t size);
 
+/* -- Executable Output -------------------------------------------- */
+int hc_write_elf(const char *filename,
+                 const uint8_t *code, size_t code_size,
+                 const uint8_t *data, size_t data_size,
+                 const size_t *patch_offsets,
+                 const size_t *patch_globals,
+                 size_t n_patches);
+
 /* Code Generator API */
 void hc_gen_init(HCGen *gen);
 int hc_gen_node(HCGen *gen, const HCASTNode *node);
