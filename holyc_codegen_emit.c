@@ -116,6 +116,13 @@ void emit_cvt_i64_to_f64(HCGen *gen) {
     emit_byte(gen, 0x7E); emit_byte(gen, 0xC0);              /* movq rax, xmm0 */
 }
 
+/* emit_cdqe: truncate rax to 32-bit signed and sign-extend back to 64-bit.
+ * Encodes as: 48 63 C0  (cdqe /.movsxd rax, eax)
+ * This gives 32-bit overflow wraparound for integer arithmetic. */
+void emit_cdqe(HCGen *gen) {
+    emit_byte(gen, 0x48); emit_byte(gen, 0x63); emit_byte(gen, 0xC0);
+}
+
 void emit_add_rax_rdi(HCGen *gen) {
     emit_byte(gen, 0x48); emit_byte(gen, 0x01); emit_byte(gen, 0xF8);
 }

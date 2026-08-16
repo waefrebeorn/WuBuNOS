@@ -73,6 +73,43 @@ void *hc_compile(const char *source, size_t *out_size) {
     return exec;
 }
 
+/* Generate if/else as an expression: both branches produce a value in rax.
+ * Used by hc_eval when an if-stmt is the result of a block or top-level. */
+static void gen_if_expr(HCGen *gen, HCASTNode *ast) {
+    gen_expr(gen, ast->cond);
+    emit_test_rax_rax(gen);
+    size_t jz_patch = emit_jcc_placeholder(gen, CC_E);
+    /* Then branch — generate last statement as expression */
+    HCASTNode *then = ast->then_branch;
+    if (then->kind == HC_AST_BLOCK && then->n_stmts > 0) {
+        for (int i = 0; i < then->n_stmts - 1; i++) gen_stmt(gen, then->stmts[i]);
+        HCASTNode *tl = then->stmts[then->n_stmts - 1];
+        if (tl->kind == HC_AST_EXPR_STMT) gen_expr(gen, tl->child);
+        else if (tl->kind == HC_AST_IF) gen_if_expr(gen, tl);
+        else gen_expr(gen, tl);
+    } else if (then->kind == HC_AST_EXPR_STMT) { gen_expr(gen, then->child); }
+    else if (then->kind == HC_AST_IF) { gen_if_expr(gen, then); }
+    else { gen_expr(gen, then); }
+    size_t jmp_patch = emit_jmp_placeholder(gen);
+    size_t else_label = gen->code_size;
+    /* Else branch */
+    HCASTNode *els = ast->else_branch;
+    if (els) {
+        if (els->kind == HC_AST_BLOCK && els->n_stmts > 0) {
+            for (int i = 0; i < els->n_stmts - 1; i++) gen_stmt(gen, els->stmts[i]);
+            HCASTNode *el = els->stmts[els->n_stmts - 1];
+            if (el->kind == HC_AST_EXPR_STMT) gen_expr(gen, el->child);
+            else if (el->kind == HC_AST_IF) gen_if_expr(gen, el);
+            else gen_expr(gen, el);
+        } else if (els->kind == HC_AST_EXPR_STMT) { gen_expr(gen, els->child); }
+        else if (els->kind == HC_AST_IF) { gen_if_expr(gen, els); }
+        else { gen_expr(gen, els); }
+    }
+    size_t end_label = gen->code_size;
+    patch_rel32(gen, jz_patch, else_label);
+    patch_rel32(gen, jmp_patch, end_label);
+}
+
 int64_t hc_eval(const char *source) {
     /* Preprocess #define macros and strip directives before lexing —
      * real kernel source is full of them and the lexer has no '#' support. */
@@ -163,21 +200,26 @@ int64_t hc_eval(const char *source) {
     /* Register the HolyC personality runtime (Print / FpWriteFile) so calls
      * to those builtins resolve to real host functions instead of a null
      * pointer (previously the JIT emitted `call 0`, SIGSEGV at runtime). */
+    /* Force stack-local mode: VAR_DECL creates stack slots instead of
+     * data-section globals. This keeps the JIT mapping pure code (RX)
+     * without needing a writable data section. */
+    gen.in_function = true;
     hc_register_holyc_runtime(&gen);
     emit_prologue(&gen);
 
-    fprintf(stderr, "DEBUG hc_eval: ast kind=%d\n", ast->kind);
     if (ast->kind == HC_AST_BLOCK) {
-        fprintf(stderr, "DEBUG: BLOCK with %d stmts\n", ast->n_stmts);
+        /* For expression context: generate all statements except last as
+         * statements, then generate the last one as an expression so its
+         * value ends up in rax (the return value). */
         if (ast->n_stmts > 0) {
-            for (int i = 0; i < ast->n_stmts - 1; i++) {
-                fprintf(stderr, "DEBUG: stmt[%d] kind=%d\n", i, ast->stmts[i]->kind);
+            for (int i = 0; i < ast->n_stmts - 1; i++)
                 gen_stmt(&gen, ast->stmts[i]);
-            }
             HCASTNode *last = ast->stmts[ast->n_stmts - 1];
-            fprintf(stderr, "DEBUG: last stmt kind=%d\n", last->kind);
-            /* If the last statement is an expression statement, unwrap it */
-            if (last->kind == HC_AST_EXPR_STMT) {
+            /* If the last statement is an if-expression, generate it as
+             * expression context (both branches set rax before jump) */
+            if (last->kind == HC_AST_IF) {
+                gen_if_expr(&gen, last);
+            } else if (last->kind == HC_AST_EXPR_STMT) {
                 gen_expr(&gen, last->child);
             } else if (last->kind == HC_AST_RETURN) {
                 gen_stmt(&gen, last);
@@ -185,6 +227,10 @@ int64_t hc_eval(const char *source) {
                 gen_expr(&gen, last);
             }
         }
+    } else if (ast->kind == HC_AST_IF) {
+        /* Top-level if (not wrapped in block) */
+        gen_if_expr(&gen, ast);
+    } else if (ast->kind == HC_AST_EXPR_STMT || ast->kind == HC_AST_RETURN ||
     } else if (ast->kind == HC_AST_EXPR_STMT || ast->kind == HC_AST_RETURN ||
         ast->kind == HC_AST_IF || ast->kind == HC_AST_WHILE ||
         ast->kind == HC_AST_FOR || ast->kind == HC_AST_DO_WHILE ||
@@ -251,9 +297,11 @@ int64_t hc_eval(const char *source) {
      * Only drop write permission for pure-code buffers (no globals), matching
      * the holyd eval path which never locks. Locking an RWX page to RX would
      * turn runtime global stores into SIGSEGVs. */
-    if (gen.data_size == 0) {
-        jit_lock_exec(exec, gen.code_size + gen.data_size);
-    }
+    /* Always lock to RX for execution. The data section (if any) is
+     * already written before this point. For self-hosted mode, the
+     * memory is already RWX. */
+    exec = jit_lock_exec(exec, gen.code_size + gen.data_size);
+    if (!exec) { free(gen.code); free(gen.data); free(pp); return 0; }
 
     int64_t result = JIT_CALL(exec);
     jit_free_exec(exec, gen.code_size + gen.data_size);

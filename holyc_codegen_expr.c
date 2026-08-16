@@ -633,6 +633,8 @@ int gen_expr(HCGen *gen, const HCASTNode *node) {
                     if (pt && pt->kind == HC_TYPE_PTR && pt->base)
                         emit_incdec_rax(gen, (int)hc_type_size(pt->base), 1);
                     else emit_byte(gen, 0x48), emit_byte(gen, 0xFF), emit_byte(gen, 0xC0); /* inc rax */
+                    /* 32-bit overflow truncation */
+                    emit_byte(gen, 0x48); emit_byte(gen, 0x63); emit_byte(gen, 0xC0);
                     emit_global_store_rax(gen, go);  /* *x = rax */
                 } else {        /* stack local */
                     /* mov rax, [rbp - off] */
@@ -643,6 +645,8 @@ int gen_expr(HCGen *gen, const HCASTNode *node) {
                     if (pt && pt->kind == HC_TYPE_PTR && pt->base)
                         emit_incdec_rax(gen, (int)hc_type_size(pt->base), 1);
                     else emit_byte(gen, 0x48), emit_byte(gen, 0xFF), emit_byte(gen, 0xC0); /* inc rax */
+                    /* 32-bit overflow truncation */
+                    emit_byte(gen, 0x48); emit_byte(gen, 0x63); emit_byte(gen, 0xC0);
                     /* mov [rbp - off], rax */
                     emit_byte(gen, 0x48); emit_byte(gen, 0x89); emit_byte(gen, 0x85);
                     emit_dword(gen, (uint32_t)(-(int32_t)off & 0xFFFFFFFF));
@@ -677,6 +681,8 @@ int gen_expr(HCGen *gen, const HCASTNode *node) {
                     if (pt && pt->kind == HC_TYPE_PTR && pt->base)
                         emit_incdec_rax(gen, (int)hc_type_size(pt->base), 0);
                     else emit_byte(gen, 0x48), emit_byte(gen, 0xFF), emit_byte(gen, 0xC8); /* dec rax */
+                    /* 32-bit overflow truncation */
+                    emit_byte(gen, 0x48); emit_byte(gen, 0x63); emit_byte(gen, 0xC0);
                     emit_global_store_rax(gen, go);  /* *x = rax */
                 } else {        /* stack local */
                     /* mov rax, [rbp - off] */
@@ -687,6 +693,8 @@ int gen_expr(HCGen *gen, const HCASTNode *node) {
                     if (pt && pt->kind == HC_TYPE_PTR && pt->base)
                         emit_incdec_rax(gen, (int)hc_type_size(pt->base), 0);
                     else emit_byte(gen, 0x48), emit_byte(gen, 0xFF), emit_byte(gen, 0xC8); /* dec rax */
+                    /* 32-bit overflow truncation */
+                    emit_byte(gen, 0x48); emit_byte(gen, 0x63); emit_byte(gen, 0xC0);
                     /* mov [rbp - off], rax */
                     emit_byte(gen, 0x48); emit_byte(gen, 0x89); emit_byte(gen, 0x85);
                     emit_dword(gen, (uint32_t)(-(int32_t)off & 0xFFFFFFFF));
@@ -717,32 +725,49 @@ int gen_expr(HCGen *gen, const HCASTNode *node) {
                     size_t go = (size_t)(-off);
                     emit_global_load_rax(gen, go);     /* rax = old */
                     emit_mov_rdi_rax(gen);             /* rdi = old */
-                    /* Pointer ++ scales by element size; scalar adds 1. */
                     HCType *pt = resolve_var_type(gen, node->child->ident);
                     if (pt && pt->kind == HC_TYPE_PTR && pt->base)
                         emit_incdec_rax(gen, (int)hc_type_size(pt->base), 1);
                     else emit_byte(gen, 0x48), emit_byte(gen, 0xFF), emit_byte(gen, 0xC0); /* inc rax */
+                    emit_byte(gen, 0x48); emit_byte(gen, 0x63); emit_byte(gen, 0xC0); /* cdqe */
                     emit_global_store_rax(gen, go);    /* *x = rax (new) */
                     emit_byte(gen, 0x48); emit_byte(gen, 0x89); emit_byte(gen, 0xF8); /* rax = rdi (old) */
                 } else {        /* stack local */
-                    /* mov rax, [rbp - off] (return old value) */
                     emit_byte(gen, 0x48); emit_byte(gen, 0x8B); emit_byte(gen, 0x85);
                     emit_dword(gen, (uint32_t)(-(int32_t)off & 0xFFFFFFFF));
-                    /* mov rdi, rax (save old value) */
                     emit_mov_rdi_rax(gen);
-                    /* Pointer ++ scales by element size; scalar adds 1. */
                     HCType *pt = resolve_var_type(gen, node->child->ident);
                     if (pt && pt->kind == HC_TYPE_PTR && pt->base)
                         emit_incdec_rax(gen, (int)hc_type_size(pt->base), 1);
                     else emit_byte(gen, 0x48), emit_byte(gen, 0xFF), emit_byte(gen, 0xC0); /* inc rax */
-                    /* mov [rbp - off], rax (store new value) */
+                    emit_byte(gen, 0x48); emit_byte(gen, 0x63); emit_byte(gen, 0xC0); /* cdqe */
                     emit_byte(gen, 0x48); emit_byte(gen, 0x89); emit_byte(gen, 0x85);
                     emit_dword(gen, (uint32_t)(-(int32_t)off & 0xFFFFFFFF));
-                    /* mov rax, rdi (return old value) */
                     emit_byte(gen, 0x48); emit_byte(gen, 0x89); emit_byte(gen, 0xF8);
                 }
             } else {
-                emit_mov_rax_imm64(gen, 0);
+                /* Non-IDENT lvalue: a[i] or *p. */
+                emit_base_addr(gen, node->child);   /* rax = &lvalue */
+                emit_mov_rdi_rax(gen);              /* rdi = &lvalue */
+                /* Determine element size for the load/store */
+                int elsz = 8;
+                HCType *t = expr_static_type(gen, node->child);
+                if (t) elsz = (int)hc_type_size(t);
+                if (elsz <= 4) {
+                    /* 32-bit load (zero-extends to rax): 8B 07 */
+                    emit_byte(gen, 0x8B); emit_byte(gen, 0x07);
+                } else {
+                    emit_byte(gen, 0x48); emit_byte(gen, 0x8B); emit_byte(gen, 0x07);
+                }
+                emit_byte(gen, 0x48); emit_byte(gen, 0x89); emit_byte(gen, 0xC6); /* rsi = rax (old) */
+                emit_byte(gen, 0x48); emit_byte(gen, 0xFF); emit_byte(gen, 0xC0); /* inc rax */
+                emit_byte(gen, 0x48); emit_byte(gen, 0x63); emit_byte(gen, 0xC0); /* cdqe */
+                if (elsz <= 4) {
+                    emit_byte(gen, 0x89); emit_byte(gen, 0x07); /* mov [rdi], eax */
+                } else {
+                    emit_byte(gen, 0x48); emit_byte(gen, 0x89); emit_byte(gen, 0x07);
+                }
+                emit_byte(gen, 0x48); emit_byte(gen, 0x89); emit_byte(gen, 0xF0); /* rax = rsi (old) */
             }
             break;
         }
@@ -772,6 +797,8 @@ int gen_expr(HCGen *gen, const HCASTNode *node) {
                     if (pt && pt->kind == HC_TYPE_PTR && pt->base)
                         emit_incdec_rax(gen, (int)hc_type_size(pt->base), 0);
                     else emit_byte(gen, 0x48), emit_byte(gen, 0xFF), emit_byte(gen, 0xC8); /* dec rax */
+                    /* 32-bit overflow truncation */
+                    emit_byte(gen, 0x48); emit_byte(gen, 0x63); emit_byte(gen, 0xC0);
                     emit_global_store_rax(gen, go);    /* *x = rax (new) */
                     emit_byte(gen, 0x48); emit_byte(gen, 0x89); emit_byte(gen, 0xF8); /* rax = rdi (old) */
                 } else {        /* stack local */
@@ -785,6 +812,8 @@ int gen_expr(HCGen *gen, const HCASTNode *node) {
                     if (pt && pt->kind == HC_TYPE_PTR && pt->base)
                         emit_incdec_rax(gen, (int)hc_type_size(pt->base), 0);
                     else emit_byte(gen, 0x48), emit_byte(gen, 0xFF), emit_byte(gen, 0xC8); /* dec rax */
+                    /* 32-bit overflow truncation */
+                    emit_byte(gen, 0x48); emit_byte(gen, 0x63); emit_byte(gen, 0xC0);
                     /* mov [rbp - off], rax (store new value) */
                     emit_byte(gen, 0x48); emit_byte(gen, 0x89); emit_byte(gen, 0x85);
                     emit_dword(gen, (uint32_t)(-(int32_t)off & 0xFFFFFFFF));
@@ -792,7 +821,26 @@ int gen_expr(HCGen *gen, const HCASTNode *node) {
                     emit_byte(gen, 0x48); emit_byte(gen, 0x89); emit_byte(gen, 0xF8);
                 }
             } else {
-                emit_mov_rax_imm64(gen, 0);
+                /* Non-IDENT lvalue: a[i] or *p. */
+                emit_base_addr(gen, node->child);   /* rax = &lvalue */
+                emit_mov_rdi_rax(gen);              /* rdi = &lvalue */
+                int elsz = 8;
+                HCType *t = expr_static_type(gen, node->child);
+                if (t) elsz = (int)hc_type_size(t);
+                if (elsz <= 4) {
+                    emit_byte(gen, 0x8B); emit_byte(gen, 0x07);
+                } else {
+                    emit_byte(gen, 0x48); emit_byte(gen, 0x8B); emit_byte(gen, 0x07);
+                }
+                emit_byte(gen, 0x48); emit_byte(gen, 0x89); emit_byte(gen, 0xC6); /* rsi = rax (old) */
+                emit_byte(gen, 0x48); emit_byte(gen, 0xFF); emit_byte(gen, 0xC8); /* dec rax */
+                emit_byte(gen, 0x48); emit_byte(gen, 0x63); emit_byte(gen, 0xC0); /* cdqe */
+                if (elsz <= 4) {
+                    emit_byte(gen, 0x89); emit_byte(gen, 0x07);
+                } else {
+                    emit_byte(gen, 0x48); emit_byte(gen, 0x89); emit_byte(gen, 0x07);
+                }
+                emit_byte(gen, 0x48); emit_byte(gen, 0x89); emit_byte(gen, 0xF0); /* rax = rsi (old) */
             }
             break;
         }
@@ -976,11 +1024,11 @@ int gen_expr(HCGen *gen, const HCASTNode *node) {
             /* Pointer arithmetic: if left is a pointer/array, right is an
              * index scaled by the element size — so `x+1` = &x[1], not
              * &x[0]+1. (Scales rdi before the add; rax is the address.) */
-            {
-                int escale = pointer_elem_scale(gen, node->left);
-                if (escale > 1) scale_rdi(gen, escale);
-            }
+            int escale_add = pointer_elem_scale(gen, node->left);
+            if (escale_add > 1) { scale_rdi(gen, escale_add); }
             emit_add_rax_rdi(gen);
+            /* 32-bit overflow: cdqe for integer add (not pointer arithmetic) */
+            if (escale_add <= 1) emit_cdqe(gen);
             break;
 
         case HC_AST_SUB:
@@ -989,11 +1037,10 @@ int gen_expr(HCGen *gen, const HCASTNode *node) {
             gen_expr(gen, node->right);
             emit_byte(gen, 0x5F);              /* pop rdi (left restored) */
             emit_xchg_rax_rdi(gen);            /* rax=left, rdi=right */
-            {
-                int escale = pointer_elem_scale(gen, node->left);
-                if (escale > 1) scale_rdi(gen, escale);
-            }
+            int escale_sub = pointer_elem_scale(gen, node->left);
+            if (escale_sub > 1) { scale_rdi(gen, escale_sub); }
             emit_sub_rax_rdi(gen);
+            if (escale_sub <= 1) emit_cdqe(gen);
             break;
 
         case HC_AST_MUL:
@@ -1003,6 +1050,7 @@ int gen_expr(HCGen *gen, const HCASTNode *node) {
             emit_byte(gen, 0x5F);              /* pop rdi (left restored) */
             emit_xchg_rax_rdi(gen);
             emit_mul_rax_rdi(gen);
+            /* No cdqe for mul — 64-bit result preserved */
             break;
 
         case HC_AST_DIV:
@@ -1118,14 +1166,20 @@ int gen_expr(HCGen *gen, const HCASTNode *node) {
             emit_setcc(gen, 0x9E); /* setle */
             break;
 
-        case HC_AST_GT:
+        case HC_AST_GT: {
+            HCType *lt = expr_static_type(gen, node->left);
+            bool l_unsigned = lt && (lt->kind == HC_TYPE_U8 || lt->kind == HC_TYPE_U16 || lt->kind == HC_TYPE_U32 || lt->kind == HC_TYPE_U64);
+            HCType *rt = expr_static_type(gen, node->right);
+            bool r_unsigned = rt && (rt->kind == HC_TYPE_U8 || rt->kind == HC_TYPE_U16 || rt->kind == HC_TYPE_U32 || rt->kind == HC_TYPE_U64);
+            bool is_unsigned = l_unsigned || r_unsigned;
             gen_expr(gen, node->left); emit_byte(gen, 0x50); /* push left */
             gen_expr(gen, node->right);
             emit_byte(gen, 0x5F);              /* pop rdi (left) */
             emit_xchg_rax_rdi(gen);
             emit_cmp_rax_rdi(gen);
-            emit_setcc(gen, 0x9F); /* setg */
+            emit_setcc(gen, is_unsigned ? 0x97 : 0x9F); /* seta : setg */
             break;
+        }
 
         case HC_AST_GE:
             gen_expr(gen, node->left); emit_byte(gen, 0x50); /* push left */
@@ -1499,10 +1553,18 @@ int gen_expr(HCGen *gen, const HCASTNode *node) {
             break;
         }
 
-        default:
-            /* Unknown expression  --  emit 0 */
-            emit_mov_rax_imm64(gen, 0);
+        case HC_AST_BRACE_INIT:
+            /* Braced initializer in expression context: if it has exactly
+             * one element, evaluate that element (e.g. {-42} = -42).
+             * Multi-element inits ({1,2,3}) have no single value; return 0. */
+            if (node->n_args == 1 && node->args && node->args[0]) {
+                gen_expr(gen, node->args[0]);
+            } else {
+                emit_mov_rax_imm64(gen, 0);
+            }
             break;
+
+        default:
     }
 
     return 0;

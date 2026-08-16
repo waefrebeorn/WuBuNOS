@@ -439,13 +439,30 @@ static HCASTNode *parse_primary(HCParser *p) {
             expect(p, HC_TOK_RPAREN);
             return expr;
         }
+        case HC_TOK_LBRACE: {
+            /* Braced initializer: {expr, expr, ...} — parse as a list
+             * of expressions for array/struct init. Returns a BRACE_INIT
+             * node containing the element expressions. */
+            advance(p); /* consume { */
+            HCASTNode *init = hc_ast_new(HC_AST_BRACE_INIT);
+            if (!init) { p->has_error = true; return NULL; }
+            while (peek(p) != HC_TOK_RBRACE && peek(p) != HC_TOK_EOF) {
+                hc_ast_add_arg(init, parse_expr(p));
+                if (peek(p) == HC_TOK_COMMA) {
+                    advance(p);
+                    if (peek(p) == HC_TOK_RBRACE) break;
+                } else {
+                    break;
+                }
+            }
+            expect(p, HC_TOK_RBRACE);
+            return init;
+        }
         default:
             parse_error(p, "expected expression");
             return NULL;
     }
 }
-
-/* -- Parse Postfix ------------------------------------------------ */
 
 static HCASTNode *parse_postfix(HCParser *p) {
     HCASTNode *expr = parse_primary(p);
@@ -759,17 +776,24 @@ HCASTNode *parse_block(HCParser *p) {
     if (!block) { p->has_error = true; return NULL; }
     while (peek(p) != HC_TOK_RBRACE && peek(p) != HC_TOK_EOF) {
         int start_pos = p->lex->pos;
+        /* Peek ahead: if the next non-statement token is '}', this is the
+         * last statement in the block. Allow omitting the trailing semicolon
+         * for expression statements (HolyC block-as-expression syntax). */
         hc_ast_add_stmt(block, parse_stmt(p));
-        /* Guard against a statement that fails to consume any input. An
-         * unrecognized token (e.g. garbage source) would otherwise leave the
-         * lexer position unchanged, spin the loop forever, exhaust memory,
-         * and crash when hc_ast_new() returns NULL. Bail out cleanly as a
-         * parse error so the caller reports it instead of segfaulting. */
         if (!p->has_error && p->lex->pos == start_pos) {
             parse_error(p, "unexpected token in block");
             break;
         }
-        if (p->has_error) break;
+        if (p->has_error) {
+            /* If the error is a missing semicolon before '}', clear it —
+             * the last statement in a block doesn't need one. */
+            if (peek(p) == HC_TOK_RBRACE) {
+                p->has_error = false;
+                p->n_errors = 0;
+            } else {
+                break;
+            }
+        }
     }
     expect(p, HC_TOK_RBRACE);
     return block;

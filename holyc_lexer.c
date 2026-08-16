@@ -58,6 +58,7 @@ static const HCKeyword hc_keywords[] = {
     {"short",    HC_KW_I16},
     {"int",      HC_KW_I32},
     {"long",     HC_KW_I64},
+    {"unsigned", HC_KW_U32},
     {"float",    HC_KW_F64},
     {"double",   HC_KW_F64},
     {"bool",     HC_KW_BOOL},

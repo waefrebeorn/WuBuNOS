@@ -359,23 +359,49 @@ int gen_stmt(HCGen *gen, const HCASTNode *node) {
                         gen->symbols.n_locals++;
                     }
                     if (node->init) {
-                        /* Array-to-pointer decay: `int* p = a;` or
-                         * `int* p = a[0];` must store the ADDRESS of the
-                         * array (or row), not load its first element.
-                         * gen_expr would load the value — detect the case
-                         * (declared type is PTR, init static type is ARRAY)
-                         * and emit the base address instead. */
-                        HCType *decl_t = node->type;
-                        HCType *init_t = expr_static_type(gen, node->init);
-                        bool decay = decl_t && decl_t->kind == HC_TYPE_PTR &&
-                                     init_t && init_t->kind == HC_TYPE_ARRAY;
-                        if (decay) emit_base_addr(gen, node->init);
-                        else       gen_expr(gen, node->init);
-                        /* mov [rbp - offset], rax: 48 89 85 disp32 */
-                        emit_byte(gen, 0x48); /* REX.W */
-                        emit_byte(gen, 0x89); /* mov */
-                        emit_byte(gen, 0x85); /* [rbp+disp32] */
-                        emit_dword(gen, (uint32_t)(-(int32_t)offset & 0xFFFFFFFF));
+                        /* Handle braced initializer {e0, e1, ...} for arrays/structs.
+                         * Each element is evaluated and stored at consecutive offsets
+                         * from the array's stack address. */
+                        if (node->init->kind == HC_AST_BRACE_INIT) {
+                            int elem_size = 8;
+                            if (node->type && node->type->base)
+                                elem_size = (int)hc_type_size(node->type->base);
+                            /* lea rax, [rbp - offset] (array base address) */
+                            emit_byte(gen, 0x48); emit_byte(gen, 0x8D); emit_byte(gen, 0x85);
+                            emit_dword(gen, (uint32_t)(-(int32_t)offset & 0xFFFFFFFF));
+                            /* Save base in rdi */
+                            emit_byte(gen, 0x48); emit_byte(gen, 0x89); emit_byte(gen, 0xC7); /* mov rdi, rax */
+                            for (int ei = 0; ei < node->init->n_args; ei++) {
+                                gen_expr(gen, node->init->args[ei]);
+                                /* mov [rdi + ei*elem_size], rax */
+                                if (ei * elem_size < 128) {
+                                    emit_byte(gen, 0x48); emit_byte(gen, 0x89);
+                                    emit_byte(gen, 0x47); emit_byte(gen, (uint8_t)(ei * elem_size));
+                                } else {
+                                    /* disp8 too small — use disp32: 48 89 87 disp32 */
+                                    emit_byte(gen, 0x48); emit_byte(gen, 0x89);
+                                    emit_byte(gen, 0x87); emit_dword(gen, (uint32_t)(ei * elem_size));
+                                }
+                            }
+                        } else {
+                            /* Array-to-pointer decay: `int* p = a;` or
+                             * `int* p = a[0];` must store the ADDRESS of the
+                             * array (or row), not load its first element.
+                             * gen_expr would load the value — detect the case
+                             * (declared type is PTR, init static type is ARRAY)
+                             * and emit the base address instead. */
+                            HCType *decl_t = node->type;
+                            HCType *init_t = expr_static_type(gen, node->init);
+                            bool decay = decl_t && decl_t->kind == HC_TYPE_PTR &&
+                                         init_t && init_t->kind == HC_TYPE_ARRAY;
+                            if (decay) emit_base_addr(gen, node->init);
+                            else       gen_expr(gen, node->init);
+                            /* mov [rbp - offset], rax: 48 89 85 disp32 */
+                            emit_byte(gen, 0x48); /* REX.W */
+                            emit_byte(gen, 0x89); /* mov */
+                            emit_byte(gen, 0x85); /* [rbp+disp32] */
+                            emit_dword(gen, (uint32_t)(-(int32_t)offset & 0xFFFFFFFF));
+                        }
                     }
                 }
             }

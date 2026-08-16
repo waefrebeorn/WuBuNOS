@@ -256,6 +256,7 @@ typedef enum {
     HC_AST_SUB_ASSIGN,
     HC_AST_MUL_ASSIGN,
     HC_AST_DIV_ASSIGN,
+    HC_AST_BRACE_INIT,
 } HCASTKind;
 
 /* -- Forward declarations for opaque structs ---------------------------------- */
