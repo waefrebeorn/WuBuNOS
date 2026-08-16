@@ -21,6 +21,7 @@ extern const wubu_isa_driver_t wubu_isa_6502;
 extern const wubu_isa_driver_t wubu_isa_z80;
 extern const wubu_isa_driver_t wubu_isa_8051;  /* Intel 8051 (1978, the $0.10 chip) */
 extern const wubu_isa_driver_t wubu_isa_avr;   /* Atmel AVR (Arduino Uno) */
+extern const wubu_isa_driver_t wubu_isa_pic;   /* Microchip PIC (PIC16F877A) */
 extern const wubu_isa_driver_t wubu_isa_ptx;  /* NVIDIA GPU (PTX/SM89) */
 
 const wubu_isa_driver_t *wubu_isa_find(const char *name)
@@ -40,6 +41,9 @@ const wubu_isa_driver_t *wubu_isa_find(const char *name)
     if (!strcmp(name, "avr") || !strcmp(name, "atmega") ||
         !strcmp(name, "atmega328p") || !strcmp(name, "arduino"))
         return &wubu_isa_avr;
+    if (!strcmp(name, "pic") || !strcmp(name, "pic16") ||
+        !strcmp(name, "pic16f877a") || !strcmp(name, "microchip"))
+        return &wubu_isa_pic;
     if (!strcmp(name, "m68k") || !strcmp(name, "68000") ||
         !strcmp(name, "motorola-68000") || !strcmp(name, "68k"))
         return &wubu_isa_m68k;

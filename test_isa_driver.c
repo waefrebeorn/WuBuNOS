@@ -48,8 +48,8 @@ static void test_constant(void)
     wubu_vr_t v = wubu_mir_const(&prog, 42);
     wubu_mir_ret(&prog, v);
 
-    const char *names[] = {"x86-64", "8086", "m68k", "6502", "riscv", "z80"};
-    for (int i = 0; i < 6; i++) {
+    const char *names[] = {"x86-64", "8086", "m68k", "6502", "riscv", "z80", "pic"};
+    for (int i = 0; i < 7; i++) {
         const wubu_isa_driver_t *d = wubu_isa_find(names[i]);
         if (!d) { printf("  skip %s (not found)\n", names[i]); continue; }
         int64_t result = 0;
@@ -72,8 +72,8 @@ static void test_arithmetic(void)
     wubu_vr_t r = wubu_mir_binop(&prog, MIR_MUL, a, b);
     wubu_mir_ret(&prog, r);
 
-    const char *names[] = {"x86-64", "8086", "m68k", "6502", "riscv", "z80"};
-    for (int i = 0; i < 6; i++) {
+    const char *names[] = {"x86-64", "8086", "m68k", "6502", "riscv", "z80", "pic"};
+    for (int i = 0; i < 7; i++) {
         const wubu_isa_driver_t *d = wubu_isa_find(names[i]);
         if (!d) continue;
         int64_t result = 0;
@@ -96,8 +96,8 @@ static void test_comparison(void)
     wubu_vr_t r = wubu_mir_binop(&prog, MIR_GT, a, b);
     wubu_mir_ret(&prog, r);
 
-    const char *names[] = {"x86-64", "8086", "m68k", "6502", "riscv", "z80"};
-    for (int i = 0; i < 6; i++) {
+    const char *names[] = {"x86-64", "8086", "m68k", "6502", "riscv", "z80", "pic"};
+    for (int i = 0; i < 7; i++) {
         const wubu_isa_driver_t *d = wubu_isa_find(names[i]);
         if (!d) continue;
         int64_t result = 0;
@@ -120,8 +120,8 @@ static void test_bitwise(void)
     wubu_vr_t r = wubu_mir_binop(&prog, MIR_XOR, a, b);
     wubu_mir_ret(&prog, r);
 
-    const char *names[] = {"x86-64", "8086", "m68k", "6502", "riscv", "z80"};
-    for (int i = 0; i < 6; i++) {
+    const char *names[] = {"x86-64", "8086", "m68k", "6502", "riscv", "z80", "pic"};
+    for (int i = 0; i < 7; i++) {
         const wubu_isa_driver_t *d = wubu_isa_find(names[i]);
         if (!d) continue;
         int64_t result = 0;
@@ -144,8 +144,8 @@ static void test_shift(void)
     wubu_vr_t r = wubu_mir_binop(&prog, MIR_SHL, a, b);
     wubu_mir_ret(&prog, r);
 
-    const char *names[] = {"x86-64", "8086", "m68k", "6502", "riscv", "z80"};
-    for (int i = 0; i < 6; i++) {
+    const char *names[] = {"x86-64", "8086", "m68k", "6502", "riscv", "z80", "pic"};
+    for (int i = 0; i < 7; i++) {
         const wubu_isa_driver_t *d = wubu_isa_find(names[i]);
         if (!d) continue;
         int64_t result = 0;
@@ -167,8 +167,8 @@ static void test_negation(void)
     wubu_vr_t r = wubu_mir_unop(&prog, MIR_NEG, a);
     wubu_mir_ret(&prog, r);
 
-    const char *names[] = {"x86-64", "8086", "m68k", "6502", "riscv", "z80"};
-    for (int i = 0; i < 6; i++) {
+    const char *names[] = {"x86-64", "8086", "m68k", "6502", "riscv", "z80", "pic"};
+    for (int i = 0; i < 7; i++) {
         const wubu_isa_driver_t *d = wubu_isa_find(names[i]);
         if (!d) continue;
         int64_t result = 0;
@@ -193,8 +193,8 @@ static void test_complex(void)
     wubu_vr_t r = wubu_mir_binop(&prog, MIR_MUL, sum, four);
     wubu_mir_ret(&prog, r);
 
-    const char *names[] = {"x86-64", "8086", "m68k", "6502", "riscv", "z80"};
-    for (int i = 0; i < 6; i++) {
+    const char *names[] = {"x86-64", "8086", "m68k", "6502", "riscv", "z80", "pic"};
+    for (int i = 0; i < 7; i++) {
         const wubu_isa_driver_t *d = wubu_isa_find(names[i]);
         if (!d) continue;
         int64_t result = 0;
@@ -217,8 +217,8 @@ static void test_division(void)
     wubu_vr_t r = wubu_mir_binop(&prog, MIR_DIV, a, b);
     wubu_mir_ret(&prog, r);
 
-    const char *names[] = {"x86-64", "8086", "m68k", "6502", "riscv", "z80"};
-    for (int i = 0; i < 6; i++) {
+    const char *names[] = {"x86-64", "8086", "m68k", "6502", "riscv", "z80", "pic"};
+    for (int i = 0; i < 7; i++) {
         const wubu_isa_driver_t *d = wubu_isa_find(names[i]);
         if (!d) continue;
         int64_t result = 0;
@@ -241,8 +241,8 @@ static void test_modulo(void)
     wubu_vr_t r = wubu_mir_binop(&prog, MIR_MOD, a, b);
     wubu_mir_ret(&prog, r);
 
-    const char *names[] = {"x86-64", "8086", "m68k", "6502", "riscv", "z80"};
-    for (int i = 0; i < 6; i++) {
+    const char *names[] = {"x86-64", "8086", "m68k", "6502", "riscv", "z80", "pic"};
+    for (int i = 0; i < 7; i++) {
         const wubu_isa_driver_t *d = wubu_isa_find(names[i]);
         if (!d) continue;
         int64_t result = 0;
@@ -283,8 +283,8 @@ static void test_branch(void)
     /* just return 1 (the then-branch always taken since 3>2 is true) */
     wubu_mir_ret(&prog, one);
 
-    const char *names[] = {"x86-64", "8086", "m68k", "6502", "riscv", "z80"};
-    for (int i = 0; i < 6; i++) {
+    const char *names[] = {"x86-64", "8086", "m68k", "6502", "riscv", "z80", "pic"};
+    for (int i = 0; i < 7; i++) {
         const wubu_isa_driver_t *d = wubu_isa_find(names[i]);
         if (!d) continue;
         int64_t result = 0;
@@ -300,9 +300,9 @@ static void test_branch(void)
 static void test_registry(void)
 {
     printf("-- Test: driver registry --\n");
-    const char *names[] = {"x86-64", "8086", "m68k", "6502", "riscv", "z80"};
+    const char *names[] = {"x86-64", "8086", "m68k", "6502", "riscv", "z80", "pic"};
     int found = 0;
-    for (int i = 0; i < 6; i++) {
+    for (int i = 0; i < 7; i++) {
         const wubu_isa_driver_t *d = wubu_isa_find(names[i]);
         if (d) {
             found++;
@@ -310,15 +310,15 @@ static void test_registry(void)
                    d->exec == WUBU_ISA_NATIVE ? "native" : "interpreted");
         }
     }
-    CHECK(found == 6, "all 6 drivers found");
+    CHECK(found == 7, "all 7 drivers found");
 }
 
 /* Test 12: driver describe */
 static void test_describe(void)
 {
     printf("-- Test: driver describe --\n");
-    const char *names[] = {"x86-64", "8086", "m68k", "6502", "riscv", "z80"};
-    for (int i = 0; i < 6; i++) {
+    const char *names[] = {"x86-64", "8086", "m68k", "6502", "riscv", "z80", "pic"};
+    for (int i = 0; i < 7; i++) {
         const wubu_isa_driver_t *d = wubu_isa_find(names[i]);
         if (!d) continue;
         printf("  ");
