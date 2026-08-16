@@ -82,6 +82,7 @@ int64_t hc_eval(const char *source) {
     HCLexer lex;
     hc_lex_init(&lex, effective);
 
+    fprintf(stderr, "DEBUG hc_eval: lex.has_error=%d\n", lex.has_error);
     if (lex.has_error) { free(pp); return 0; }
 
     HCParser parse;
@@ -139,6 +140,7 @@ int64_t hc_eval(const char *source) {
     }
 
     if (parse.has_error || !ast) {
+        fprintf(stderr, "DEBUG: parse error or null ast after block parsing (has_error=%d, ast=%p)\n", parse.has_error, (void*)ast);
         hc_ast_free(ast);
         free(pp);
         return 0;
@@ -164,8 +166,25 @@ int64_t hc_eval(const char *source) {
     hc_register_holyc_runtime(&gen);
     emit_prologue(&gen);
 
+    fprintf(stderr, "DEBUG hc_eval: ast kind=%d\n", ast->kind);
     if (ast->kind == HC_AST_BLOCK) {
-        gen_stmt(&gen, ast);
+        fprintf(stderr, "DEBUG: BLOCK with %d stmts\n", ast->n_stmts);
+        if (ast->n_stmts > 0) {
+            for (int i = 0; i < ast->n_stmts - 1; i++) {
+                fprintf(stderr, "DEBUG: stmt[%d] kind=%d\n", i, ast->stmts[i]->kind);
+                gen_stmt(&gen, ast->stmts[i]);
+            }
+            HCASTNode *last = ast->stmts[ast->n_stmts - 1];
+            fprintf(stderr, "DEBUG: last stmt kind=%d\n", last->kind);
+            /* If the last statement is an expression statement, unwrap it */
+            if (last->kind == HC_AST_EXPR_STMT) {
+                gen_expr(&gen, last->child);
+            } else if (last->kind == HC_AST_RETURN) {
+                gen_stmt(&gen, last);
+            } else {
+                gen_expr(&gen, last);
+            }
+        }
     } else if (ast->kind == HC_AST_EXPR_STMT || ast->kind == HC_AST_RETURN ||
         ast->kind == HC_AST_IF || ast->kind == HC_AST_WHILE ||
         ast->kind == HC_AST_FOR || ast->kind == HC_AST_DO_WHILE ||

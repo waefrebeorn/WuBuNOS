@@ -59,7 +59,7 @@ const test_entry_t gauntlet_integer_tests[] = {
     /* Distributivity */
     {"int_dist",          "2*(3+4)",       14,          TEST_CAT_INTEGER, 0, 100},
     /* Variables */
-    {"int_vars",          "{int a=5; int b=3; a*b}", 15, TEST_CAT_INTEGER, 0, 100},
+    {"int_vars",          "{int a=5; int b=3; a*b;}", 15, TEST_CAT_INTEGER, 0, 100},
     /* Chain */
     {"int_chain",         "1+2+3+4+5",     15,          TEST_CAT_INTEGER, 0, 100},
     /* Precedence */
@@ -69,19 +69,19 @@ const test_entry_t gauntlet_integer_tests[] = {
 
 const uint32_t gauntlet_integer_test_count = sizeof(gauntlet_integer_tests) / sizeof(gauntlet_integer_tests[0]);
 
-/* Control flow tests — HolyC expression format */
+/* Control flow tests — HolyC expression format (semicolons required) */
 const test_entry_t gauntlet_control_tests[] = {
-    {"ctrl_if_true",      "if(1) 42 else 0", 42, TEST_CAT_CONTROL, 0, 100},
-    {"ctrl_if_false",     "if(0) 0 else 42", 42, TEST_CAT_CONTROL, 0, 100},
-    {"ctrl_while",        "{int i=0; while(i<10) i++; i}", 10, TEST_CAT_CONTROL, 0, 100},
-    {"ctrl_for",          "{int s=0; for(int i=0;i<10;i++) s+=i; s}", 45, TEST_CAT_CONTROL, 0, 100},
-    {"ctrl_nested",       "{int s=0; for(int i=0;i<5;i++) for(int j=0;j<5;j++) s++; s}", 25, TEST_CAT_CONTROL, 0, 100},
-    {"ctrl_break",        "{int i=0; while(1){i++; if(i==5) break;} i}", 5, TEST_CAT_CONTROL, 0, 100},
-    {"ctrl_continue",     "{int s=0; for(int i=0;i<10;i++){if(i%2)continue; s+=i;} s}", 20, TEST_CAT_CONTROL, 0, 100},
     {"ctrl_ternary",      "1?42:0", 42, TEST_CAT_CONTROL, 0, 100},
     {"ctrl_ternary2",     "0?0:42", 42, TEST_CAT_CONTROL, 0, 100},
-    {"ctrl_and_short",    "{int x=0; if(0 && (x=1)) 0; x}", 0, TEST_CAT_CONTROL, 0, 100},
-    {"ctrl_or_short",     "{int x=0; if(1 || (x=1)) 0; x}", 0, TEST_CAT_CONTROL, 0, 100},
+    {"ctrl_and_short",    "{int x=0; if(0 && (x=1)) {0;} x;}", 0, TEST_CAT_CONTROL, 0, 100},
+    {"ctrl_or_short",     "{int x=0; if(1 || (x=1)) {0;} x;}", 0, TEST_CAT_CONTROL, 0, 100},
+    {"ctrl_if_true",      "if(1) {42;} else {0;}", 42, TEST_CAT_CONTROL, 0, 100},
+    {"ctrl_if_false",     "if(0) {0;} else {42;}", 42, TEST_CAT_CONTROL, 0, 100},
+    {"ctrl_while",        "{int i=0; while(i<10) {i++;} i;}", 10, TEST_CAT_CONTROL, 0, 100},
+    {"ctrl_for",          "{int s=0; for(int i=0;i<10;i++) {s+=i;} s;}", 45, TEST_CAT_CONTROL, 0, 100},
+    {"ctrl_nested",       "{int s=0; for(int i=0;i<5;i++) {for(int j=0;j<5;j++) {s++;}} s;}", 25, TEST_CAT_CONTROL, 0, 100},
+    {"ctrl_break",        "{int i=0; while(1) {i++; if(i==5) {break;}} i;}", 5, TEST_CAT_CONTROL, 0, 100},
+    {"ctrl_continue",     "{int s=0; for(int i=0;i<10;i++) {if(i%2) {continue;} s+=i;} s;}", 20, TEST_CAT_CONTROL, 0, 100},
 };
 
 const uint32_t gauntlet_control_test_count = sizeof(gauntlet_control_tests) / sizeof(gauntlet_control_tests[0]);
@@ -134,7 +134,7 @@ const test_entry_t gauntlet_stress_tests[] = {
 
 const uint32_t gauntlet_stress_test_count = sizeof(gauntlet_stress_tests) / sizeof(gauntlet_stress_tests[0]);
 
-/* Memory tests — HolyC expression format */
+/* Memory tests — HolyC expression format (statements need semicolons) */
 const test_entry_t gauntlet_memory_tests[] = {
     {"mem_local_var",     "{int x=42; x}", 42,          TEST_CAT_MEMORY, 0, 100},
     {"mem_array_access",  "{int a[3]={1,2,3}; a[1]}", 2, TEST_CAT_MEMORY, 0, 100},
