@@ -35,110 +35,110 @@ void gauntlet_add_codegen_test(gauntlet_state_t *g, const codegen_test_entry_t *
 
 /* ---- Built-in test suites ---- */
 
-/* Integer arithmetic tests */
+/* Integer arithmetic tests — HolyC expression format (no main(), just the value) */
 const test_entry_t gauntlet_integer_tests[] = {
     /* Basic ops */
-    {"int_add_basic",     "int main(){return 1+2;}",           3,           TEST_CAT_INTEGER, 0, 100},
-    {"int_sub_basic",     "int main(){return 10-3;}",          7,           TEST_CAT_INTEGER, 0, 100},
-    {"int_mul_basic",     "int main(){return 6*7;}",           42,          TEST_CAT_INTEGER, 0, 100},
-    {"int_div_basic",     "int main(){return 20/4;}",          5,           TEST_CAT_INTEGER, 0, 100},
-    {"int_mod_basic",     "int main(){return 17%5;}",          2,           TEST_CAT_INTEGER, 0, 100},
+    {"int_add_basic",     "1+2",           3,           TEST_CAT_INTEGER, 0, 100},
+    {"int_sub_basic",     "10-3",          7,           TEST_CAT_INTEGER, 0, 100},
+    {"int_mul_basic",     "6*7",           42,          TEST_CAT_INTEGER, 0, 100},
+    {"int_div_basic",     "20/4",          5,           TEST_CAT_INTEGER, 0, 100},
+    {"int_mod_basic",     "17%5",          2,           TEST_CAT_INTEGER, 0, 100},
     /* Negative numbers */
-    {"int_add_neg",       "int main(){return -5+3;}",          -2,          TEST_CAT_INTEGER, 0, 100},
-    {"int_sub_neg",       "int main(){return -5-3;}",          -8,          TEST_CAT_INTEGER, 0, 100},
-    {"int_mul_neg",       "int main(){return -5*3;}",          -15,         TEST_CAT_INTEGER, 0, 100},
-    {"int_div_neg",       "int main(){return -15/3;}",         -5,          TEST_CAT_INTEGER, 0, 100},
+    {"int_add_neg",       "-5+3",          -2,          TEST_CAT_INTEGER, 0, 100},
+    {"int_sub_neg",       "-5-3",          -8,          TEST_CAT_INTEGER, 0, 100},
+    {"int_mul_neg",       "-5*3",          -15,         TEST_CAT_INTEGER, 0, 100},
+    {"int_div_neg",       "-15/3",         -5,          TEST_CAT_INTEGER, 0, 100},
     /* Large numbers */
-    {"int_add_large",     "int main(){return 1000000+2000000;}", 3000000,   TEST_CAT_INTEGER, 0, 100},
-    {"int_mul_large",     "int main(){return 1000*1000;}",     1000000,     TEST_CAT_INTEGER, 0, 100},
+    {"int_add_large",     "1000000+2000000", 3000000,   TEST_CAT_INTEGER, 0, 100},
+    {"int_mul_large",     "1000*1000",     1000000,     TEST_CAT_INTEGER, 0, 100},
     /* Overflow behavior */
-    {"int_add_overflow",  "int main(){int x=2147483647; return x+1;}", -2147483648, TEST_CAT_INTEGER, 0, 100},
+    {"int_add_overflow",  "2147483647+1",  -2147483648, TEST_CAT_INTEGER, 0, 100},
     /* Associativity */
-    {"int_assoc",         "int main(){return (1+2)+3;}",       6,           TEST_CAT_INTEGER, 0, 100},
-    {"int_assoc2",        "int main(){return 1+(2+3);}",       6,           TEST_CAT_INTEGER, 0, 100},
+    {"int_assoc",         "(1+2)+3",       6,           TEST_CAT_INTEGER, 0, 100},
+    {"int_assoc2",        "1+(2+3)",       6,           TEST_CAT_INTEGER, 0, 100},
     /* Distributivity */
-    {"int_dist",          "int main(){return 2*(3+4);}",       14,          TEST_CAT_INTEGER, 0, 100},
+    {"int_dist",          "2*(3+4)",       14,          TEST_CAT_INTEGER, 0, 100},
     /* Variables */
-    {"int_vars",          "int main(){int a=5; int b=3; return a*b;}", 15, TEST_CAT_INTEGER, 0, 100},
+    {"int_vars",          "{int a=5; int b=3; a*b}", 15, TEST_CAT_INTEGER, 0, 100},
     /* Chain */
-    {"int_chain",         "int main(){return 1+2+3+4+5;}",     15,          TEST_CAT_INTEGER, 0, 100},
+    {"int_chain",         "1+2+3+4+5",     15,          TEST_CAT_INTEGER, 0, 100},
     /* Precedence */
-    {"int_prec",          "int main(){return 2+3*4;}",         14,          TEST_CAT_INTEGER, 0, 100},
-    {"int_prec2",         "int main(){return (2+3)*4;}",       20,          TEST_CAT_INTEGER, 0, 100},
+    {"int_prec",          "2+3*4",         14,          TEST_CAT_INTEGER, 0, 100},
+    {"int_prec2",         "(2+3)*4",       20,          TEST_CAT_INTEGER, 0, 100},
 };
 
 const uint32_t gauntlet_integer_test_count = sizeof(gauntlet_integer_tests) / sizeof(gauntlet_integer_tests[0]);
 
-/* Control flow tests */
+/* Control flow tests — HolyC expression format */
 const test_entry_t gauntlet_control_tests[] = {
-    {"ctrl_if_true",      "int main(){if(1) return 42; else return 0;}", 42, TEST_CAT_CONTROL, 0, 100},
-    {"ctrl_if_false",     "int main(){if(0) return 0; else return 42;}", 42, TEST_CAT_CONTROL, 0, 100},
-    {"ctrl_while",        "int main(){int i=0; while(i<10) i++; return i;}", 10, TEST_CAT_CONTROL, 0, 100},
-    {"ctrl_for",          "int main(){int s=0; for(int i=0;i<10;i++) s+=i; return s;}", 45, TEST_CAT_CONTROL, 0, 100},
-    {"ctrl_nested",       "int main(){int s=0; for(int i=0;i<5;i++) for(int j=0;j<5;j++) s++; return s;}", 25, TEST_CAT_CONTROL, 0, 100},
-    {"ctrl_break",        "int main(){int i=0; while(1){i++; if(i==5) break;} return i;}", 5, TEST_CAT_CONTROL, 0, 100},
-    {"ctrl_continue",     "int main(){int s=0; for(int i=0;i<10;i++){if(i%2)continue; s+=i;} return s;}", 20, TEST_CAT_CONTROL, 0, 100},
-    {"ctrl_ternary",      "int main(){return 1?42:0;}", 42, TEST_CAT_CONTROL, 0, 100},
-    {"ctrl_ternary2",     "int main(){return 0?0:42;}", 42, TEST_CAT_CONTROL, 0, 100},
-    {"ctrl_and_short",    "int main(){int x=0; if(0 && (x=1)) return 0; return x;}", 0, TEST_CAT_CONTROL, 0, 100},
-    {"ctrl_or_short",     "int main(){int x=0; if(1 || (x=1)) return x; return 1;}", 0, TEST_CAT_CONTROL, 0, 100},
+    {"ctrl_if_true",      "if(1) 42 else 0", 42, TEST_CAT_CONTROL, 0, 100},
+    {"ctrl_if_false",     "if(0) 0 else 42", 42, TEST_CAT_CONTROL, 0, 100},
+    {"ctrl_while",        "{int i=0; while(i<10) i++; i}", 10, TEST_CAT_CONTROL, 0, 100},
+    {"ctrl_for",          "{int s=0; for(int i=0;i<10;i++) s+=i; s}", 45, TEST_CAT_CONTROL, 0, 100},
+    {"ctrl_nested",       "{int s=0; for(int i=0;i<5;i++) for(int j=0;j<5;j++) s++; s}", 25, TEST_CAT_CONTROL, 0, 100},
+    {"ctrl_break",        "{int i=0; while(1){i++; if(i==5) break;} i}", 5, TEST_CAT_CONTROL, 0, 100},
+    {"ctrl_continue",     "{int s=0; for(int i=0;i<10;i++){if(i%2)continue; s+=i;} s}", 20, TEST_CAT_CONTROL, 0, 100},
+    {"ctrl_ternary",      "1?42:0", 42, TEST_CAT_CONTROL, 0, 100},
+    {"ctrl_ternary2",     "0?0:42", 42, TEST_CAT_CONTROL, 0, 100},
+    {"ctrl_and_short",    "{int x=0; if(0 && (x=1)) 0; x}", 0, TEST_CAT_CONTROL, 0, 100},
+    {"ctrl_or_short",     "{int x=0; if(1 || (x=1)) 0; x}", 0, TEST_CAT_CONTROL, 0, 100},
 };
 
 const uint32_t gauntlet_control_test_count = sizeof(gauntlet_control_tests) / sizeof(gauntlet_control_tests[0]);
 
-/* Bitwise tests */
+/* Bitwise tests — HolyC expression format */
 const test_entry_t gauntlet_bitwise_tests[] = {
-    {"bit_and",           "int main(){return 0xFF & 0x0F;}",   0x0F,        TEST_CAT_BITWISE, 0, 100},
-    {"bit_or",            "int main(){return 0xF0 | 0x0F;}",   0xFF,        TEST_CAT_BITWISE, 0, 100},
-    {"bit_xor",           "int main(){return 0xFF ^ 0x0F;}",   0xF0,        TEST_CAT_BITWISE, 0, 100},
-    {"bit_not",           "int main(){return ~0;}",            -1,          TEST_CAT_BITWISE, 0, 100},
-    {"bit_shl",           "int main(){return 1<<8;}",          256,         TEST_CAT_BITWISE, 0, 100},
-    {"bit_shr",           "int main(){return 256>>8;}",        1,           TEST_CAT_BITWISE, 0, 100},
-    {"bit_shl_chain",     "int main(){return 1<<4<<2;}",       64,          TEST_CAT_BITWISE, 0, 100},
-    {"bit_mask",          "int main(){return 0xDEAD & 0xFF;}",  0xAD,        TEST_CAT_BITWISE, 0, 100},
-    {"bit_toggle",        "int main(){int x=0; x^=1; x^=1; return x;}", 0,   TEST_CAT_BITWISE, 0, 100},
-    {"bit_count",         "int main(){int c=0; for(int i=0;i<32;i++) c+=((1<<i)&0xAAAAAAAA)?0:1; return c;}", 16, TEST_CAT_BITWISE, 0, 100},
+    {"bit_and",           "0xFF & 0x0F",   0x0F,        TEST_CAT_BITWISE, 0, 100},
+    {"bit_or",            "0xF0 | 0x0F",   0xFF,        TEST_CAT_BITWISE, 0, 100},
+    {"bit_xor",           "0xFF ^ 0x0F",   0xF0,        TEST_CAT_BITWISE, 0, 100},
+    {"bit_not",           "~0",            -1,          TEST_CAT_BITWISE, 0, 100},
+    {"bit_shl",           "1<<8",          256,         TEST_CAT_BITWISE, 0, 100},
+    {"bit_shr",           "256>>8",        1,           TEST_CAT_BITWISE, 0, 100},
+    {"bit_shl_chain",     "1<<4<<2",       64,          TEST_CAT_BITWISE, 0, 100},
+    {"bit_mask",          "0xDEAD & 0xFF",  0xAD,        TEST_CAT_BITWISE, 0, 100},
+    {"bit_toggle",        "{int x=0; x^=1; x^=1; x}", 0,   TEST_CAT_BITWISE, 0, 100},
+    {"bit_count",         "{int c=0; for(int i=0;i<32;i++) c+=((1<<i)&0xAAAAAAAA)?0:1; c}", 16, TEST_CAT_BITWISE, 0, 100},
 };
 
 const uint32_t gauntlet_bitwise_test_count = sizeof(gauntlet_bitwise_tests) / sizeof(gauntlet_bitwise_tests[0]);
 
-/* Comparison tests */
+/* Comparison tests — HolyC expression format */
 const test_entry_t gauntlet_comparison_tests[] = {
-    {"cmp_eq_true",       "int main(){return 1==1;}",         1,           TEST_CAT_COMPARISON, 0, 100},
-    {"cmp_eq_false",      "int main(){return 1==2;}",         0,           TEST_CAT_COMPARISON, 0, 100},
-    {"cmp_ne_true",       "int main(){return 1!=2;}",         1,           TEST_CAT_COMPARISON, 0, 100},
-    {"cmp_lt_true",       "int main(){return 1<2;}",          1,           TEST_CAT_COMPARISON, 0, 100},
-    {"cmp_lt_false",      "int main(){return 2<1;}",          0,           TEST_CAT_COMPARISON, 0, 100},
-    {"cmp_le_true",       "int main(){return 1<=1;}",         1,           TEST_CAT_COMPARISON, 0, 100},
-    {"cmp_gt_true",       "int main(){return 2>1;}",          1,           TEST_CAT_COMPARISON, 0, 100},
-    {"cmp_ge_true",       "int main(){return 1>=1;}",         1,           TEST_CAT_COMPARISON, 0, 100},
-    {"cmp_neg_lt",        "int main(){return -1<0;}",         1,           TEST_CAT_COMPARISON, 0, 100},
-    {"cmp_neg_gt",        "int main(){return 0>-1;}",         1,           TEST_CAT_COMPARISON, 0, 100},
+    {"cmp_eq_true",       "1==1",         1,           TEST_CAT_COMPARISON, 0, 100},
+    {"cmp_eq_false",      "1==2",         0,           TEST_CAT_COMPARISON, 0, 100},
+    {"cmp_ne_true",       "1!=2",         1,           TEST_CAT_COMPARISON, 0, 100},
+    {"cmp_lt_true",       "1<2",          1,           TEST_CAT_COMPARISON, 0, 100},
+    {"cmp_lt_false",      "2<1",          0,           TEST_CAT_COMPARISON, 0, 100},
+    {"cmp_le_true",       "1<=1",         1,           TEST_CAT_COMPARISON, 0, 100},
+    {"cmp_gt_true",       "2>1",          1,           TEST_CAT_COMPARISON, 0, 100},
+    {"cmp_ge_true",       "1>=1",         1,           TEST_CAT_COMPARISON, 0, 100},
+    {"cmp_neg_lt",        "-1<0",         1,           TEST_CAT_COMPARISON, 0, 100},
+    {"cmp_neg_gt",        "0>-1",         1,           TEST_CAT_COMPARISON, 0, 100},
 };
 
 const uint32_t gauntlet_comparison_test_count = sizeof(gauntlet_comparison_tests) / sizeof(gauntlet_comparison_tests[0]);
 
-/* Stress tests */
+/* Stress tests — HolyC expression format */
 const test_entry_t gauntlet_stress_tests[] = {
-    {"stress_signed_overflow", "int main(){int x=2147483647; x++; return x<0;}", 1, TEST_CAT_STRESS, 0, 100},
-    {"stress_unsigned_wrap",   "int main(){unsigned x=0; x--; return x>0;}", 1, TEST_CAT_STRESS, 0, 100},
-    {"stress_div_by_one",      "int main(){return 42/1;}", 42, TEST_CAT_STRESS, 0, 100},
-    {"stress_mul_by_zero",     "int main(){return 42*0;}", 0, TEST_CAT_STRESS, 0, 100},
-    {"stress_mul_by_one",      "int main(){return 42*1;}", 42, TEST_CAT_STRESS, 0, 100},
-    {"stress_zero_div",        "int main(){return 0/42;}", 0, TEST_CAT_STRESS, 0, 100},
-    {"stress_mod_by_one",      "int main(){return 42%1;}", 0, TEST_CAT_STRESS, 0, 100},
-    {"stress_double_neg",      "int main(){return - -42;}", 42, TEST_CAT_STRESS, 0, 100},
-    {"stress_triple_neg",      "int main(){return - - -42;}", -42, TEST_CAT_STRESS, 0, 100},
-    {"stress_deep_nest",       "int main(){int x=0; for(int i=0;i<100;i++) for(int j=0;j<100;j++) x++; return x;}", 10000, TEST_CAT_STRESS, 0, 100},
+    {"stress_signed_overflow", "{int x=2147483647; x++; x<0}", 1, TEST_CAT_STRESS, 0, 100},
+    {"stress_unsigned_wrap",   "{unsigned x=0; x--; x>0}", 1, TEST_CAT_STRESS, 0, 100},
+    {"stress_div_by_one",      "42/1", 42, TEST_CAT_STRESS, 0, 100},
+    {"stress_mul_by_zero",     "42*0", 0, TEST_CAT_STRESS, 0, 100},
+    {"stress_mul_by_one",      "42*1", 42, TEST_CAT_STRESS, 0, 100},
+    {"stress_zero_div",        "0/42", 0, TEST_CAT_STRESS, 0, 100},
+    {"stress_mod_by_one",      "42%1", 0, TEST_CAT_STRESS, 0, 100},
+    {"stress_double_neg",      "- -42", 42, TEST_CAT_STRESS, 0, 100},
+    {"stress_triple_neg",      "- - -42", -42, TEST_CAT_STRESS, 0, 100},
+    {"stress_deep_nest",       "{int x=0; for(int i=0;i<100;i++) for(int j=0;j<100;j++) x++; x}", 10000, TEST_CAT_STRESS, 0, 100},
 };
 
 const uint32_t gauntlet_stress_test_count = sizeof(gauntlet_stress_tests) / sizeof(gauntlet_stress_tests[0]);
 
-/* Memory tests (require memory model — placeholder for now) */
+/* Memory tests — HolyC expression format */
 const test_entry_t gauntlet_memory_tests[] = {
-    {"mem_local_var",     "int main(){int x=42; return x;}", 42,          TEST_CAT_MEMORY, 0, 100},
-    {"mem_array_access",  "int main(){int a[3]={1,2,3}; return a[1];}", 2, TEST_CAT_MEMORY, 0, 100},
-    {"mem_ptr_deref",     "int main(){int x=42; int *p=&x; return *p;}", 42, TEST_CAT_MEMORY, 0, 100},
+    {"mem_local_var",     "{int x=42; x}", 42,          TEST_CAT_MEMORY, 0, 100},
+    {"mem_array_access",  "{int a[3]={1,2,3}; a[1]}", 2, TEST_CAT_MEMORY, 0, 100},
+    {"mem_ptr_deref",     "{int x=42; int *p=&x; *p}", 42, TEST_CAT_MEMORY, 0, 100},
 };
 
 const uint32_t gauntlet_memory_test_count = sizeof(gauntlet_memory_tests) / sizeof(gauntlet_memory_tests[0]);
