@@ -34,6 +34,7 @@ void emit_dword(HCGen *gen, uint32_t d);
 void emit_data_dword(HCGen *gen, uint32_t d);
 void emit_data_qword(HCGen *gen, uint64_t q);
 void emit_qword(HCGen *gen, uint64_t q);
+void emit_cdqe(HCGen *gen);  /* sign-extend 32→64 after int ADD/SUB (cdqe) */
 
 /* -- Patch Helpers ------------------------------------------------- */
 

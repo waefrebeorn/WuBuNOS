@@ -119,8 +119,7 @@ int64_t hc_eval(const char *source) {
     HCLexer lex;
     hc_lex_init(&lex, effective);
 
-    fprintf(stderr, "DEBUG hc_eval: lex.has_error=%d\n", lex.has_error);
-    if (lex.has_error) { free(pp); return 0; }
+    if (lex.has_error) return 0;
 
     HCParser parse;
     hc_parse_init(&parse, &lex);
@@ -177,7 +176,6 @@ int64_t hc_eval(const char *source) {
     }
 
     if (parse.has_error || !ast) {
-        fprintf(stderr, "DEBUG: parse error or null ast after block parsing (has_error=%d, ast=%p)\n", parse.has_error, (void*)ast);
         hc_ast_free(ast);
         free(pp);
         return 0;
