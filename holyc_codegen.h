@@ -18,6 +18,15 @@ int hc_write_elf(const char *filename,
                  const size_t *patch_offsets,
                  const size_t *patch_globals,
                  size_t n_patches);
+int hc_write_pe(const char *filename,
+                const uint8_t *code, size_t code_size,
+                const uint8_t *data, size_t data_size,
+                const size_t *patch_offsets,
+                const size_t *patch_globals,
+                size_t n_patches);
+int hc_write_bin(const char *filename,
+                 const uint8_t *code, size_t code_size,
+                 int bootable);
 
 /* Code Generator API */
 void hc_gen_init(HCGen *gen);
