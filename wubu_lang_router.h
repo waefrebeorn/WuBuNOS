@@ -28,6 +28,7 @@
 #define WUBU_LANG_ROUTER_H
 
 #include <stdint.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 #error "C11 only. No C++."

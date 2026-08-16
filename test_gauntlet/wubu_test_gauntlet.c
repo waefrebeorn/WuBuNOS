@@ -36,7 +36,7 @@ void gauntlet_add_codegen_test(gauntlet_state_t *g, const codegen_test_entry_t *
 /* ---- Built-in test suites ---- */
 
 /* Integer arithmetic tests */
-static const test_entry_t integer_tests[] = {
+const test_entry_t gauntlet_integer_tests[] = {
     /* Basic ops */
     {"int_add_basic",     "int main(){return 1+2;}",           3,           TEST_CAT_INTEGER, 0, 100},
     {"int_sub_basic",     "int main(){return 10-3;}",          7,           TEST_CAT_INTEGER, 0, 100},
@@ -67,11 +67,10 @@ static const test_entry_t integer_tests[] = {
     {"int_prec2",         "int main(){return (2+3)*4;}",       20,          TEST_CAT_INTEGER, 0, 100},
 };
 
-const test_entry_t *gauntlet_integer_tests = integer_tests;
-const uint32_t gauntlet_integer_test_count = sizeof(integer_tests) / sizeof(integer_tests[0]);
+const uint32_t gauntlet_integer_test_count = sizeof(gauntlet_integer_tests) / sizeof(gauntlet_integer_tests[0]);
 
 /* Control flow tests */
-static const test_entry_t control_tests[] = {
+const test_entry_t gauntlet_control_tests[] = {
     {"ctrl_if_true",      "int main(){if(1) return 42; else return 0;}", 42, TEST_CAT_CONTROL, 0, 100},
     {"ctrl_if_false",     "int main(){if(0) return 0; else return 42;}", 42, TEST_CAT_CONTROL, 0, 100},
     {"ctrl_while",        "int main(){int i=0; while(i<10) i++; return i;}", 10, TEST_CAT_CONTROL, 0, 100},
@@ -85,11 +84,10 @@ static const test_entry_t control_tests[] = {
     {"ctrl_or_short",     "int main(){int x=0; if(1 || (x=1)) return x; return 1;}", 0, TEST_CAT_CONTROL, 0, 100},
 };
 
-const test_entry_t *gauntlet_control_tests = control_tests;
-const uint32_t gauntlet_control_test_count = sizeof(control_tests) / sizeof(control_tests[0]);
+const uint32_t gauntlet_control_test_count = sizeof(gauntlet_control_tests) / sizeof(gauntlet_control_tests[0]);
 
 /* Bitwise tests */
-static const test_entry_t bitwise_tests[] = {
+const test_entry_t gauntlet_bitwise_tests[] = {
     {"bit_and",           "int main(){return 0xFF & 0x0F;}",   0x0F,        TEST_CAT_BITWISE, 0, 100},
     {"bit_or",            "int main(){return 0xF0 | 0x0F;}",   0xFF,        TEST_CAT_BITWISE, 0, 100},
     {"bit_xor",           "int main(){return 0xFF ^ 0x0F;}",   0xF0,        TEST_CAT_BITWISE, 0, 100},
@@ -102,11 +100,10 @@ static const test_entry_t bitwise_tests[] = {
     {"bit_count",         "int main(){int c=0; for(int i=0;i<32;i++) c+=((1<<i)&0xAAAAAAAA)?0:1; return c;}", 16, TEST_CAT_BITWISE, 0, 100},
 };
 
-const test_entry_t *gauntlet_bitwise_tests = bitwise_tests;
-const uint32_t gauntlet_bitwise_test_count = sizeof(bitwise_tests) / sizeof(bitwise_tests[0]);
+const uint32_t gauntlet_bitwise_test_count = sizeof(gauntlet_bitwise_tests) / sizeof(gauntlet_bitwise_tests[0]);
 
 /* Comparison tests */
-static const test_entry_t comparison_tests[] = {
+const test_entry_t gauntlet_comparison_tests[] = {
     {"cmp_eq_true",       "int main(){return 1==1;}",         1,           TEST_CAT_COMPARISON, 0, 100},
     {"cmp_eq_false",      "int main(){return 1==2;}",         0,           TEST_CAT_COMPARISON, 0, 100},
     {"cmp_ne_true",       "int main(){return 1!=2;}",         1,           TEST_CAT_COMPARISON, 0, 100},
@@ -119,11 +116,10 @@ static const test_entry_t comparison_tests[] = {
     {"cmp_neg_gt",        "int main(){return 0>-1;}",         1,           TEST_CAT_COMPARISON, 0, 100},
 };
 
-const test_entry_t *gauntlet_comparison_tests = comparison_tests;
-const uint32_t gauntlet_comparison_test_count = sizeof(comparison_tests) / sizeof(comparison_tests[0]);
+const uint32_t gauntlet_comparison_test_count = sizeof(gauntlet_comparison_tests) / sizeof(gauntlet_comparison_tests[0]);
 
 /* Stress tests */
-static const test_entry_t stress_tests[] = {
+const test_entry_t gauntlet_stress_tests[] = {
     {"stress_signed_overflow", "int main(){int x=2147483647; x++; return x<0;}", 1, TEST_CAT_STRESS, 0, 100},
     {"stress_unsigned_wrap",   "int main(){unsigned x=0; x--; return x>0;}", 1, TEST_CAT_STRESS, 0, 100},
     {"stress_div_by_one",      "int main(){return 42/1;}", 42, TEST_CAT_STRESS, 0, 100},
@@ -136,18 +132,16 @@ static const test_entry_t stress_tests[] = {
     {"stress_deep_nest",       "int main(){int x=0; for(int i=0;i<100;i++) for(int j=0;j<100;j++) x++; return x;}", 10000, TEST_CAT_STRESS, 0, 100},
 };
 
-const test_entry_t *gauntlet_stress_tests = stress_tests;
-const uint32_t gauntlet_stress_test_count = sizeof(stress_tests) / sizeof(stress_tests[0]);
+const uint32_t gauntlet_stress_test_count = sizeof(gauntlet_stress_tests) / sizeof(gauntlet_stress_tests[0]);
 
 /* Memory tests (require memory model — placeholder for now) */
-static const test_entry_t memory_tests[] = {
+const test_entry_t gauntlet_memory_tests[] = {
     {"mem_local_var",     "int main(){int x=42; return x;}", 42,          TEST_CAT_MEMORY, 0, 100},
     {"mem_array_access",  "int main(){int a[3]={1,2,3}; return a[1];}", 2, TEST_CAT_MEMORY, 0, 100},
     {"mem_ptr_deref",     "int main(){int x=42; int *p=&x; return *p;}", 42, TEST_CAT_MEMORY, 0, 100},
 };
 
-const test_entry_t *gauntlet_memory_tests = memory_tests;
-const uint32_t gauntlet_memory_test_count = sizeof(memory_tests) / sizeof(memory_tests[0]);
+const uint32_t gauntlet_memory_test_count = sizeof(gauntlet_memory_tests) / sizeof(gauntlet_memory_tests[0]);
 
 /* ---- Run all tests ---- */
 
@@ -156,8 +150,8 @@ void gauntlet_run_all(gauntlet_state_t *g) {
 
     /* Collect all test suites */
     const test_entry_t *suites[] = {
-        integer_tests, control_tests, bitwise_tests,
-        comparison_tests, stress_tests, memory_tests,
+        gauntlet_integer_tests, gauntlet_control_tests, gauntlet_bitwise_tests,
+        gauntlet_comparison_tests, gauntlet_stress_tests, gauntlet_memory_tests,
     };
     const uint32_t counts[] = {
         gauntlet_integer_test_count, gauntlet_control_test_count,
