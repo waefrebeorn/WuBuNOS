@@ -3,10 +3,10 @@
 > **The compiler that runs ON the kernel.**
 
 WuBuNOS is the from-scratch C11 toolchain inside WuBuOS: a HolyC compiler
-frontend, a mid-level IR with optimizer passes, 11 ISA backends, and a
+frontend, a mid-level IR with optimizer passes, 14 ISA backends, and a
 self-hosting battery that proves every C11 construct the kernel needs.
 
-**Stats:** 33 C files, 16 header files, ~14,115 lines of code.
+**Stats:** 50 C files, 20 header files, ~25,208 lines of code.
 
 ---
 
@@ -289,3 +289,44 @@ gcc -O0 -g -I. \
 ## License
 
 WaefreBeorn Umbrella License v3.0
+
+---
+
+## Repository organization (READ FIRST — user-corrected 2026-08-16)
+
+Three real, separate repos. **Do not confuse them:**
+
+| Repo | Local path | GitHub | Role |
+|------|-----------|--------|------|
+| WuBuOS | `/home/wubu/wubuos` | `waefrebeorn/WuBuOS` | THE BODY — kernel, GUI, firmware, containers |
+| WuBuNOS | `/home/wubu/wubunos` | `waefrebeorn/WuBuNOS` | THE COMPILER — this repo |
+| wubuwizard | `/home/wubu/wubuwizard` | `waefrebeorn/wubuwizard` | THE BRAIN — AGI engine |
+
+This compiler repo is reached by the OS repo via a **symlink**:
+`/home/wubu/wubuos/src/compiler → /home/wubu/wubunos`. The OS `Makefile`
+uses `$(COMP) = src/compiler`, so `make holyc` in `wubuos` compiles sources
+from here directly. There is **no submodule** for the compiler (the `.gitmodules`
+entry was stale and is removed).
+
+`wubuos/src/brain` IS a real **gitlink submodule** → wubuwizard.
+Two different linkage mechanisms, on purpose: compiler = symlink (single
+checkout), brain = submodule (version-pinned).
+
+**Edit compiler sources HERE (`wubunos`), never in `wubuos/src/compiler/`.**
+
+## Build
+
+Built entirely from the OS repo (compiler has no standalone Makefile):
+
+```bash
+cd /home/wubu/wubuos
+make holyc                          # build the compiler driver
+make gauntlet_runner                # build the universal test gauntlet
+make test_gauntlet                  # run 4,450 tests across 14 ISAs
+make test_holyc                     # run holyc's self-tests
+```
+
+The `test_gauntlet_runner.c`, `isa-test/`, `peephole_superopt/`, and
+`dev/compiler_diff.c` live here now (moved Aug 2026 from the OS repo's
+`tools/` dir, which referenced them via `tools/...` before the symlink
+repoint). See `~/vault/WALKWAY.md` for the 8-wave improvement plan.
