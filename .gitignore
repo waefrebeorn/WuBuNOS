@@ -1,0 +1,10 @@
+*.o
+*.d
+holyc
+gauntlet_runner
+holyc_test
+selfhost_battery
+mir_driver_test
+test_isa_driver
+cleveland_browns_album_test
+hedge_verify
