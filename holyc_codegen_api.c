@@ -231,7 +231,6 @@ int64_t hc_eval(const char *source) {
         /* Top-level if (not wrapped in block) */
         gen_if_expr(&gen, ast);
     } else if (ast->kind == HC_AST_EXPR_STMT || ast->kind == HC_AST_RETURN ||
-    } else if (ast->kind == HC_AST_EXPR_STMT || ast->kind == HC_AST_RETURN ||
         ast->kind == HC_AST_IF || ast->kind == HC_AST_WHILE ||
         ast->kind == HC_AST_FOR || ast->kind == HC_AST_DO_WHILE ||
         ast->kind == HC_AST_VAR_DECL || ast->kind == HC_AST_FUNC_DECL) {
