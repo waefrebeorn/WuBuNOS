@@ -551,6 +551,8 @@ int gen_stmt(HCGen *gen, const HCASTNode *node) {
                             memcpy(&p[1], &disp, sizeof(disp));
                         }
                     }
+                    /* Save function body code size BEFORE restoring main code buffer */
+                    size_t func_body_size = gen->code_size;
                     /* Restore main code buffer */
                     gen->code = saved_code;
                     gen->code_size = saved_code_size;
@@ -562,6 +564,7 @@ int gen_stmt(HCGen *gen, const HCASTNode *node) {
                     strncpy(gen->functions[gen->n_functions].name,
                             node->ident, HC_MAX_IDENT_LEN - 1);
                     gen->functions[gen->n_functions].func_ptr = exec;
+                    gen->functions[gen->n_functions].code_size = func_body_size;
                     gen->functions[gen->n_functions].n_params = node->n_params;
                     gen->functions[gen->n_functions].ret_type = node->type;
                     /* Capture this function's global RIP fixups AFTER the

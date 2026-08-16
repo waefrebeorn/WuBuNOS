@@ -292,6 +292,7 @@ struct HCFunction {
     void *func_ptr;
     int n_params;
     HCType *ret_type;   /* declared return type (struct → sret-capable) */
+    size_t code_size;   /* size of function body code (for ELF emission) */
     /* Global RIP-relative fixups emitted INSIDE this function's body. Each
      * function is copied to its OWN exec buffer (separate from the main
      * code+data buffer), so a `mov [rip+disp32], rax` / `mov rax,[rip+disp32]`
