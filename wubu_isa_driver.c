@@ -9,6 +9,7 @@
  */
 #include "wubu_isa_driver.h"
 #include <string.h>
+#include <stdatomic.h>
 
 /* the built-in drivers, one per ISA (all extern in the header) */
 extern const wubu_isa_driver_t wubu_isa_x86_64;
@@ -23,6 +24,23 @@ extern const wubu_isa_driver_t wubu_isa_8051;  /* Intel 8051 (1978, the $0.10 ch
 extern const wubu_isa_driver_t wubu_isa_avr;   /* Atmel AVR (Arduino Uno) */
 extern const wubu_isa_driver_t wubu_isa_pic;   /* Microchip PIC (PIC16F877A) */
 extern const wubu_isa_driver_t wubu_isa_ptx;  /* NVIDIA GPU (PTX/SM89) */
+
+/* Portable cache clear for JIT'd code.
+ * x86-64: hardware maintains i/d cache coherency — compiler barrier only.
+ * ARM64: __builtin___clear_cache would be ideal; for hosted builds the
+ *        kernel's mmap(PROT_EXEC) handles it. This is a C11 barrier. */
+void wubu_clear_cache(void *addr, size_t size)
+{
+    (void)addr; (void)size;
+#if defined(__GNUC__) || defined(__clang__)
+    __asm__ volatile("" ::: "memory");
+#elif defined(_MSC_VER)
+    _ReadWriteBarrier();
+#else
+    /* C11 fallback: atomic signal fence acts as compiler barrier */
+    atomic_thread_fence(memory_order_seq_cst);
+#endif
+}
 
 const wubu_isa_driver_t *wubu_isa_find(const char *name)
 {

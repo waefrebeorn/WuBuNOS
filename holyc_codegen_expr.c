@@ -4,17 +4,16 @@
  */
 
 #include "holyc_codegen_internal.h"
+#include <stdnoreturn.h>
 
 /* Trap for an unresolved function call. The JIT emits a call to this (instead
  * of a raw `call 0`) when it cannot resolve an identifier to an internal
  * function or a registered extern. It never returns; it aborts with a clear
  * message so a missing HolyC builtin fails loudly instead of SIGSEGV-ing on a
  * null function pointer. Declared here so both call sites can reference it. */
-__attribute__((noreturn))
-void hc_trap_unresolved_call(const char *name);
+_Noreturn void hc_trap_unresolved_call(const char *name);
 
-__attribute__((noreturn))
-void hc_trap_unresolved_call(const char *name) {
+_Noreturn void hc_trap_unresolved_call(const char *name) {
     fprintf(stderr, "[holyc] unresolved function call%s%s -- no such function or "
                     "extern registered (crash avoided)\n",
             name ? ": " : "", name ? name : "");

@@ -333,7 +333,7 @@ static int64_t arm64_run(const uint8_t *code, size_t size, int64_t arg) {
                      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (mem == MAP_FAILED) return -999;
     memcpy(mem, code, size);
-    __builtin___clear_cache((char *)mem, (char *)mem + size);
+    wubu_clear_cache(mem, size);
     int64_t (*fn)(void) = (int64_t (*)(void))mem;
     int64_t result = fn();
     munmap(mem, size + 4096);

@@ -81,4 +81,7 @@ extern const wubu_isa_driver_t wubu_isa_ptx;    /* NVIDIA GPU PTX (2024) */
 /* D4: find a driver by name ("x86-64" / "8086" / "m68k"). NULL if unknown. */
 const wubu_isa_driver_t *wubu_isa_find(const char *name);
 
+/* Cache clear for JIT'd code (portable, no __attribute__/__builtin) */
+void wubu_clear_cache(void *addr, size_t size);
+
 #endif /* WUBU_ISA_DRIVER_H */

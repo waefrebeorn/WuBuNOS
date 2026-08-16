@@ -14,7 +14,7 @@
  *   syscall       (0f 05)            -- 2 bytes
  *   Total: 12 bytes
  *
- * C11, self-contained, no libelf.
+ * Pure C11, no compiler extensions. Byte-level serialization for portability.
  */
 
 #include <stdio.h>
@@ -24,33 +24,65 @@
 
 #define ELF_BASE_ADDR   0x400000
 
-typedef struct __attribute__((packed)) {
-    uint8_t  e_ident[16];
-    uint16_t e_type;        /* 2 = ET_EXEC */
-    uint16_t e_machine;     /* 0x3e = EM_X86_64 */
-    uint32_t e_version;     /* 1 */
-    uint64_t e_entry;       /* entry point VA */
-    uint64_t e_phoff;       /* program header offset (64) */
-    uint64_t e_shoff;       /* section header offset (0 = none) */
-    uint32_t e_flags;       /* 0 */
-    uint16_t e_ehsize;      /* 64 */
-    uint16_t e_phentsize;   /* 56 */
-    uint16_t e_phnum;       /* 1 */
-    uint16_t e_shentsize;   /* 0 */
-    uint16_t e_shnum;       /* 0 */
-    uint16_t e_shstrndx;    /* 0 */
-} elf64_ehdr_t;
+/* Portable write helpers — no struct packing, no __attribute__ */
+static void wb16(uint8_t *buf, uint16_t v) {
+    buf[0] = (uint8_t)(v & 0xFF);
+    buf[1] = (uint8_t)((v >> 8) & 0xFF);
+}
+static void wb32(uint8_t *buf, uint32_t v) {
+    buf[0] = (uint8_t)(v & 0xFF);
+    buf[1] = (uint8_t)((v >> 8) & 0xFF);
+    buf[2] = (uint8_t)((v >> 16) & 0xFF);
+    buf[3] = (uint8_t)((v >> 24) & 0xFF);
+}
+static void wb64(uint8_t *buf, uint64_t v) {
+    buf[0] = (uint8_t)(v & 0xFF);
+    buf[1] = (uint8_t)((v >> 8) & 0xFF);
+    buf[2] = (uint8_t)((v >> 16) & 0xFF);
+    buf[3] = (uint8_t)((v >> 24) & 0xFF);
+    buf[4] = (uint8_t)((v >> 32) & 0xFF);
+    buf[5] = (uint8_t)((v >> 40) & 0xFF);
+    buf[6] = (uint8_t)((v >> 48) & 0xFF);
+    buf[7] = (uint8_t)((v >> 56) & 0xFF);
+}
 
-typedef struct __attribute__((packed)) {
-    uint32_t p_type;        /* 1 = PT_LOAD */
-    uint32_t p_flags;       /* 7 = PF_R | PF_W | PF_X */
-    uint64_t p_offset;      /* 0 */
-    uint64_t p_vaddr;       /* ELF_BASE_ADDR */
-    uint64_t p_paddr;       /* ELF_BASE_ADDR */
-    uint64_t p_filesz;      /* total file size */
-    uint64_t p_memsz;       /* total file size */
-    uint64_t p_align;       /* 0x200000 */
-} elf64_phdr_t;
+#define ELF_HDR_SIZE 64
+#define PHDR_SIZE 56
+
+/* Build ELF64 header into buf (64 bytes) */
+static void build_elf_header(uint8_t *buf, uint64_t entry, uint64_t filesz) {
+    memset(buf, 0, ELF_HDR_SIZE);
+    buf[0] = 0x7f; buf[1] = 'E'; buf[2] = 'L'; buf[3] = 'F';
+    buf[4] = 2;     /* 64-bit */
+    buf[5] = 1;     /* little-endian */
+    buf[6] = 1;     /* ELF version */
+    wb16(buf + 16, 2);          /* e_type = ET_EXEC */
+    wb16(buf + 18, 0x3e);       /* e_machine = EM_X86_64 */
+    wb32(buf + 20, 1);          /* e_version */
+    wb64(buf + 24, entry);      /* e_entry */
+    wb64(buf + 32, ELF_HDR_SIZE); /* e_phoff */
+    wb64(buf + 40, 0);          /* e_shoff = 0 */
+    wb32(buf + 48, 0);          /* e_flags */
+    wb16(buf + 52, ELF_HDR_SIZE); /* e_ehsize */
+    wb16(buf + 54, PHDR_SIZE);  /* e_phentsize */
+    wb16(buf + 56, 1);          /* e_phnum */
+    wb16(buf + 58, 0);          /* e_shentsize */
+    wb16(buf + 60, 0);          /* e_shnum */
+    wb16(buf + 62, 0);          /* e_shstrndx */
+}
+
+/* Build PT_LOAD program header into buf (56 bytes) */
+static void build_phdr(uint8_t *buf, uint64_t filesz) {
+    memset(buf, 0, PHDR_SIZE);
+    wb32(buf + 0, 1);           /* p_type = PT_LOAD */
+    wb32(buf + 4, 7);           /* p_flags = PF_R|PF_W|PF_X */
+    wb64(buf + 8, 0);           /* p_offset */
+    wb64(buf + 16, ELF_BASE_ADDR); /* p_vaddr */
+    wb64(buf + 24, ELF_BASE_ADDR); /* p_paddr */
+    wb64(buf + 32, filesz);     /* p_filesz */
+    wb64(buf + 40, filesz);     /* p_memsz */
+    wb64(buf + 48, 0x200000);   /* p_align */
+}
 
 /* _start trampoline: call main, exit via syscall */
 static const uint8_t trampoline_template[12] = {
@@ -90,63 +122,28 @@ int hc_write_elf(const char *filename,
     }
 
     /* Layout: [ELF header (64)] [PHDR (56)] [trampoline (12)] [user code] [data] */
-    size_t ehdr_size = sizeof(elf64_ehdr_t);    /* 64 */
-    size_t phdr_size = sizeof(elf64_phdr_t);    /* 56 */
-    size_t hdr_size = ehdr_size + phdr_size;    /* 120 */
-
-    size_t code_start = hdr_size + TRAMPOLINE_SIZE;  /* offset of user code in file */
+    size_t hdr_size = ELF_HDR_SIZE + PHDR_SIZE;    /* 120 */
+    size_t code_start = hdr_size + TRAMPOLINE_SIZE;
     size_t user_code_va = ELF_BASE_ADDR + code_start;
     size_t data_start = code_start + code_size;
     size_t total_file_size = data_start + data_size;
 
-    /* Build trampoline with correct call displacement.
-     * call rel32: displacement = target - (rip_after_call)
-     * rip_after_call = ELF_BASE_ADDR + ehdr_size + phdr_size + 5
-     * target = user_code_va
-     * displacement = user_code_va - (ELF_BASE_ADDR + hdr_size + 5)
-     *               = TRAMPOLINE_SIZE - 5 = 7 */
+    /* Build trampoline with correct call displacement */
     uint8_t trampoline[TRAMPOLINE_SIZE];
     memcpy(trampoline, trampoline_template, TRAMPOLINE_SIZE);
     int32_t call_disp = (int32_t)(TRAMPOLINE_SIZE - 5); /* = 7 */
     memcpy(trampoline + 1, &call_disp, 4);
 
-    /* ELF header */
-    elf64_ehdr_t ehdr;
-    memset(&ehdr, 0, sizeof(ehdr));
-    ehdr.e_ident[0] = 0x7f;
-    ehdr.e_ident[1] = 'E';
-    ehdr.e_ident[2] = 'L';
-    ehdr.e_ident[3] = 'F';
-    ehdr.e_ident[4] = 2;     /* 64-bit */
-    ehdr.e_ident[5] = 1;     /* little-endian */
-    ehdr.e_ident[6] = 1;     /* ELF version */
-    ehdr.e_type = 2;         /* ET_EXEC */
-    ehdr.e_machine = 0x3e;   /* EM_X86_64 */
-    ehdr.e_version = 1;
-    ehdr.e_entry = ELF_BASE_ADDR + ehdr_size + phdr_size;  /* entry = _start trampoline */
-    ehdr.e_phoff = ehdr_size;
-    ehdr.e_shoff = 0;
-    ehdr.e_flags = 0;
-    ehdr.e_ehsize = (uint16_t)ehdr_size;
-    ehdr.e_phentsize = (uint16_t)phdr_size;
-    ehdr.e_phnum = 1;
-    ehdr.e_shentsize = 0;
-    ehdr.e_shnum = 0;
-    ehdr.e_shstrndx = 0;
-    fwrite(&ehdr, 1, sizeof(ehdr), f);
+    /* Write ELF header — entry point is the _start trampoline */
+    uint8_t ehdr[ELF_HDR_SIZE];
+    uint64_t trampoline_va = ELF_BASE_ADDR + hdr_size;
+    build_elf_header(ehdr, trampoline_va, total_file_size);
+    fwrite(ehdr, 1, ELF_HDR_SIZE, f);
 
-    /* Single PT_LOAD covering entire file */
-    elf64_phdr_t phdr;
-    memset(&phdr, 0, sizeof(phdr));
-    phdr.p_type = 1;                    /* PT_LOAD */
-    phdr.p_flags = 7;                   /* PF_R | PF_W | PF_X */
-    phdr.p_offset = 0;
-    phdr.p_vaddr = ELF_BASE_ADDR;
-    phdr.p_paddr = ELF_BASE_ADDR;
-    phdr.p_filesz = total_file_size;
-    phdr.p_memsz = total_file_size;
-    phdr.p_align = 0x200000;
-    fwrite(&phdr, 1, sizeof(phdr), f);
+    /* Write program header */
+    uint8_t phdr[PHDR_SIZE];
+    build_phdr(phdr, total_file_size);
+    fwrite(phdr, 1, PHDR_SIZE, f);
 
     /* Trampoline */
     fwrite(trampoline, 1, TRAMPOLINE_SIZE, f);

@@ -410,7 +410,7 @@ static int64_t x86_run(const uint8_t *code, size_t size, int64_t arg) {
                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (exec == MAP_FAILED) return -1;
     memcpy(exec, code, size);
-    __builtin___clear_cache((char *)exec, (char *)exec + size);
+    wubu_clear_cache(exec, size);
     int64_t (*fn)(void) = (int64_t (*)(void))exec;
     int64_t r = fn();
     munmap(exec, size);
