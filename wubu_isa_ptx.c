@@ -337,28 +337,26 @@ static int ensure_stub(void)
     return 0;
 }
 
-/* ---- Driver API: compile ---- */
+/* ---- Driver API: compile ----
+ * Always available: emits PTX text into *out_code/out_size.
+ * When WUBU_HOSTED is defined, also compiles to cubin via ptxas. */
 
 static int ptx_compile(const wubu_mir_prog_t *p, uint8_t **out_code, size_t *out_size)
 {
     if (!p || !out_code || !out_size) return -1;
 
-    /* 1. Emit PTX assembly */
+    /* 1. Emit PTX assembly (always works, pure C11) */
     char *ptx = emit_ptx(p);
     if (!ptx) return -1;
 
-    /* 2. Write PTX to temp file */
+#ifdef WUBU_HOSTED
+    /* 2a. Hosted: compile PTX -> cubin via ptxas */
     const char *ptx_path = "/tmp/wubu_kernel.ptx";
     FILE *f = fopen(ptx_path, "w");
-    if (!f) {
-        free(ptx);
-        return -1;
-    }
+    if (!f) { free(ptx); return -1; }
     fputs(ptx, f);
     fclose(f);
-    free(ptx);
 
-    /* 3. Compile PTX -> cubin with ptxas */
     const char *cubin_path = "/tmp/wubu_kernel.cubin";
     char cmd[512];
     snprintf(cmd, sizeof(cmd),
@@ -367,37 +365,42 @@ static int ptx_compile(const wubu_mir_prog_t *p, uint8_t **out_code, size_t *out
     int rc = system(cmd);
     if (rc != 0) {
         fprintf(stderr, "[ptx] ptxas compilation failed (rc=%d)\n", rc);
-        FILE *log = fopen("/tmp/ptxas_build.log", "r");
-        if (log) {
-            int c;
-            while ((c = fgetc(log)) != EOF) fputc(c, stderr);
-            fclose(log);
-        }
+        free(ptx);
         return -1;
     }
 
-    /* 4. Read cubin into memory */
     FILE *cf = fopen(cubin_path, "rb");
-    if (!cf) return -1;
+    if (!cf) { free(ptx); return -1; }
     fseek(cf, 0, SEEK_END);
     long cubin_size = ftell(cf);
     fseek(cf, 0, SEEK_SET);
     uint8_t *cubin = malloc((size_t)cubin_size);
-    if (!cubin) { fclose(cf); return -1; }
+    if (!cubin) { fclose(cf); free(ptx); return -1; }
     fread(cubin, 1, (size_t)cubin_size, cf);
     fclose(cf);
+    free(ptx);
 
     *out_code = cubin;
     *out_size = (size_t)cubin_size;
+#else
+    /* 2b. Self-hosted: return PTX text as-is. The caller can save it,
+     *      compile later with ptxas, or use a future native PTX runtime. */
+    *out_code = (uint8_t *)ptx;
+    *out_size = strlen(ptx);
+#endif
+
     return 0;
 }
 
-/* ---- Driver API: run ---- */
+/* ---- Driver API: run ----
+ * Hosted: launches on GPU via CUDA stub.
+ * Self-hosted: prints the PTX and returns 0 (no GPU available). */
 
 static int64_t ptx_run(const uint8_t *code, size_t size, int64_t arg)
 {
     if (!code || size == 0) return 0;
 
+#ifdef WUBU_HOSTED
     /* Ensure the host stub is compiled */
     if (ensure_stub() != 0) {
         fprintf(stderr, "[ptx] cannot run — host stub not available\n");
@@ -411,33 +414,24 @@ static int64_t ptx_run(const uint8_t *code, size_t size, int64_t arg)
     fwrite(code, 1, size, f);
     fclose(f);
 
-    /* Launch the host stub: it prints the result to stdout */
+    /* Launch the host stub */
     char cmd[512];
     snprintf(cmd, sizeof(cmd),
              "/tmp/gpu_host_stub %s %lld 2>/tmp/gpu_run.log",
              cubin_path, (long long)arg);
 
-    /* Capture stdout via a temp file — the stub writes to stdout,
-     * so we redirect to a file and read it back. */
     char result_path[256];
-    snprintf(result_path, sizeof(result_path), "/tmp/gu_result_%d.txt", (int)getpid());
+    snprintf(result_path, sizeof(result_path), "/tmp/ptx_result_%d.txt", (int)getpid());
     strncat(cmd, " > ", sizeof(cmd) - strlen(cmd) - 1);
     strncat(cmd, result_path, sizeof(cmd) - strlen(cmd) - 1);
 
     int rc = system(cmd);
     if (rc != 0) {
         fprintf(stderr, "[ptx] host stub execution failed (rc=%d)\n", rc);
-        FILE *log = fopen("/tmp/gpu_run.log", "r");
-        if (log) {
-            int c;
-            while ((c = fgetc(log)) != EOF) fputc(c, stderr);
-            fclose(log);
-        }
         remove(result_path);
         return 0;
     }
 
-    /* Read the result */
     int64_t result = 0;
     FILE *rf = fopen(result_path, "r");
     if (rf) {
@@ -446,8 +440,17 @@ static int64_t ptx_run(const uint8_t *code, size_t size, int64_t arg)
         fclose(rf);
     }
     remove(result_path);
-
     return result;
+#else
+    /* Self-hosted: no GPU runtime available. Print PTX for offline compilation. */
+    printf("[ptx] Generated PTX assembly (%zu bytes):\n", size);
+    printf("--- BEGIN PTX ---\n");
+    fwrite(code, 1, size, stdout);
+    printf("--- END PTX ---\n");
+    printf("[ptx] Compile with: ptxas -arch=sm_89 -o kernel.cubin kernel.ptx\n");
+    (void)arg;
+    return 0;
+#endif
 }
 
 /* ---- Driver API: describe ---- */
