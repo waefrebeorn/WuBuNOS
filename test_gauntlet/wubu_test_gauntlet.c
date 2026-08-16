@@ -64,7 +64,50 @@ const test_entry_t gauntlet_integer_tests[] = {
     {"int_chain",         "1+2+3+4+5",     15,          TEST_CAT_INTEGER, 0, 100},
     /* Precedence */
     {"int_prec",          "2+3*4",         14,          TEST_CAT_INTEGER, 0, 100},
-    {"int_prec2",         "(2+3)*4",       20,          TEST_CAT_INTEGER, 0, 100},
+    {"int_prec2",        "(2+3)*4",       20,          TEST_CAT_INTEGER, 0, 100},
+    /* Additional integer tests */
+    {"int_shl_basic",    "1<<4",          16,          TEST_CAT_INTEGER, 0, 100},
+    {"int_shr_basic",    "256>>2",        64,          TEST_CAT_INTEGER, 0, 100},
+    {"int_bitand",       "15&7",          7,           TEST_CAT_INTEGER, 0, 100},
+    {"int_bitor",        "8|4",           12,          TEST_CAT_INTEGER, 0, 100},
+    {"int_bitxor",       "10^3",          9,           TEST_CAT_INTEGER, 0, 100},
+    {"int_neg",          "-42",           -42,         TEST_CAT_INTEGER, 0, 100},
+    {"int_not",          "!0",            1,           TEST_CAT_INTEGER, 0, 100},
+    {"int_not_truthy",   "!42",           0,           TEST_CAT_INTEGER, 0, 100},
+    {"int_bitnot",       "~0",            -1,          TEST_CAT_INTEGER, 0, 100},
+    {"int_div_trunc",    "7/2",           3,           TEST_CAT_INTEGER, 0, 100},
+    {"int_mod",          "7%3",           1,           TEST_CAT_INTEGER, 0, 100},
+    {"int_chain_long",   "1+2+3+4+5+6+7+8+9+10", 55, TEST_CAT_INTEGER, 0, 100},
+    {"int_mixed_prec",   "2+3*4-5",       9,           TEST_CAT_INTEGER, 0, 100},
+    {"int_parens_deep",  "((1+2)*(3+4))", 21,          TEST_CAT_INTEGER, 0, 100},
+    {"int_sub_zero",     "42-0",          42,          TEST_CAT_INTEGER, 0, 100},
+    {"int_mult_one",     "42*1",          42,          TEST_CAT_INTEGER, 0, 100},
+    {"int_mult_zero",    "42*0",          0,           TEST_CAT_INTEGER, 0, 100},
+    {"int_div_one",      "42/1",          42,          TEST_CAT_INTEGER, 0, 100},
+    {"int_div_zero_num", "0/42",          0,           TEST_CAT_INTEGER, 0, 100},
+    {"int_mod_one",      "42%1",          0,           TEST_CAT_INTEGER, 0, 100},
+    {"int_double_neg",   "- -42",         42,          TEST_CAT_INTEGER, 0, 100},
+    {"int_triple_neg",   "- - -42",       -42,         TEST_CAT_INTEGER, 0, 100},
+    {"int_add_assign",   "{int a=5; a+=3; a}", 8,       TEST_CAT_INTEGER, 0, 100},
+    {"int_sub_assign",   "{int a=5; a-=3; a}", 2,       TEST_CAT_INTEGER, 0, 100},
+    {"int_mul_assign",   "{int a=5; a*=3; a}", 15,      TEST_CAT_INTEGER, 0, 100},
+    {"int_div_assign",   "{int a=15; a/=3; a}", 5,      TEST_CAT_INTEGER, 0, 100},
+    {"int_mod_assign",   "{int a=17; a%=5; a}", 2,      TEST_CAT_INTEGER, 0, 100},
+    {"int_post_inc",     "{int a=5; a++; a}", 6,         TEST_CAT_INTEGER, 0, 100},
+    {"int_pre_inc",      "{int a=5; ++a}",   6,          TEST_CAT_INTEGER, 0, 100},
+    {"int_post_dec",     "{int a=5; a--; a}", 4,        TEST_CAT_INTEGER, 0, 100},
+    {"int_pre_dec",      "{int a=5; --a}",   4,          TEST_CAT_INTEGER, 0, 100},
+    {"int_post_inc_ret", "{int a=5; a++; a-1}", 5,      TEST_CAT_INTEGER, 0, 100},
+    {"int_ternary",      "1?42:99",        42,          TEST_CAT_INTEGER, 0, 100},
+    {"int_ternary_else", "0?42:99",        99,          TEST_CAT_INTEGER, 0, 100},
+    {"int_assign_chain", "{int a=0; a=1; a=2; a}", 2,  TEST_CAT_INTEGER, 0, 100},
+    {"int_bit_shl_10",   "1<<10",          1024,        TEST_CAT_INTEGER, 0, 100},
+    {"int_bit_shr_4",    "256>>4",         16,          TEST_CAT_INTEGER, 0, 100},
+    {"int_bit_shl_20",   "1<<20",          1048576,     TEST_CAT_INTEGER, 0, 100},
+    {"int_neg_large",    "{-2147483648}", -2147483648,  TEST_CAT_INTEGER, 0, 100},
+    {"int_max_32bit",    "2147483647",     2147483647,  TEST_CAT_INTEGER, 0, 100},
+    {"int_add_neg",      "-5+3",           -2,          TEST_CAT_INTEGER, 0, 100},
+    {"int_sub_neg_chain","10-3-2",         5,           TEST_CAT_INTEGER, 0, 100},
 };
 
 const uint32_t gauntlet_integer_test_count = sizeof(gauntlet_integer_tests) / sizeof(gauntlet_integer_tests[0]);
@@ -82,6 +125,23 @@ const test_entry_t gauntlet_control_tests[] = {
     {"ctrl_nested",       "{int s=0; for(int i=0;i<5;i++) {for(int j=0;j<5;j++) {s++;}} s;}", 25, TEST_CAT_CONTROL, 0, 100},
     {"ctrl_break",        "{int i=0; while(1) {i++; if(i==5) {break;}} i;}", 5, TEST_CAT_CONTROL, 0, 100},
     {"ctrl_continue",     "{int s=0; for(int i=0;i<10;i++) {if(i%2) {continue;} s+=i;} s;}", 20, TEST_CAT_CONTROL, 0, 100},
+    /* Additional control flow */
+    {"ctrl_if_no_else",   "if(1) {42;}", 42, TEST_CAT_CONTROL, 0, 100},
+    {"ctrl_if_nested",    "{int a=0; if(1) {if(1) {a=42;} else {a=0;}} a}", 42, TEST_CAT_CONTROL, 0, 100},
+    {"ctrl_if_else_false","{int a=0; if(0) {a=1;} else {a=42;} a}", 42, TEST_CAT_CONTROL, 0, 100},
+    {"ctrl_while_10",     "{int i=0; while(i<10) {i++;} i}", 10, TEST_CAT_CONTROL, 0, 100},
+    {"ctrl_while_100",    "{int i=0; while(i<100) {i++;} i}", 100, TEST_CAT_CONTROL, 0, 100},
+    {"ctrl_while_sum",    "{int i=0; int s=0; while(i<10) {s+=i; i++;} s}", 45, TEST_CAT_CONTROL, 0, 100},
+    {"ctrl_for_sum",      "{int s=0; for(int i=0;i<10;i++) {s+=i;} s}", 45, TEST_CAT_CONTROL, 0, 100},
+    {"ctrl_for_100",      "{int s=0; for(int i=0;i<100;i++) {s++;} s}", 100, TEST_CAT_CONTROL, 0, 100},
+    {"ctrl_break_5",      "{int i=0; while(1) {i++; if(i==5) {break;} } i}", 5, TEST_CAT_CONTROL, 0, 100},
+    {"ctrl_break_50",     "{int i=0; while(1) {i++; if(i==50) {break;} } i}", 50, TEST_CAT_CONTROL, 0, 100},
+    {"ctrl_continue_sum", "{int s=0; for(int i=0;i<10;i++) {if(i%2==0) {continue;} s+=i;} s}", 25, TEST_CAT_CONTROL, 0, 100},
+    {"ctrl_nested_loop",  "{int s=0; for(int i=0;i<5;i++) {for(int j=0;j<5;j++) {s++;}} s}", 25, TEST_CAT_CONTROL, 0, 100},
+    {"ctrl_nested_10",    "{int s=0; for(int i=0;i<10;i++) {for(int j=0;j<10;j++) {s++;}} s}", 100, TEST_CAT_CONTROL, 0, 100},
+    {"ctrl_ternary_1",    "1?42:99", 42, TEST_CAT_CONTROL, 0, 100},
+    {"ctrl_ternary_0",    "0?42:99", 99, TEST_CAT_CONTROL, 0, 100},
+    {"ctrl_ternary_cmp",  "1==1?42:99", 42, TEST_CAT_CONTROL, 0, 100},
 };
 
 const uint32_t gauntlet_control_test_count = sizeof(gauntlet_control_tests) / sizeof(gauntlet_control_tests[0]);
@@ -98,6 +158,17 @@ const test_entry_t gauntlet_bitwise_tests[] = {
     {"bit_mask",          "0xDEAD & 0xFF",  0xAD,        TEST_CAT_BITWISE, 0, 100},
     {"bit_toggle",        "{int x=0; x^=1; x^=1; x}", 0,   TEST_CAT_BITWISE, 0, 100},
     {"bit_count",         "{int c=0; for(int i=0;i<32;i++) c+=((1<<i)&0xAAAAAAAA)?0:1; c}", 16, TEST_CAT_BITWISE, 0, 100},
+    /* Additional bitwise */
+    {"bit_and_chain",     "0xFF&0xF0&0x0F", 0,           TEST_CAT_BITWISE, 0, 100},
+    {"bit_or_chain",      "0xF0|0x0F|0xFF", 0xFF,        TEST_CAT_BITWISE, 0, 100},
+    {"bit_xor_chain",     "0xFF^0x00^0xFF", 0,           TEST_CAT_BITWISE, 0, 100},
+    {"bit_shl_big",       "1<<16",        65536,        TEST_CAT_BITWISE, 0, 100},
+    {"bit_shr_big",       "65536>>8",     256,          TEST_CAT_BITWISE, 0, 100},
+    {"bit_and_zeros",     "0xABCD&0",     0,            TEST_CAT_BITWISE, 0, 100},
+    {"bit_or_ones",       "0|0xFFFF",     0xFFFF,       TEST_CAT_BITWISE, 0, 100},
+    {"bit_not_ff",        "~0xFF",        -256,         TEST_CAT_BITWISE, 0, 100},
+    {"bit_xor_ff",        "0xAB^0xFF",     0x54,         TEST_CAT_BITWISE, 0, 100},
+    {"bit_and_0f",        "0xDEAD&0xFFFF", 0xDEAD,       TEST_CAT_BITWISE, 0, 100},
 };
 
 const uint32_t gauntlet_bitwise_test_count = sizeof(gauntlet_bitwise_tests) / sizeof(gauntlet_bitwise_tests[0]);
@@ -114,6 +185,16 @@ const test_entry_t gauntlet_comparison_tests[] = {
     {"cmp_ge_true",       "1>=1",         1,           TEST_CAT_COMPARISON, 0, 100},
     {"cmp_neg_lt",        "-1<0",         1,           TEST_CAT_COMPARISON, 0, 100},
     {"cmp_neg_gt",        "0>-1",         1,           TEST_CAT_COMPARISON, 0, 100},
+    /* Additional comparisons */
+    {"cmp_eq_large",      "2147483647==2147483647", 1, TEST_CAT_COMPARISON, 0, 100},
+    {"cmp_ne_large",      "2147483647!=1", 1,        TEST_CAT_COMPARISON, 0, 100},
+    {"cmp_lt_large",      "1000000<2000000", 1,      TEST_CAT_COMPARISON, 0, 100},
+    {"cmp_gt_large",      "2000000>1000000", 1,      TEST_CAT_COMPARISON, 0, 100},
+    {"cmp_le_eq",         "5<=5",         1,           TEST_CAT_COMPARISON, 0, 100},
+    {"cmp_ge_eq",         "5>=5",         1,           TEST_CAT_COMPARISON, 0, 100},
+    {"cmp_lt_false2",     "5<3",          0,           TEST_CAT_COMPARISON, 0, 100},
+    {"cmp_gt_false2",     "3>5",          0,           TEST_CAT_COMPARISON, 0, 100},
+    {"cmp_chained",       "1<2<3",        1,           TEST_CAT_COMPARISON, 0, 100},
 };
 
 const uint32_t gauntlet_comparison_test_count = sizeof(gauntlet_comparison_tests) / sizeof(gauntlet_comparison_tests[0]);
@@ -130,6 +211,16 @@ const test_entry_t gauntlet_stress_tests[] = {
     {"stress_double_neg",      "- -42", 42, TEST_CAT_STRESS, 0, 100},
     {"stress_triple_neg",      "- - -42", -42, TEST_CAT_STRESS, 0, 100},
     {"stress_deep_nest",       "{int x=0; for(int i=0;i<100;i++) for(int j=0;j<100;j++) x++; x}", 10000, TEST_CAT_STRESS, 0, 100},
+    /* Additional stress tests */
+    {"stress_factorial",       "{int r=1; for(int i=1;i<=5;i++) r*=i; r}", 120, TEST_CAT_STRESS, 0, 100},
+    {"stress_fib",             "{int a=0; int b=1; for(int i=0;i<10;i++) {int t=a+b; a=b; b=t;} a}", 55, TEST_CAT_STRESS, 0, 100},
+    {"stress_complex_expr",    "3+4*2-6/3+10%3", 10, TEST_CAT_STRESS, 0, 100},
+    {"stress_ternary_chain",   "1?2?3:4:5", 3, TEST_CAT_STRESS, 0, 100},
+    {"stress_nested_parens",   "(((1+2))+((3*4)))", 15, TEST_CAT_STRESS, 0, 100},
+    {"stress_big_mul",         "1000*1000*10", 10000000, TEST_CAT_STRESS, 0, 100},
+    {"stress_big_add",         "999999+1", 1000000, TEST_CAT_STRESS, 0, 100},
+    {"stress_if_chain",        "1? (0?1:2) : 3", 2, TEST_CAT_STRESS, 0, 100},
+    {"stress_while_fact",      "{int r=1; int i=1; while(i<6) {r*=i; i++;} r}", 120, TEST_CAT_STRESS, 0, 100},
 };
 
 const uint32_t gauntlet_stress_test_count = sizeof(gauntlet_stress_tests) / sizeof(gauntlet_stress_tests[0]);
@@ -139,6 +230,15 @@ const test_entry_t gauntlet_memory_tests[] = {
     {"mem_local_var",     "{int x=42; x}", 42,          TEST_CAT_MEMORY, 0, 100},
     {"mem_array_access",  "{int a[3]={1,2,3}; a[1]}", 2, TEST_CAT_MEMORY, 0, 100},
     {"mem_ptr_deref",     "{int x=42; int *p=&x; *p}", 42, TEST_CAT_MEMORY, 0, 100},
+    /* Additional memory tests */
+    {"mem_array_0",       "{int a[3]={1,2,3}; a[0]}", 1, TEST_CAT_MEMORY, 0, 100},
+    {"mem_array_2",       "{int a[3]={1,2,3}; a[2]}", 3, TEST_CAT_MEMORY, 0, 100},
+    {"mem_array_sum",     "{int a[3]={10,20,30}; a[0]+a[1]+a[2]}", 60, TEST_CAT_MEMORY, 0, 100},
+    {"mem_array_large",   "{int a[5]={100,200,300,400,500}; a[4]}", 500, TEST_CAT_MEMORY, 0, 100},
+    {"mem_array_assign",  "{int a[3]={0,0,0}; a[1]=42; a[1]}", 42, TEST_CAT_MEMORY, 0, 100},
+    {"mem_array_inc",     "{int a[3]={1,2,3}; a[1]++}", 2, TEST_CAT_MEMORY, 0, 100},
+    {"mem_ptr_deref_write","{int x=0; int *p=&x; *p=42; x}", 42, TEST_CAT_MEMORY, 0, 100},
+    {"mem_ptr_arithmetic", "{int a[3]={10,20,30}; int *p=a; p[2]}", 30, TEST_CAT_MEMORY, 0, 100},
 };
 
 const uint32_t gauntlet_memory_test_count = sizeof(gauntlet_memory_tests) / sizeof(gauntlet_memory_tests[0]);
