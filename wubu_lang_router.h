@@ -3,10 +3,15 @@
  *
  * WuBuOS accepts:
  *   - HolyC (native, all 14 ISAs, full optimization)
+ *   - C18 (HolyC's C subset — C11 + bugfix patches, no higher)
  *   - Brainfuck (the meme, compiled for real)
  *
  * Everything else is "foreign" — routed to containerized compilers
  * or rejected with a helpful message.
+ *
+ * C18 policy: C11 + ISO/IEC 9899:2018 defect reports. No C23, no C2x,
+ * no GNU extensions, no C++. Jens Gustedt calls C17/C18 a "bugfix release"
+ * of C11 — no new features, just clarifications. That's our baseline.
  *
  * The "brainfuck" exception exists because:
  *   1. It's a funny meme

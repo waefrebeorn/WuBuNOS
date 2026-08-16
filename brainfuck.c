@@ -3,7 +3,8 @@
  *
  * The user's joke (2026-08-04), shipped for real:
  *   - c11 luddites, we abstract away
- *   - C18/C2* allowed via `-c_developer`
+ *   - C18 allowed via `-c_developer` (C11 + bugfix patch, no higher)
+ *   - C23/C2x NOT allowed (we wait for stabilization)
  *   - any other language via `-i_make_shit_code`
  *   - and for the meme: brainfuck compiles via `-brainfuck`
  *     (because we ballin).
