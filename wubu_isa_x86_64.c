@@ -23,10 +23,10 @@
  */
 #include "wubu_isa_driver.h"
 #include "wubu_mir_regalloc.h"
+#include "../jit/jit.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/mman.h>
 
 /* Peephole optimizer — declared in x86_peephole.c */
 extern size_t x86_peephole_optimize(uint8_t *code, size_t n);
@@ -406,14 +406,13 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
 
 static int64_t x86_run(const uint8_t *code, size_t size, int64_t arg) {
     (void)arg;
-    void *exec = mmap(NULL, size, PROT_READ | PROT_WRITE | PROT_EXEC,
-                      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (exec == MAP_FAILED) return -1;
+    void *exec = jit_alloc_exec(size);
+    if (!exec) return -1;
     memcpy(exec, code, size);
     wubu_clear_cache(exec, size);
     int64_t (*fn)(void) = (int64_t (*)(void))exec;
     int64_t r = fn();
-    munmap(exec, size);
+    jit_free_exec(exec, size);
     return r;
 }
 

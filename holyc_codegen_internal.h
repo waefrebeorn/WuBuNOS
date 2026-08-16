@@ -13,7 +13,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdnoreturn.h>
+#ifdef WUBU_HOSTED
 #include <sys/mman.h>
+#endif
 
 /* JIT_CALL macro from jit.h  --  call function pointer with 0 args */
 #ifndef JIT_CALL

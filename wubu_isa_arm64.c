@@ -14,10 +14,10 @@
 #include "wubu_isa_driver.h"
 #include "wubu_arm64.h"
 #include "wubu_mir_regalloc.h"
+#include "../jit/jit.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/mman.h>
 #include <stdint.h>
 
 /* ---- emitter ---- */
@@ -329,14 +329,13 @@ static int arm64_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
 
 static int64_t arm64_run(const uint8_t *code, size_t size, int64_t arg) {
     (void)arg;
-    void *mem = mmap(NULL, size + 4096, PROT_READ | PROT_WRITE | PROT_EXEC,
-                     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (mem == MAP_FAILED) return -999;
+    void *mem = jit_alloc_exec(size);
+    if (!mem) return -999;
     memcpy(mem, code, size);
     wubu_clear_cache(mem, size);
     int64_t (*fn)(void) = (int64_t (*)(void))mem;
     int64_t result = fn();
-    munmap(mem, size + 4096);
+    jit_free_exec(mem, size);
     return result;
 }
 

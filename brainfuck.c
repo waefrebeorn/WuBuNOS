@@ -21,17 +21,15 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
-#include <sys/mman.h>
+#include "../jit/jit.h"
 
-/* mmap the emitted code as RWX (JIT pages) */
+/* Allocate executable memory for JIT code (portable, no sys/mman.h) */
 static void *mmap_code(uint8_t *code, size_t len)
 {
-    size_t page = 4096;
-    size_t sz = (len + page - 1) & ~(page - 1);
-    void *p = mmap(NULL, sz, PROT_READ | PROT_WRITE | PROT_EXEC,
-                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (p == MAP_FAILED) return NULL;
+    void *p = jit_alloc_exec(len);
+    if (!p) return NULL;
     memcpy(p, code, len);
+    wubu_clear_cache(p, len);
     return p;
 }
 
