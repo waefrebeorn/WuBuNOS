@@ -73,6 +73,7 @@ extern const wubu_isa_driver_t wubu_isa_riscv;  /* RV64I (2010) */
 extern const wubu_isa_driver_t wubu_isa_6502;   /* MOS (1975) */
 extern const wubu_isa_driver_t wubu_isa_z80;    /* Zilog (1976) */
 extern const wubu_isa_driver_t wubu_isa_pic;    /* Microchip PIC (PIC16F877A) */
+extern const wubu_isa_driver_t wubu_isa_amdgpu; /* AMD GPU (RDNA2/gfx1030) */
 extern const wubu_isa_driver_t wubu_isa_ptx;    /* NVIDIA GPU PTX (2024) */
 /* every driver is backed by a REAL interpreter (wubu_*_interp.c) —
  * the frontend emits ONE MIR, six backends consume it, all agree.
