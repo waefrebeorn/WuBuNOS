@@ -31,14 +31,21 @@ static int run_test_x86_64(const char *source, int64_t expected, test_result_t *
 
 /* For non-native targets, use MIR + ISA driver */
 static int run_test_isa_driver(const char *source, const char *target, int64_t expected, test_result_t *result, int64_t *actual) {
-    fprintf(stderr, "DEBUG: run_test_isa_driver target=%s\n", target);
     const wubu_isa_driver_t *driver = wubu_isa_find(target);
-    if (!driver) { fprintf(stderr, "  driver not found\n"); *result = TEST_SKIP; *actual = 0; return 0; }
-    if (!driver->compile || !driver->run) { fprintf(stderr, "  no compile/run\n"); *result = TEST_SKIP; *actual = 0; return 0; }
+    if (!driver) { *result = TEST_SKIP; *actual = 0; return 0; }
+    if (!driver->compile || !driver->run) { *result = TEST_SKIP; *actual = 0; return 0; }
     /* HolyC → MIR → driver → run */
     int64_t res = hc_eval_mir(source, driver);
     *actual = res;
     *result = (res == expected) ? TEST_PASS : TEST_FAIL;
+    if (*result == TEST_FAIL) {
+        static int dump_count = 0;
+        if (dump_count < 25) {
+            fprintf(stderr, "[DIFF %s] \"%s\" expected=%lld got=%lld\n",
+                    target, source, (long long)expected, (long long)res);
+            dump_count++;
+        }
+    }
     return 0;
 }
 

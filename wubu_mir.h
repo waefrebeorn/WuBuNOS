@@ -49,11 +49,22 @@ typedef enum {
     MIR_LE,            /* dst = (a <= b) ? 1 : 0 (signed) */
     MIR_GT,            /* dst = (a > b) ? 1 : 0  (signed) */
     MIR_GE,            /* dst = (a >= b) ? 1 : 0 (signed) */
+    MIR_ULT,           /* dst = (a < b) ? 1 : 0  (unsigned) */
+    MIR_ULE,           /* dst = (a <= b) ? 1 : 0 (unsigned) */
+    MIR_UGT,           /* dst = (a > b) ? 1 : 0  (unsigned) */
+    MIR_UGE,           /* dst = (a >= b) ? 1 : 0 (unsigned) */
     MIR_MOV,           /* dst = src */
     MIR_JMP,           /* pc = label */
     MIR_JZ,            /* if (src == 0) pc = label */
+    MIR_JNZ,           /* if (src != 0) pc = label */
     MIR_LABEL,         /* a jump target (no code) */
-    MIR_RET            /* return vr 0 */
+    MIR_BREAK,         /* pc = enclosing loop's done label */
+    MIR_CONTINUE,      /* pc = enclosing loop's top label */
+    MIR_RET,           /* return vr 0 */
+    /* Memory model (arrays + pointers live in a flat int64 memory array) */
+    MIR_ALLOC,         /* dst = base_addr; imm = n_elements (reserves memory) */
+    MIR_LOAD,          /* dst = mem[a] */
+    MIR_STORE          /* mem[a] = b */
 } wubu_mir_op_t;
 
 typedef struct {
@@ -70,6 +81,7 @@ typedef struct {
     size_t n, cap;
     uint32_t n_labels;           /* next label id */
     uint32_t n_args;             /* number of function arguments (v1..n_args) */
+    int64_t total_mem;           /* number of int64 cells reserved via MIR_ALLOC */
 } wubu_mir_prog_t;
 
 /* O1: init a program (zeroed = empty) */
@@ -87,7 +99,13 @@ wubu_vr_t wubu_mir_mov_to(wubu_mir_prog_t *p, wubu_vr_t dst, wubu_vr_t a);
 uint32_t wubu_mir_new_label(wubu_mir_prog_t *p);
 void wubu_mir_jmp(wubu_mir_prog_t *p, uint32_t label);
 void wubu_mir_jz(wubu_mir_prog_t *p, wubu_vr_t cond, uint32_t label);
+void wubu_mir_jnz(wubu_mir_prog_t *p, wubu_vr_t cond, uint32_t label);
 void wubu_mir_place_label(wubu_mir_prog_t *p, uint32_t label);
+/* reserve n_elements int64 cells in the program's memory; returns base addr */
+wubu_vr_t wubu_mir_alloc(wubu_mir_prog_t *p, int64_t n_elements);
+/* load/store through an address held in a vr */
+wubu_vr_t wubu_mir_load(wubu_mir_prog_t *p, wubu_vr_t addr);
+void wubu_mir_store(wubu_mir_prog_t *p, wubu_vr_t addr, wubu_vr_t val);
 void wubu_mir_ret(wubu_mir_prog_t *p, wubu_vr_t v);
 
 /* Set the number of function arguments (v1..n_args get pre-assigned to arg regs) */
@@ -95,5 +113,12 @@ void wubu_mir_set_n_args(wubu_mir_prog_t *p, uint32_t n_args);
 
 /* O3: dump the program (the hourglass neck, visible) */
 void wubu_mir_dump(const wubu_mir_prog_t *p);
+
+/* O4: interpret a MIR program directly (the portable execution oracle).
+ * Faithfully runs the canonical MIR every driver consumes, so the
+ * differential gauntlet can verify ALL backends agree on a host whose
+ * native CPU is not the target (e.g. x86-64 running an ARM64 target).
+ * Returns the vr0 value at MIR_RET. */
+int64_t wubu_mir_interp(const wubu_mir_prog_t *p);
 
 #endif /* WUBU_MIR_H */

@@ -104,6 +104,15 @@ void wubu_mir_jz(wubu_mir_prog_t *p, wubu_vr_t cond, uint32_t label)
     i->label = label;
 }
 
+void wubu_mir_jnz(wubu_mir_prog_t *p, wubu_vr_t cond, uint32_t label)
+{
+    wubu_mir_instr_t *i = emit(p);
+    if (!i) return;
+    i->op = MIR_JNZ;
+    i->a = cond;
+    i->label = label;
+}
+
 void wubu_mir_place_label(wubu_mir_prog_t *p, uint32_t label)
 {
     wubu_mir_instr_t *i = emit(p);
@@ -118,6 +127,34 @@ void wubu_mir_ret(wubu_mir_prog_t *p, wubu_vr_t v)
     if (!i) return;
     i->op = MIR_RET;
     i->a = v;
+}
+
+/* Reserve n_elements int64 cells in the program's memory. Addresses start at 1
+ * (addr 0 is reserved as the canonical "null"). Returns the base address. */
+wubu_vr_t wubu_mir_alloc(wubu_mir_prog_t *p, int64_t n_elements)
+{
+    wubu_vr_t base = (wubu_vr_t)(p->total_mem + 1);  /* addr 0 reserved as null */
+    p->total_mem = (int64_t)base + n_elements - 1;
+    return wubu_mir_const(p, (int64_t)base);
+}
+
+wubu_vr_t wubu_mir_load(wubu_mir_prog_t *p, wubu_vr_t addr)
+{
+    wubu_mir_instr_t *i = emit(p);
+    if (!i) return 0;
+    i->op = MIR_LOAD;
+    i->dst = (wubu_vr_t)p->n;   /* fresh vr = this instr index */
+    i->a = addr;
+    return i->dst;
+}
+
+void wubu_mir_store(wubu_mir_prog_t *p, wubu_vr_t addr, wubu_vr_t val)
+{
+    wubu_mir_instr_t *i = emit(p);
+    if (!i) return;
+    i->op = MIR_STORE;
+    i->a = addr;
+    i->b = val;
 }
 
 void wubu_mir_set_n_args(wubu_mir_prog_t *p, uint32_t n_args)
@@ -152,6 +189,16 @@ static const char *op_name(wubu_mir_op_t op)
     case MIR_JZ:    return "jz";
     case MIR_LABEL: return "label";
     case MIR_RET:   return "ret";
+    case MIR_ALLOC: return "alloc";
+    case MIR_LOAD:  return "load";
+    case MIR_STORE: return "store";
+    case MIR_BREAK: return "break";
+    case MIR_CONTINUE: return "continue";
+    case MIR_JNZ:   return "jnz";
+    case MIR_ULT:   return "ult";
+    case MIR_ULE:   return "ule";
+    case MIR_UGT:   return "ugt";
+    case MIR_UGE:   return "uge";
     default:        return "?";
     }
 }
@@ -175,6 +222,18 @@ void wubu_mir_dump(const wubu_mir_prog_t *p)
         }
         if (in->op == MIR_RET) {
             printf("  %-6s v%u\n", op_name(in->op), in->a);
+            continue;
+        }
+        if (in->op == MIR_ALLOC) {
+            printf("  %-6s v%u = %lld cells\n", op_name(in->op), in->dst, (long long)in->imm);
+            continue;
+        }
+        if (in->op == MIR_LOAD) {
+            printf("  %-6s v%u = mem[v%u]\n", op_name(in->op), in->dst, in->a);
+            continue;
+        }
+        if (in->op == MIR_STORE) {
+            printf("  %-6s mem[v%u] = v%u\n", op_name(in->op), in->a, in->b);
             continue;
         }
         if (in->op == MIR_CONST) {
