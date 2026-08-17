@@ -179,15 +179,19 @@ wubu_reg_assign_t *wubu_mir_alloc_regs(const wubu_mir_prog_t *p,
         assign[v].stack = 0;
     }
 
-    /* ---- Step 4: pre-assign argument registers ---- */
-    /* v1..n_args -> physical regs 0..n_args-1 (capped at 6 arg regs).
-     * Note: v0 is NOT pre-assigned — it's the implicit return register
-     * that the RET instruction reads from. The allocator will assign it
-     * normally if it's used in the program. */
+    /* ---- Step 4: pre-assign argument registers ----
+     * v0 is the implicit return register and is ALWAYS physical reg 0.
+     * Argument vrs v1..n_args are pre-assigned to physical regs 1..n_args
+     * (capped at 6 arg regs, plus v0 makes 7). */
     uint32_t n_args = p->n_args;
     if (n_args > 6) n_args = 6;
+    /* v0 -> reg 0 always (return register). Args -> regs 1..n_args. */
+    if (n_vr > 0) {
+        assign[0].reg = 0;
+        assign[0].stack = 0;
+    }
     for (uint32_t a = 1; a <= n_args && a < n_vr; a++) {
-        int32_t phys = (int32_t)(a - 1);  /* v1 -> reg 0, v2 -> reg 1, ... */
+        int32_t phys = (int32_t)a;  /* v1 -> reg 1, v2 -> reg 2, ... */
         if (phys < n_phys_regs) {
             assign[a].reg = phys;
         }
@@ -216,10 +220,15 @@ wubu_reg_assign_t *wubu_mir_alloc_regs(const wubu_mir_prog_t *p,
         reg_vr[r] = -1;
 
     /* Seed the active set with pre-assigned arg vrs.
-     * Args -> regs 0..n_args-1.
+     * Args -> regs 1..n_args. v0 (return) is in reg 0 and stays active
+     * until its live range expires.
      * Their registers are occupied until their live ranges expire. */
+    if (n_vr > 0) {
+        reg_vr[0] = (int32_t)0;
+        active[active_count++] = 0;
+    }
     for (uint32_t a = 1; a <= n_args && a < n_vr; a++) {
-        int32_t phys = (int32_t)(a - 1);  /* v1 -> reg 0, v2 -> reg 1, ... */
+        int32_t phys = (int32_t)a;  /* v1 -> reg 1, v2 -> reg 2, ... */
         if (phys >= 0 && phys < n_phys_regs) {
             reg_vr[phys] = (int32_t)a;
             active[active_count++] = a;

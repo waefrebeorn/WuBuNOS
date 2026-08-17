@@ -9,6 +9,7 @@
  */
 #include "holyc_mir_eval.h"
 #include "wubu_mir.h"
+#include "wubu_mir_opt.h"
 #include "wubu_isa_driver.h"
 #include "holyc_ast.h"
 #include "holyc_types.h"

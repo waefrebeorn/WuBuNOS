@@ -250,8 +250,8 @@ static void test_basic_allocation(void)
 
     /* Pre-assigned: v0 -> reg 0 (return), v1 -> reg 1, v2 -> reg 2 */
     assert(a[0].reg == 0);   /* v0 = return = reg 0 */
-    assert(a[v1].reg == 1);  /* v1 = arg 0 -> reg 1 */
-    assert(a[v2].reg == 2);  /* v2 = arg 1 -> reg 2 */
+    assert(a[1].reg == 1);   /* v1 = arg 0 -> reg 1 */
+    assert(a[2].reg == 2);   /* v2 = arg 1 -> reg 2 */
 
     /* v3, v4, v5 should have valid regs (6 regs, no spill expected) */
     assert(a[v3].reg >= 0);
