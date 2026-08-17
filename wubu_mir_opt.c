@@ -18,29 +18,46 @@
 #include <stdlib.h>
 #include <stdio.h>
 
+/* MIR integer semantics are 32-bit (the canonical HolyC `int` width the
+ * x86-64 JIT golden and the portable interpreter agree on). Folding must
+ * wrap to 32 bits to match runtime execution, or it will disagree with the
+ * golden reference. */
+#define WRAP32(x) ((int64_t)(int32_t)(x))
+
+/* The frontend allocates virtual registers starting at 1<<16 (and emits
+ * fresh vrs as instr_index+1 as well), so vr numbers can be far larger than
+ * any small fixed table. Compute the TRUE max vr so optimizer passes size
+ * their tracking arrays correctly and never index out of bounds. */
+static uint32_t mir_max_vr(const wubu_mir_prog_t *p)
+{
+    uint32_t m = 0;
+    for (size_t i = 0; i < p->n; i++) {
+        const wubu_mir_instr_t *in = &p->ins[i];
+        if (in->dst > m) m = in->dst;
+        if (in->a > m)   m = in->a;
+        if (in->b > m)   m = in->b;
+    }
+    return m + 1;
+}
+
 /* ---- Pass 1: Constant Folding ---- */
 static void fold_pass(wubu_mir_prog_t *p)
 {
-    /*
-     * Build a map: vr -> constant value (if known).
-     * MIR_CONST sets vr = imm. If a vr is only defined by a CONST,
-     * it's a compile-time constant.
-     */
-    /* Simple approach: track which vrs are constants */
-#define MAX_VRS 4096
-    int64_t const_val[MAX_VRS];
-    int is_const[MAX_VRS];
-    memset(is_const, 0, sizeof(is_const));
+    /* Build a map: vr -> constant value (if known). vrs are NOT bounded by
+     * the instruction count (frontend uses a 1<<16 base), so size by max_vr. */
+    uint32_t nvr = mir_max_vr(p);
+    int64_t *const_val = (int64_t *)calloc(nvr ? nvr : 1, sizeof(int64_t));
+    int *is_const = (int *)calloc(nvr ? nvr : 1, sizeof(int));
+    if (!const_val || !is_const) { free(const_val); free(is_const); return; }
 
     for (size_t i = 0; i < p->n; i++) {
         wubu_mir_instr_t *in = &p->ins[i];
-        if (in->op == MIR_CONST && in->dst < MAX_VRS) {
+        if (in->op == MIR_CONST && in->dst < nvr) {
             const_val[in->dst] = in->imm;
             is_const[in->dst] = 1;
         } else if (in->op != MIR_LABEL && in->op != MIR_RET &&
                    in->op != MIR_JMP && in->op != MIR_JZ &&
-                   in->dst < MAX_VRS) {
-            /* this vr is defined by a non-const op -> not a constant */
+                   in->dst < nvr) {
             is_const[in->dst] = 0;
         }
     }
@@ -55,7 +72,7 @@ static void fold_pass(wubu_mir_prog_t *p)
 
         /* Unary ops: check operand 'a' */
         if (in->op == MIR_NEG || in->op == MIR_NOT || in->op == MIR_MOV) {
-            if (in->a < MAX_VRS && is_const[in->a]) {
+            if (in->a < nvr && is_const[in->a]) {
                 int64_t result;
                 switch (in->op) {
                 case MIR_NEG: result = -const_val[in->a]; break;
@@ -66,7 +83,7 @@ static void fold_pass(wubu_mir_prog_t *p)
                 in->op = MIR_CONST;
                 in->imm = result;
                 in->a = 0; in->b = 0;
-                if (in->dst < MAX_VRS) {
+                if (in->dst < nvr) {
                     const_val[in->dst] = result;
                     is_const[in->dst] = 1;
                 }
@@ -74,55 +91,66 @@ static void fold_pass(wubu_mir_prog_t *p)
             continue;
         }
 
-        /* Binary ops: check both operands */
-        if (in->a < MAX_VRS && in->b < MAX_VRS &&
+        /* Binary ops: check both operands (wrap to 32-bit MIR semantics) */
+        if (in->a < nvr && in->b < nvr &&
             is_const[in->a] && is_const[in->b]) {
             int64_t a = const_val[in->a];
             int64_t b = const_val[in->b];
             int64_t result = 0;
             switch (in->op) {
-            case MIR_ADD: result = a + b; break;
-            case MIR_SUB: result = a - b; break;
-            case MIR_MUL: result = a * b; break;
-            case MIR_DIV: result = b != 0 ? a / b : 0; break;
-            case MIR_MOD: result = b != 0 ? a % b : 0; break;
-            case MIR_AND: result = a & b; break;
-            case MIR_OR:  result = a | b; break;
-            case MIR_XOR: result = a ^ b; break;
-            case MIR_SHL: result = a << b; break;
-            case MIR_SHR: result = a >> b; break;
+            case MIR_ADD: result = WRAP32(a + b); break;
+            case MIR_SUB: result = WRAP32(a - b); break;
+            case MIR_MUL: result = WRAP32(a * b); break;
+            case MIR_DIV: result = b != 0 ? WRAP32(a / b) : 0; break;
+            case MIR_MOD: result = b != 0 ? WRAP32(a % b) : 0; break;
+            case MIR_AND: result = WRAP32(a & b); break;
+            case MIR_OR:  result = WRAP32(a | b); break;
+            case MIR_XOR: result = WRAP32(a ^ b); break;
+            case MIR_SHL: result = WRAP32((int64_t)((uint32_t)a << (b & 31))); break;
+            case MIR_SHR: result = WRAP32((int64_t)((int32_t)a >> (b & 31))); break;
             case MIR_EQ:  result = (a == b) ? 1 : 0; break;
             case MIR_NE:  result = (a != b) ? 1 : 0; break;
             case MIR_LT:  result = (a < b) ? 1 : 0; break;
             case MIR_LE:  result = (a <= b) ? 1 : 0; break;
             case MIR_GT:  result = (a > b) ? 1 : 0; break;
             case MIR_GE:  result = (a >= b) ? 1 : 0; break;
+            case MIR_ULT: result = ((uint32_t)a < (uint32_t)b) ? 1 : 0; break;
+            case MIR_ULE: result = ((uint32_t)a <= (uint32_t)b) ? 1 : 0; break;
+            case MIR_UGT: result = ((uint32_t)a > (uint32_t)b) ? 1 : 0; break;
+            case MIR_UGE: result = ((uint32_t)a >= (uint32_t)b) ? 1 : 0; break;
             default: continue;
             }
             in->op = MIR_CONST;
             in->imm = result;
             in->a = 0; in->b = 0;
-            if (in->dst < MAX_VRS) {
+            if (in->dst < nvr) {
                 const_val[in->dst] = result;
                 is_const[in->dst] = 1;
             }
         }
     }
+    free(const_val);
+    free(is_const);
 }
 
 /* ---- Pass 2: Strength Reduction ---- */
+/*
+ * Build a vr -> constant value table (vr numbers are NOT instruction
+ * indices in this IR: wubu_mir_const/binop/load assign dst = instr_index+1,
+ * but wubu_mir_mov_to may reuse a vr for a later instr, and the frontend
+ * uses very high vr bases like (1<<16) for generated temporaries — so we
+ * must map by scanning for CONST definitions, never by indexing ins[vr-1]).
+ */
 static void strength_pass(wubu_mir_prog_t *p)
 {
-    /*
-     * x * 2  -> x << 1
-     * x / 2  -> x >> 1 (only if x is positive, else keep div)
-     * x * 1  -> x (replace with MOV)
-     * x + 0  -> x
-     * x - 0  -> x
-     * x * 0  -> 0 (replace with CONST 0)
-     * x << 0 -> x
-     * x >> 0 -> x
-     */
+    uint32_t nvr = mir_max_vr(p);
+    int64_t *cval = (int64_t *)calloc(nvr ? nvr : 1, sizeof(int64_t));
+    int *is_c = (int *)calloc(nvr ? nvr : 1, sizeof(int));
+    if (!cval || !is_c) { free(cval); free(is_c); return; }
+    for (size_t i = 0; i < p->n; i++) {
+        wubu_mir_instr_t *d = &p->ins[i];
+        if (d->op == MIR_CONST && d->dst < nvr) { cval[d->dst] = d->imm; is_c[d->dst] = 1; }
+    }
     for (size_t i = 0; i < p->n; i++) {
         wubu_mir_instr_t *in = &p->ins[i];
         if (in->op == MIR_LABEL || in->op == MIR_JMP ||
@@ -130,84 +158,104 @@ static void strength_pass(wubu_mir_prog_t *p)
             in->op == MIR_CONST)
             continue;
 
-        /* Check if operand 'b' is a const 0, 1, or 2 */
-        if (in->op == MIR_ADD && in->b != 0) {
-            /* check if b is const 0 */
-            if (p->ins[in->b - 1].op == MIR_CONST && p->ins[in->b - 1].imm == 0) {
-                /* x + 0 -> x (MOV) */
-                in->op = MIR_MOV;
-                in->a = in->a;
-                in->b = 0;
-            }
+        int64_t bv = (in->b < nvr && is_c[in->b]) ? cval[in->b] : INT64_MIN;
+
+        /* x + 0 -> x ; x - 0 -> x ; x | 0 -> x ; x ^ 0 -> x */
+        if ((in->op == MIR_ADD || in->op == MIR_SUB ||
+             in->op == MIR_OR  || in->op == MIR_XOR) && bv == 0) {
+            in->op = MIR_MOV; in->b = 0;
         }
-        if (in->op == MIR_SUB && in->b != 0) {
-            if (p->ins[in->b - 1].op == MIR_CONST && p->ins[in->b - 1].imm == 0) {
-                /* x - 0 -> x (MOV) */
-                in->op = MIR_MOV;
-                in->a = in->a;
-                in->b = 0;
-            }
+        /* x * 0 -> 0 ; x & 0 -> 0 */
+        else if ((in->op == MIR_MUL || in->op == MIR_AND) && bv == 0) {
+            in->op = MIR_CONST; in->imm = 0; in->a = 0; in->b = 0;
         }
-        if (in->op == MIR_MUL && in->b != 0) {
-            if (p->ins[in->b - 1].op == MIR_CONST) {
-                int64_t v = p->ins[in->b - 1].imm;
-                if (v == 0) { in->op = MIR_CONST; in->imm = 0; in->a = 0; in->b = 0; }
-                else if (v == 1) { in->op = MIR_MOV; in->b = 0; }
-                else if (v == 2) { in->op = MIR_SHL; in->b = 0;
-                    /* change b to const 1 by inserting a const 1 before this instr */
-                    /* simpler: just set b to the vr of a const 1 if it exists */
-                    /* For now, keep as-is: x*2 -> x<<1 requires b=1 */
-                    /* We'll handle this in the fold pass after */
-                }
-            }
+        /* x * 1 -> x ; x / 1 -> x ; x % 1 -> 0 ; x << 0 -> x ; x >> 0 -> x */
+        else if (in->op == MIR_MUL && bv == 1) { in->op = MIR_MOV; in->b = 0; }
+        else if ((in->op == MIR_DIV || in->op == MIR_SHR || in->op == MIR_SHL) && bv == 1) {
+            in->op = MIR_MOV; in->b = 0;
+        }
+        else if (in->op == MIR_MOD && bv == 1) { in->op = MIR_CONST; in->imm = 0; in->a = 0; in->b = 0; }
+        /* x * 2^k -> x << k ; x / 2^k -> x >> k (arithmetic, signed) ;
+         * x * -1 -> -x (NEG) */
+        else if (in->op == MIR_MUL && bv > 0 && (bv & (bv - 1)) == 0) {
+            unsigned k = 0; while ((bv >> k) != 1) k++;
+            in->op = MIR_SHL; in->b = (wubu_vr_t)k; in->a = in->a; in->imm = 0;
+        }
+        else if (in->op == MIR_MUL && bv == -1) {
+            in->op = MIR_NEG; in->b = 0;
+        }
+        else if (in->op == MIR_DIV && bv > 0 && (bv & (bv - 1)) == 0) {
+            unsigned k = 0; while ((bv >> k) != 1) k++;
+            in->op = MIR_SHR; in->b = (wubu_vr_t)k; in->a = in->a; in->imm = 0;
         }
     }
 }
 
 /* ---- Pass 3: Dead Code Elimination ---- */
+/*
+ * Mark all vrs that are "used" (read by some instruction, or the RET value).
+ * Then remove instructions whose dst is never used by converting them to
+ * CONST 0 (harmless value-producing ops only).
+ *
+ * CRITICAL: MIR_ALLOC / MIR_LOAD / MIR_STORE carry memory side effects and
+ * must NEVER be deleted, even if their result vr is unused. Dropping an
+ * ALLOC would shrink the flat memory array and corrupt every later address;
+ * dropping a STORE would silently lose a write; dropping a LOAD would change
+ * the result of a later aliased load. So we skip them in both the "used"
+ * marking (they have no value dst anyway) and the deletion loop.
+ */
 static void dce_pass(wubu_mir_prog_t *p)
 {
-    /*
-     * Mark all vrs that are "used" (read by some instruction, or the RET value).
-     * Then remove instructions whose dst is never used.
-     */
-#define MAX_VRS 4096
-    int used[MAX_VRS];
-    memset(used, 0, sizeof(used));
+    uint32_t nvr = mir_max_vr(p);
+    int *used = (int *)calloc(nvr ? nvr : 1, sizeof(int));
+    if (!used) return;
 
     /* Mark uses */
     for (size_t i = 0; i < p->n; i++) {
         wubu_mir_instr_t *in = &p->ins[i];
         if (in->op == MIR_LABEL) continue;
         if (in->op == MIR_RET) {
-            if (in->a < MAX_VRS) used[in->a] = 1;
+            if (in->a < nvr) used[in->a] = 1;
             continue;
         }
-        if (in->op == MIR_JZ) {
-            if (in->a < MAX_VRS) used[in->a] = 1;
+        if (in->op == MIR_JZ || in->op == MIR_JNZ) {
+            if (in->a < nvr) used[in->a] = 1;
             continue;
         }
-        if (in->op == MIR_CONST || in->op == MIR_JMP) continue;
+        if (in->op == MIR_CONST || in->op == MIR_JMP ||
+            in->op == MIR_LABEL) continue;
+        /* STORE mem[a] = b : reads BOTH a (addr) and b (value) as inputs.
+         * These must be treated as live so DCE never deletes the
+         * computation feeding the stored value (e.g. loop counter i=i+1). */
+        if (in->op == MIR_STORE) {
+            if (in->a < nvr) used[in->a] = 1;
+            if (in->b < nvr) used[in->b] = 1;
+            continue;
+        }
+        /* MIR_ALLOC / MIR_LOAD carry memory side effects and must survive. */
+        if (in->op == MIR_ALLOC || in->op == MIR_LOAD) continue;
         /* All other ops read a (and possibly b) */
-        if (in->a < MAX_VRS) used[in->a] = 1;
-        if (in->b < MAX_VRS) used[in->b] = 1;
+        if (in->a < nvr) used[in->a] = 1;
+        if (in->b < nvr) used[in->b] = 1;
     }
 
-    /* Remove dead instructions: zero out their dst to mark as removable */
+    /* Remove dead value-producing instructions: zero out their dst.
+     * Never touch ALLOC / LOAD / STORE (memory side effects). */
     for (size_t i = 0; i < p->n; i++) {
         wubu_mir_instr_t *in = &p->ins[i];
         if (in->op == MIR_LABEL || in->op == MIR_JMP ||
             in->op == MIR_JZ || in->op == MIR_RET ||
-            in->op == MIR_CONST)
+            in->op == MIR_CONST || in->op == MIR_ALLOC ||
+            in->op == MIR_LOAD || in->op == MIR_STORE)
             continue;
-        if (in->dst < MAX_VRS && !used[in->dst]) {
-            /* This instruction's result is dead. Convert to CONST 0 (harmless). */
+        if (in->dst < nvr && !used[in->dst]) {
             in->op = MIR_CONST;
             in->imm = 0;
             in->a = 0;
             in->b = 0;
         }
     }
+    free(used);
 }
 
 /* ---- Combined fold+dce to fixpoint ---- */
@@ -220,20 +268,20 @@ static void fold_dce_pass(wubu_mir_prog_t *p)
         changed = 0;
         iterations++;
 
-        /* Track constants */
-#define MAX_VRS 4096
-        int64_t const_val[MAX_VRS];
-        int is_const[MAX_VRS];
-        memset(is_const, 0, sizeof(is_const));
+        /* Track constants (dynamic vr sizing; wrap to 32-bit) */
+        uint32_t nvr = mir_max_vr(p);
+        int64_t *const_val = (int64_t *)calloc(nvr ? nvr : 1, sizeof(int64_t));
+        int *is_const = (int *)calloc(nvr ? nvr : 1, sizeof(int));
+        if (!const_val || !is_const) { free(const_val); free(is_const); return; }
 
         for (size_t i = 0; i < p->n; i++) {
             wubu_mir_instr_t *in = &p->ins[i];
-            if (in->op == MIR_CONST && in->dst < MAX_VRS) {
+            if (in->op == MIR_CONST && in->dst < nvr) {
                 const_val[in->dst] = in->imm;
                 is_const[in->dst] = 1;
             } else if (in->op != MIR_LABEL && in->op != MIR_RET &&
                        in->op != MIR_JMP && in->op != MIR_JZ &&
-                       in->dst < MAX_VRS) {
+                       in->dst < nvr) {
                 is_const[in->dst] = 0;
             }
         }
@@ -247,7 +295,7 @@ static void fold_dce_pass(wubu_mir_prog_t *p)
                 continue;
 
             if (in->op == MIR_NEG || in->op == MIR_NOT || in->op == MIR_MOV) {
-                if (in->a < MAX_VRS && is_const[in->a]) {
+                if (in->a < nvr && is_const[in->a]) {
                     int64_t result;
                     switch (in->op) {
                     case MIR_NEG: result = -const_val[in->a]; break;
@@ -265,28 +313,32 @@ static void fold_dce_pass(wubu_mir_prog_t *p)
                 continue;
             }
 
-            if (in->a < MAX_VRS && in->b < MAX_VRS &&
+            if (in->a < nvr && in->b < nvr &&
                 is_const[in->a] && is_const[in->b]) {
                 int64_t a = const_val[in->a];
                 int64_t b = const_val[in->b];
                 int64_t result = 0;
                 switch (in->op) {
-                case MIR_ADD: result = a + b; break;
-                case MIR_SUB: result = a - b; break;
-                case MIR_MUL: result = a * b; break;
-                case MIR_DIV: result = b != 0 ? a / b : 0; break;
-                case MIR_MOD: result = b != 0 ? a % b : 0; break;
-                case MIR_AND: result = a & b; break;
-                case MIR_OR:  result = a | b; break;
-                case MIR_XOR: result = a ^ b; break;
-                case MIR_SHL: result = a << b; break;
-                case MIR_SHR: result = a >> b; break;
+                case MIR_ADD: result = WRAP32(a + b); break;
+                case MIR_SUB: result = WRAP32(a - b); break;
+                case MIR_MUL: result = WRAP32(a * b); break;
+                case MIR_DIV: result = b != 0 ? WRAP32(a / b) : 0; break;
+                case MIR_MOD: result = b != 0 ? WRAP32(a % b) : 0; break;
+                case MIR_AND: result = WRAP32(a & b); break;
+                case MIR_OR:  result = WRAP32(a | b); break;
+                case MIR_XOR: result = WRAP32(a ^ b); break;
+                case MIR_SHL: result = WRAP32((int64_t)((uint32_t)a << (b & 31))); break;
+                case MIR_SHR: result = WRAP32((int64_t)((int32_t)a >> (b & 31))); break;
                 case MIR_EQ:  result = (a == b) ? 1 : 0; break;
                 case MIR_NE:  result = (a != b) ? 1 : 0; break;
                 case MIR_LT:  result = (a < b) ? 1 : 0; break;
                 case MIR_LE:  result = (a <= b) ? 1 : 0; break;
                 case MIR_GT:  result = (a > b) ? 1 : 0; break;
                 case MIR_GE:  result = (a >= b) ? 1 : 0; break;
+                case MIR_ULT: result = ((uint32_t)a < (uint32_t)b) ? 1 : 0; break;
+                case MIR_ULE: result = ((uint32_t)a <= (uint32_t)b) ? 1 : 0; break;
+                case MIR_UGT: result = ((uint32_t)a > (uint32_t)b) ? 1 : 0; break;
+                case MIR_UGE: result = ((uint32_t)a >= (uint32_t)b) ? 1 : 0; break;
                 default: continue;
                 }
                 in->op = MIR_CONST;
@@ -297,6 +349,8 @@ static void fold_dce_pass(wubu_mir_prog_t *p)
                 changed = 1;
             }
         }
+        free(const_val);
+        free(is_const);
     }
 }
 

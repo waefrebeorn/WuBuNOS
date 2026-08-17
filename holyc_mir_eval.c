@@ -669,6 +669,23 @@ int64_t hc_eval_mir(const char *source, const wubu_isa_driver_t *driver) {
         return 0;
     }
 
+    /* Run the optimizer over the canonical MIR before execution. This is the
+     * same MIR every ISA driver consumes, so optimizing it once here benefits
+     * ALL backends (one frontend, N drivers — the optimizer lives at the neck
+     * of the hourglass). We enable only the side-effect-safe passes:
+     *   FOLD      constant folding
+     *   STRENGTH  algebraic strength reduction (x*k -> shl, x*0 -> 0, ...)
+     *   DCE       dead code elimination (never deletes ALLOC/LOAD/STORE)
+     *   COMBINE   algebraic identities (x-x=0, x&x=x, ...)
+     *   CSE       common subexpression elimination
+     * LICM/UNROLL require SSA reconstruction and remain placeholders. Because
+     * the optimizer preserves program semantics, the differential gauntlet
+     * (optimized MIR-interp vs unoptimized x86-64 JIT golden) is the oracle
+     * that proves correctness across all 13 targets. */
+    wubu_mir_optimize(&prog,
+                      MIR_OPT_FOLD | MIR_OPT_STRENGTH | MIR_OPT_DCE |
+                      MIR_OPT_COMBINE | MIR_OPT_CSE);
+
     /* Native execution of a non-host ISA is impossible on this x86-64 box.
      * The per-ISA *encoders* are validated separately by their own oracle
      * (tools/verify_isa.sh, byte-for-byte against GNU objdump). Here we run
