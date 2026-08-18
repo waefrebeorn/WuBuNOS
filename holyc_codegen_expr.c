@@ -62,8 +62,8 @@ void emit_global_store_rax(HCGen *gen, size_t global_offset) {
 /* ---- shared variable load/store for ASSIGN + compound-assigns ----
  * A variable's symbol-table `stack_offset` is either POSITIVE (a stack
  * local inside a function body) or NON-POSITIVE (a module-level global
- * in the data section; `off <= 0` means `global_offset = -off`). The
- * IDENT-load / Inc/Dec / &x paths already dispatch on `off <= 0` to the
+ * in the data section; `off < 0` means `global_offset = -off - 1`). The
+ * IDENT-load / Inc/Dec / &x paths already dispatch on `off < 0` to the
  * RIP-relative emitters; ASSIGN and every compound-assign used to emit
  * `mov [rbp-off]` unconditionally — writing to a garbage high stack slot
  * for globals → heap corruption + SIGSEGV in hc_eval's free(). */
@@ -77,7 +77,7 @@ int resolve_var(HCGen *gen, const char *name, int *off, int *is_global)
     for (int i = 0; i < gen->symbols.n_locals; i++) {
         if (strcmp(gen->symbols.locals[i].name, name) == 0) {
             *off = gen->symbols.locals[i].stack_offset;
-            *is_global = (*off <= 0);
+            *is_global = (*off < 0);
             return 1;
         }
     }
@@ -169,7 +169,7 @@ HCType *expr_static_type(HCGen *gen, const HCASTNode *node)
 static void emit_var_load(HCGen *gen, int off, int is_global)
 {
     if (is_global) {
-        emit_global_load_rax(gen, (size_t)(-off));
+        emit_global_load_rax(gen, (size_t)(-off - 1));
     } else {
         if (gen->hedge_loads)
             emit_prefetch_rbp(gen, off);
@@ -182,7 +182,7 @@ static void emit_var_load(HCGen *gen, int off, int is_global)
 static void emit_var_store(HCGen *gen, int off, int is_global)
 {
     if (is_global) {
-        emit_global_store_rax(gen, (size_t)(-off));
+        emit_global_store_rax(gen, (size_t)(-off - 1));
     } else {
         emit_byte(gen, 0x48); emit_byte(gen, 0x89); emit_byte(gen, 0x85);
         emit_dword(gen, (uint32_t)(-(int32_t)off & 0xFFFFFFFF));
@@ -295,9 +295,10 @@ static int emit_lvalue_addr(HCGen *gen, const HCASTNode *node)
             int off = 0, is_global = 0;
             resolve_var(gen, node->ident, &off, &is_global);
             if (is_global) {
-                size_t go = (size_t)(-off);
+                size_t go = (size_t)(-off - 1);
+                /* Load VALUE from global: mov rax, [rip+disp32] */
                 size_t patch_pos = gen->code_size + 3;
-                emit_byte(gen, 0x48); emit_byte(gen, 0x8D); emit_byte(gen, 0x05);
+                emit_byte(gen, 0x48); emit_byte(gen, 0x8B); emit_byte(gen, 0x05);
                 emit_dword(gen, 0);
                 if (gen->n_global_patches < 128) {
                     gen->global_patches[gen->n_global_patches].code_patch_pos = patch_pos;
@@ -389,7 +390,7 @@ void emit_base_addr(HCGen *gen, const HCASTNode *node)
             int off = 0, is_global = 0;
             resolve_var(gen, node->ident, &off, &is_global);
             if (is_global) {
-                size_t go = (size_t)(-off);
+                size_t go = (size_t)(-off - 1);
                 size_t patch_pos = gen->code_size + 3;
                 emit_byte(gen, 0x48); emit_byte(gen, 0x8D); emit_byte(gen, 0x05);
                 emit_dword(gen, 0);
@@ -495,7 +496,7 @@ int gen_expr(HCGen *gen, const HCASTNode *node) {
                         if (is_array) {
                             if (off <= 0) {
                                 /* global: lea rax, [rip + disp32] */
-                                size_t go = (size_t)(-off);
+                                size_t go = (size_t)(-off - 1);
                                 size_t patch_pos = gen->code_size + 3;
                                 emit_byte(gen, 0x48); emit_byte(gen, 0x8D); emit_byte(gen, 0x05);
                                 emit_dword(gen, 0);
@@ -626,7 +627,7 @@ int gen_expr(HCGen *gen, const HCASTNode *node) {
                     break;
                 }
                 if (off <= 0) {  /* global in data section */
-                    size_t go = (size_t)(-off);
+                    size_t go = (size_t)(-off - 1);
                     emit_global_load_rax(gen, go);   /* rax = *x */
                     /* Pointer ++ scales by element size; scalar adds 1. */
                     HCType *pt = resolve_var_type(gen, node->child->ident);
@@ -674,7 +675,7 @@ int gen_expr(HCGen *gen, const HCASTNode *node) {
                     break;
                 }
                 if (off <= 0) {  /* global in data section */
-                    size_t go = (size_t)(-off);
+                    size_t go = (size_t)(-off - 1);
                     emit_global_load_rax(gen, go);   /* rax = *x */
                     /* Pointer -- scales by element size; scalar subtracts 1. */
                     HCType *pt = resolve_var_type(gen, node->child->ident);
@@ -711,6 +712,7 @@ int gen_expr(HCGen *gen, const HCASTNode *node) {
                 bool found = false;
                 int off = 0;
                 for (int i = 0; i < gen->symbols.n_locals; i++) {
+                    fprintf(stderr, "  symbol[%d] = %s off=%d\n", i, gen->symbols.locals[i].name, gen->symbols.locals[i].stack_offset);
                     if (strcmp(gen->symbols.locals[i].name, node->child->ident) == 0) {
                         off = gen->symbols.locals[i].stack_offset;
                         found = true;
@@ -722,7 +724,7 @@ int gen_expr(HCGen *gen, const HCASTNode *node) {
                     break;
                 }
                 if (off <= 0) {  /* global in data section */
-                    size_t go = (size_t)(-off);
+                    size_t go = (size_t)(-off - 1);
                     emit_global_load_rax(gen, go);     /* rax = old */
                     emit_mov_rdi_rax(gen);             /* rdi = old */
                     HCType *pt = resolve_var_type(gen, node->child->ident);
@@ -789,7 +791,7 @@ int gen_expr(HCGen *gen, const HCASTNode *node) {
                     break;
                 }
                 if (off <= 0) {  /* global in data section */
-                    size_t go = (size_t)(-off);
+                    size_t go = (size_t)(-off - 1);
                     emit_global_load_rax(gen, go);     /* rax = old */
                     emit_mov_rdi_rax(gen);             /* rdi = old */
                     /* Pointer -- scales by element size; scalar subtracts 1. */
@@ -886,7 +888,7 @@ int gen_expr(HCGen *gen, const HCASTNode *node) {
                     break;
                 }
                 if (off <= 0) {  /* global: load its runtime address via RIP-relative lea */
-                    size_t go = (size_t)(-off);
+                    size_t go = (size_t)(-off - 1);
                     size_t patch_pos = gen->code_size + 3;   /* disp32 start */
                     emit_byte(gen, 0x48); emit_byte(gen, 0x8D); emit_byte(gen, 0x05);
                     emit_dword(gen, 0);                       /* placeholder disp32 */
@@ -1273,7 +1275,7 @@ int gen_expr(HCGen *gen, const HCASTNode *node) {
                  * pop rsi; xchg rax, rdi → rdi=&lhs, rsi=&slot. Then rcx=lhs_sz. */
                 emit_byte(gen, 0x50);                              /* push rax (slot addr) */
                 if (is_global) {
-                    size_t go = (size_t)(-off);
+                    size_t go = (size_t)(-off - 1);
                     size_t patch_pos = gen->code_size + 3;
                     emit_byte(gen, 0x48); emit_byte(gen, 0x8D); emit_byte(gen, 0x05);
                     emit_dword(gen, 0);

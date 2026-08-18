@@ -155,4 +155,48 @@ extern const uint32_t gauntlet_comparison_test_count;
 extern const test_entry_t gauntlet_stress_tests[];
 extern const uint32_t gauntlet_stress_test_count;
 
+/* Comprehensive: 90 auto-generated edge-case tests */
+extern const test_entry_t gauntlet_comprehensive_tests[];
+extern const uint32_t gauntlet_comprehensive_test_count;
+
+/* Downloaded real compiler test suites */
+extern const test_entry_t gauntlet_gcc_torture_tests[];
+extern const uint32_t gauntlet_gcc_torture_test_count;
+
+extern const test_entry_t gauntlet_gcc_dg_tests[];
+extern const uint32_t gauntlet_gcc_dg_test_count;
+
+extern const test_entry_t gauntlet_gcc_compile_tests[];
+extern const uint32_t gauntlet_gcc_compile_test_count;
+
+extern const test_entry_t gauntlet_fujitsu_tests[];
+extern const uint32_t gauntlet_fujitsu_test_count;
+
+extern const test_entry_t gauntlet_extern_gcc_tests[];
+extern const uint32_t gauntlet_extern_gcc_test_count;
+
+extern const test_entry_t gauntlet_compcert_tests[];
+extern const uint32_t gauntlet_compcert_test_count;
+
+extern const test_entry_t gauntlet_c_testsuite_tests[];
+extern const uint32_t gauntlet_c_testsuite_test_count;
+
+extern const test_entry_t gauntlet_llvm_tests[];
+extern const uint32_t gauntlet_llvm_test_count;
+
+extern const test_entry_t gauntlet_lacc_tests[];
+extern const uint32_t gauntlet_lacc_test_count;
+
+extern const test_entry_t gauntlet_tinycc_tests[];
+extern const uint32_t gauntlet_tinycc_test_count;
+
+extern const test_entry_t gauntlet_chibicc_tests[];
+extern const uint32_t gauntlet_chibicc_test_count;
+
+extern const test_entry_t gauntlet_writing_c_compiler_tests[];
+extern const uint32_t gauntlet_writing_c_compiler_test_count;
+
+extern const test_entry_t gauntlet_slimcc_tests[];
+extern const uint32_t gauntlet_slimcc_test_count;
+
 #endif /* WUBU_TEST_GAUNTLET_H */

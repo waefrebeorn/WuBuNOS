@@ -59,7 +59,18 @@ JIT_SRC = $(wildcard $(OS_ROOT)/jit/jit.c $(OS_ROOT)/jit/jit_encode.c \
 
 # Gauntlet test framework
 GAUN    = test_gauntlet/wubu_test_gauntlet.c test_gauntlet_runner.c \
-          test_gauntlet/suites/gauntlet_comprehensive.c
+          test_gauntlet/suites/gauntlet_comprehensive.c \
+          $(wildcard test_gauntlet/suites/gauntlet_gcc_*.c) \
+          $(wildcard test_gauntlet/suites/gauntlet_fujitsu.c) \
+          $(wildcard test_gauntlet/suites/gauntlet_extern_*.c) \
+          $(wildcard test_gauntlet/suites/gauntlet_compcert.c) \
+          $(wildcard test_gauntlet/suites/gauntlet_c_testsuite.c) \
+          $(wildcard test_gauntlet/suites/gauntlet_llvm.c) \
+          $(wildcard test_gauntlet/suites/gauntlet_lacc.c) \
+          $(wildcard test_gauntlet/suites/gauntlet_tinycc.c) \
+          $(wildcard test_gauntlet/suites/gauntlet_chibicc.c) \
+          $(wildcard test_gauntlet/suites/gauntlet_writing_*.c) \
+          $(wildcard test_gauntlet/suites/gauntlet_slimcc.c)
 
 # ---- Binaries ----
 

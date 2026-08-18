@@ -192,20 +192,23 @@ int64_t hc_eval(const char *source) {
     memset(&gen.symbols, 0, sizeof(gen.symbols));
     gen.n_functions = 0;
     gen.n_global_patches = 0;
+    gen.n_call_patches = 0;
     gen.data = NULL;
     gen.data_size = 0;
     gen.data_cap = 0;
     /* Register the HolyC personality runtime (Print / FpWriteFile) so calls
      * to those builtins resolve to real host functions instead of a null
      * pointer (previously the JIT emitted `call 0`, SIGSEGV at runtime). */
-    /* Force stack-local mode: VAR_DECL creates stack slots instead of
-     * data-section globals. This keeps the JIT mapping pure code (RX)
-     * without needing a writable data section. */
-    gen.in_function = true;
+    /* Module-level code: in_function=false so VAR_DECL creates data-section
+     * globals (writable via RWX mmap). Inside a function body, the FUNC_DECL
+     * handler sets in_function=true for stack-local mode. */
+    gen.in_function = false;
     hc_register_holyc_runtime(&gen);
     emit_prologue(&gen);
 
     if (ast->kind == HC_AST_BLOCK) {
+        for (int i = 0; i < ast->n_stmts; i++)
+            fprintf(stderr, "  stmt[%d] kind=%d\n", i, ast->stmts[i]->kind);
         /* For expression context: generate all statements except last as
          * statements, then generate the last one as an expression so its
          * value ends up in rax (the return value). */
@@ -213,9 +216,24 @@ int64_t hc_eval(const char *source) {
             for (int i = 0; i < ast->n_stmts - 1; i++)
                 gen_stmt(&gen, ast->stmts[i]);
             HCASTNode *last = ast->stmts[ast->n_stmts - 1];
-            /* If the last statement is an if-expression, generate it as
-             * expression context (both branches set rax before jump) */
-            if (last->kind == HC_AST_IF) {
+            /* If the last statement is a function declaration, generate it
+             * as a statement then call it to get the return value in rax. */
+            if (last->kind == HC_AST_FUNC_DECL) {
+                gen_stmt(&gen, last);
+                if (gen.n_functions > 0) {
+                    HCFunction *fn = &gen.functions[gen.n_functions - 1];
+                    if (fn->func_ptr && fn->n_params == 0) {
+                        emit_byte(&gen, 0xE8); /* call rel32 */
+                        size_t patch_pos = gen.code_size;
+                        emit_dword(&gen, 0); /* placeholder */
+                        if (gen.n_call_patches < 32) {
+                            gen.call_patches[gen.n_call_patches].code_patch_pos = patch_pos;
+                            gen.call_patches[gen.n_call_patches].fn_ptr = fn->func_ptr;
+                            gen.n_call_patches++;
+                        }
+                    }
+                }
+            } else if (last->kind == HC_AST_IF) {
                 gen_if_expr(&gen, last);
             } else if (last->kind == HC_AST_EXPR_STMT) {
                 gen_expr(&gen, last->child);
@@ -231,7 +249,7 @@ int64_t hc_eval(const char *source) {
     } else if (ast->kind == HC_AST_EXPR_STMT || ast->kind == HC_AST_RETURN ||
         ast->kind == HC_AST_IF || ast->kind == HC_AST_WHILE ||
         ast->kind == HC_AST_FOR || ast->kind == HC_AST_DO_WHILE ||
-        ast->kind == HC_AST_VAR_DECL || ast->kind == HC_AST_FUNC_DECL) {
+        ast->kind == HC_AST_VAR_DECL) {
         gen_stmt(&gen, ast);
     } else {
         gen_expr(&gen, ast);
@@ -265,6 +283,18 @@ int64_t hc_eval(const char *source) {
         *(int32_t *)((uint8_t *)exec + patch_pos) = disp32;
     }
 
+    /* Patch function call rel32 displacements. Each call was emitted as
+     * `call rel32` with a placeholder; now that we know the main code's
+     * final address (exec), patch the displacement to point to the target
+     * function's JIT'd code buffer. */
+    for (int i = 0; i < gen.n_call_patches; i++) {
+        size_t patch_pos = gen.call_patches[i].code_patch_pos;
+        void *fn_ptr = gen.call_patches[i].fn_ptr;
+        /* rel32 = target - (rip_after_call) = fn_ptr - (exec + patch_pos + 4) */
+        int32_t disp32 = (int32_t)((uint8_t *)fn_ptr - ((uint8_t *)exec + patch_pos + 4));
+        *(int32_t *)((uint8_t *)exec + patch_pos) = disp32;
+    }
+
     /* Patch each FUNCTION's exec copy for the same globals. Each function
      * was copied to its OWN exec buffer inside FUNC_DECL codegen, so its
      * RIP-relative global loads/stores were never fixed to the data section
@@ -289,16 +319,13 @@ int64_t hc_eval(const char *source) {
     }
 
     /* Make memory executable. The data section holds global variables that
-     * are written at runtime (e.g. `x = 5` stores into it, and the REPL copies
-     * it back), so when a data section exists the page must remain writable.
-     * Only drop write permission for pure-code buffers (no globals), matching
-     * the holyd eval path which never locks. Locking an RWX page to RX would
-     * turn runtime global stores into SIGSEGVs. */
-    /* Always lock to RX for execution. The data section (if any) is
-     * already written before this point. For self-hosted mode, the
-     * memory is already RWX. */
-    exec = jit_lock_exec(exec, gen.code_size + gen.data_size);
-    if (!exec) { free(gen.code); free(gen.data); free(pp); return 0; }
+     * are written at runtime (e.g. `x = 5` stores into it), so when a data
+     * section exists the page must remain writable (RWX). Only drop write
+     * permission for pure-code buffers (no globals). */
+    if (gen.data_size == 0) {
+        exec = jit_lock_exec(exec, gen.code_size);
+        if (!exec) { free(gen.code); free(gen.data); free(pp); return 0; }
+    }
 
     int64_t result = JIT_CALL(exec);
     jit_free_exec(exec, gen.code_size + gen.data_size);

@@ -303,7 +303,7 @@ int gen_stmt(HCGen *gen, const HCASTNode *node) {
                     if (gen->symbols.n_locals < HC_MAX_LOCALS) {
                         strncpy(gen->symbols.locals[gen->symbols.n_locals].name,
                                 node->ident, HC_MAX_IDENT_LEN - 1);
-                        gen->symbols.locals[gen->symbols.n_locals].stack_offset = -(int)global_offset;
+                        gen->symbols.locals[gen->symbols.n_locals].stack_offset = -(int)(global_offset + 1);
                         gen->symbols.locals[gen->symbols.n_locals].type = node->type;
                         gen->symbols.n_locals++;
                     }
@@ -433,9 +433,11 @@ int gen_stmt(HCGen *gen, const HCASTNode *node) {
                          * loads get fixed up against the shared data base). */
                         {
                             HCSymTab keep = gen->symbols;
+                            for (int i = 0; i < keep.n_locals; i++)
+                                fprintf(stderr, "  keep[%d] = %s off=%d\n", i, keep.locals[i].name, keep.locals[i].stack_offset);
                             memset(&gen->symbols, 0, sizeof(HCSymTab));
                             for (int i = 0; i < keep.n_locals; i++)
-                                if (keep.locals[i].stack_offset <= 0 &&
+                                if (keep.locals[i].stack_offset < 0 &&
                                     gen->symbols.n_locals < HC_MAX_LOCALS)
                                     gen->symbols.locals[gen->symbols.n_locals++] = keep.locals[i];
                         }

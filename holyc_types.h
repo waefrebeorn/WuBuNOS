@@ -400,6 +400,11 @@ struct HCGen {
     char current_function[HC_MAX_IDENT_LEN];
     size_t self_call_patches[32];
     int n_self_call_patches;
+    /* Function call patches: when top-level code calls a JIT'd function,
+     * we emit `call rel32` with a placeholder. After the main code is copied
+     * to exec, these get patched: rel32 = fn_ptr - (exec + patch_pos + 4). */
+    struct { size_t code_patch_pos; void *fn_ptr; } call_patches[32];
+    int n_call_patches;
 };
 
 /* -- Compiler struct (full definition) --------------------------------------- */

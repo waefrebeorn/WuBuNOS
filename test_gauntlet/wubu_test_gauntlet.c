@@ -19,7 +19,8 @@ static uint64_t now_us(void) {
 void gauntlet_init(gauntlet_state_t *g, const char **targets, uint32_t n_targets) {
     memset(g, 0, sizeof(*g));
     g->n_targets = n_targets > 16 ? 16 : n_targets;
-    g->results = calloc(1024 * 16, sizeof(target_result_t)); /* 1024 tests * 16 targets */
+    /* Allocate results buffer: support up to 100K tests * 16 targets */
+    g->results = calloc(100000 * 16, sizeof(target_result_t));
 }
 
 /* ---- Add tests */
