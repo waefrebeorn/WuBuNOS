@@ -57,6 +57,17 @@ static void note_label(avr_emitter_t *e, uint32_t label, size_t off) {
 #define AVR_NEG  0x08
 #define AVR_NOT  0x09
 #define AVR_RET  0x0A
+#define AVR_MUL  0x0B
+#define AVR_DIV  0x0C
+#define AVR_MOD  0x0D
+#define AVR_SHL  0x0E
+#define AVR_SHR  0x0F
+#define AVR_GT   0x10
+#define AVR_LT   0x11
+#define AVR_GE   0x12
+#define AVR_LE   0x13
+#define AVR_EQ   0x14
+#define AVR_NE   0x15
 
 static int avr_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size) {
     avr_emitter_t e;
@@ -130,12 +141,47 @@ static int avr_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             ep8(&e, (uint8_t)in->dst);
             break;
         case MIR_NOT:
-            ep8(&e, AVR_MOV);
-            ep8(&e, (uint8_t)in->dst);
-            ep8(&e, (uint8_t)in->a);
-            ep8(&e, AVR_NOT);
-            ep8(&e, (uint8_t)in->dst);
+            ep8(&e, AVR_MOV); ep8(&e, (uint8_t)in->dst); ep8(&e, (uint8_t)in->a);
+            ep8(&e, AVR_NOT); ep8(&e, (uint8_t)in->dst);
             break;
+        case MIR_MUL:
+            ep8(&e, AVR_MOV); ep8(&e, (uint8_t)in->dst); ep8(&e, (uint8_t)in->a);
+            ep8(&e, AVR_MUL); ep8(&e, (uint8_t)in->dst); ep8(&e, (uint8_t)in->b);
+            break;
+        case MIR_DIV:
+            ep8(&e, AVR_MOV); ep8(&e, (uint8_t)in->dst); ep8(&e, (uint8_t)in->a);
+            ep8(&e, AVR_DIV); ep8(&e, (uint8_t)in->dst); ep8(&e, (uint8_t)in->b);
+            break;
+        case MIR_MOD:
+            ep8(&e, AVR_MOV); ep8(&e, (uint8_t)in->dst); ep8(&e, (uint8_t)in->a);
+            ep8(&e, AVR_MOD); ep8(&e, (uint8_t)in->dst); ep8(&e, (uint8_t)in->b);
+            break;
+        case MIR_SHL:
+            ep8(&e, AVR_MOV); ep8(&e, (uint8_t)in->dst); ep8(&e, (uint8_t)in->a);
+            ep8(&e, AVR_SHL); ep8(&e, (uint8_t)in->dst); ep8(&e, (uint8_t)in->b);
+            break;
+        case MIR_SHR:
+            ep8(&e, AVR_MOV); ep8(&e, (uint8_t)in->dst); ep8(&e, (uint8_t)in->a);
+            ep8(&e, AVR_SHR); ep8(&e, (uint8_t)in->dst); ep8(&e, (uint8_t)in->b);
+            break;
+        case MIR_GT:
+            ep8(&e, AVR_MOV); ep8(&e, (uint8_t)in->dst); ep8(&e, (uint8_t)in->a);
+            ep8(&e, AVR_GT); ep8(&e, (uint8_t)in->dst); ep8(&e, (uint8_t)in->b); break;
+        case MIR_LT:
+            ep8(&e, AVR_MOV); ep8(&e, (uint8_t)in->dst); ep8(&e, (uint8_t)in->a);
+            ep8(&e, AVR_LT); ep8(&e, (uint8_t)in->dst); ep8(&e, (uint8_t)in->b); break;
+        case MIR_GE:
+            ep8(&e, AVR_MOV); ep8(&e, (uint8_t)in->dst); ep8(&e, (uint8_t)in->a);
+            ep8(&e, AVR_GE); ep8(&e, (uint8_t)in->dst); ep8(&e, (uint8_t)in->b); break;
+        case MIR_LE:
+            ep8(&e, AVR_MOV); ep8(&e, (uint8_t)in->dst); ep8(&e, (uint8_t)in->a);
+            ep8(&e, AVR_LE); ep8(&e, (uint8_t)in->dst); ep8(&e, (uint8_t)in->b); break;
+        case MIR_EQ:
+            ep8(&e, AVR_MOV); ep8(&e, (uint8_t)in->dst); ep8(&e, (uint8_t)in->a);
+            ep8(&e, AVR_EQ); ep8(&e, (uint8_t)in->dst); ep8(&e, (uint8_t)in->b); break;
+        case MIR_NE:
+            ep8(&e, AVR_MOV); ep8(&e, (uint8_t)in->dst); ep8(&e, (uint8_t)in->a);
+            ep8(&e, AVR_NE); ep8(&e, (uint8_t)in->dst); ep8(&e, (uint8_t)in->b); break;
         case MIR_RET:
             ep8(&e, AVR_RET);
             ep8(&e, (uint8_t)in->a);

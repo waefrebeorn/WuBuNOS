@@ -1,0 +1,163 @@
+/* 
+ * wubu_avr_interp.c -- the AVR interpreter (64-bit VR model).
+ *
+ * Executes virtual AVR-style operations emitted by wubu_isa_avr.c.
+ * Virtual registers are full 64-bit ints; the 8-bit ops mask to 8 bits.
+ *
+ * C11, self-contained.
+ */
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define AVR_VR_BASE 0x30
+#define AVR_RAM_SIZE 256
+
+/* Virtual AVR opcodes (must match wubu_isa_avr.c) */
+#define AVR_LDI  0x01
+#define AVR_ADD  0x02
+#define AVR_SUB  0x03
+#define AVR_AND  0x04
+#define AVR_OR   0x05
+#define AVR_XOR  0x06
+#define AVR_MOV  0x07
+#define AVR_NEG  0x08
+#define AVR_NOT  0x09
+#define AVR_RET  0x0A
+#define AVR_MUL  0x0B
+#define AVR_DIV  0x0C
+#define AVR_MOD  0x0D
+#define AVR_SHL  0x0E
+#define AVR_SHR  0x0F
+#define AVR_GT   0x10
+#define AVR_LT   0x11
+#define AVR_GE   0x12
+#define AVR_LE   0x13
+#define AVR_EQ   0x14
+#define AVR_NE   0x15
+
+int64_t wubu_avr_interp(const uint8_t *code, size_t size, int64_t arg)
+{
+    int64_t vr[AVR_RAM_SIZE];
+    memset(vr, 0, sizeof(vr));
+
+    /* arg → vr0 */
+    vr[AVR_VR_BASE + 0] = arg;
+
+    size_t pc = 0;
+    while (pc < size) {
+        uint8_t op = code[pc++];
+        uint8_t a, b;
+
+        switch (op) {
+        case AVR_LDI: /* LDI vr, imm8 */
+            a = code[pc++];
+            vr[AVR_VR_BASE + a] = (int64_t)(code[pc++] & 0xFF);
+            break;
+        case AVR_ADD: /* ADD vr_a, vr_b */
+            a = code[pc++]; b = code[pc++];
+            vr[AVR_VR_BASE + a] = (int64_t)((int64_t)(vr[AVR_VR_BASE + a] & 0xFF) +
+                                              (int64_t)(vr[AVR_VR_BASE + b] & 0xFF)) & 0xFF;
+            break;
+        case AVR_SUB: /* SUB vr_a, vr_b */
+            a = code[pc++]; b = code[pc++];
+            vr[AVR_VR_BASE + a] = (int64_t)((int64_t)(vr[AVR_VR_BASE + a] & 0xFF) -
+                                              (int64_t)(vr[AVR_VR_BASE + b] & 0xFF)) & 0xFF;
+            break;
+        case AVR_AND:
+            a = code[pc++]; b = code[pc++];
+            vr[AVR_VR_BASE + a] = (vr[AVR_VR_BASE + a] & 0xFF) &
+                                   (vr[AVR_VR_BASE + b] & 0xFF);
+            break;
+        case AVR_OR:
+            a = code[pc++]; b = code[pc++];
+            vr[AVR_VR_BASE + a] = (vr[AVR_VR_BASE + a] & 0xFF) |
+                                   (vr[AVR_VR_BASE + b] & 0xFF);
+            break;
+        case AVR_XOR:
+            a = code[pc++]; b = code[pc++];
+            vr[AVR_VR_BASE + a] = (vr[AVR_VR_BASE + a] & 0xFF) ^
+                                   (vr[AVR_VR_BASE + b] & 0xFF);
+            break;
+        case AVR_MOV:
+            a = code[pc++]; b = code[pc++];
+            vr[AVR_VR_BASE + a] = vr[AVR_VR_BASE + b];
+            break;
+        case AVR_NEG:
+            a = code[pc++];
+            vr[AVR_VR_BASE + a] = (-((vr[AVR_VR_BASE + a] & 0xFF))) & 0xFF;
+            break;
+        case AVR_NOT:
+            a = code[pc++];
+            vr[AVR_VR_BASE + a] = (~(vr[AVR_VR_BASE + a] & 0xFF)) & 0xFF;
+            break;
+        case AVR_RET:
+            a = code[pc++];
+            return (int64_t)(int8_t)(vr[AVR_VR_BASE + a] & 0xFF);
+        case AVR_MUL:
+            a = code[pc++]; b = code[pc++];
+            vr[AVR_VR_BASE + a] = ((vr[AVR_VR_BASE + a] & 0xFF) *
+                                    (vr[AVR_VR_BASE + b] & 0xFF)) & 0xFF;
+            break;
+        case AVR_DIV:
+            a = code[pc++]; b = code[pc++];
+            { int64_t dv = vr[AVR_VR_BASE + b] & 0xFF;
+              if (dv != 0)
+                  vr[AVR_VR_BASE + a] = ((vr[AVR_VR_BASE + a] & 0xFF) / dv) & 0xFF;
+              else
+                  vr[AVR_VR_BASE + a] = 0; }
+            break;
+        case AVR_MOD:
+            a = code[pc++]; b = code[pc++];
+            { int64_t dv = vr[AVR_VR_BASE + b] & 0xFF;
+              if (dv != 0)
+                  vr[AVR_VR_BASE + a] = ((vr[AVR_VR_BASE + a] & 0xFF) % dv) & 0xFF;
+              else
+                  vr[AVR_VR_BASE + a] = 0; }
+            break;
+        case AVR_SHL:
+            a = code[pc++]; b = code[pc++];
+            { int shift = vr[AVR_VR_BASE + b] & 0xFF;
+              vr[AVR_VR_BASE + a] = ((vr[AVR_VR_BASE + a] & 0xFF) << shift) & 0xFF; }
+            break;
+        case AVR_SHR:
+            a = code[pc++]; b = code[pc++];
+            { int shift = vr[AVR_VR_BASE + b] & 0xFF;
+              vr[AVR_VR_BASE + a] = (vr[AVR_VR_BASE + a] & 0xFF) >> shift; }
+            break;
+        case AVR_GT: /* signed comparison */
+            a = code[pc++]; b = code[pc++];
+            vr[AVR_VR_BASE + a] = ((int8_t)(vr[AVR_VR_BASE + a] & 0xFF) >
+                                    (int8_t)(vr[AVR_VR_BASE + b] & 0xFF)) ? 1 : 0;
+            break;
+        case AVR_LT: /* signed comparison */
+            a = code[pc++]; b = code[pc++];
+            vr[AVR_VR_BASE + a] = ((int8_t)(vr[AVR_VR_BASE + a] & 0xFF) <
+                                    (int8_t)(vr[AVR_VR_BASE + b] & 0xFF)) ? 1 : 0;
+            break;
+        case AVR_GE: /* signed comparison */
+            a = code[pc++]; b = code[pc++];
+            vr[AVR_VR_BASE + a] = ((int8_t)(vr[AVR_VR_BASE + a] & 0xFF) >=
+                                    (int8_t)(vr[AVR_VR_BASE + b] & 0xFF)) ? 1 : 0;
+            break;
+        case AVR_LE: /* signed comparison */
+            a = code[pc++]; b = code[pc++];
+            vr[AVR_VR_BASE + a] = ((int8_t)(vr[AVR_VR_BASE + a] & 0xFF) <=
+                                    (int8_t)(vr[AVR_VR_BASE + b] & 0xFF)) ? 1 : 0;
+            break;
+        case AVR_EQ:
+            a = code[pc++]; b = code[pc++];
+            vr[AVR_VR_BASE + a] = ((vr[AVR_VR_BASE + a] & 0xFF) ==
+                                    (vr[AVR_VR_BASE + b] & 0xFF)) ? 1 : 0;
+            break;
+        case AVR_NE:
+            a = code[pc++]; b = code[pc++];
+            vr[AVR_VR_BASE + a] = ((vr[AVR_VR_BASE + a] & 0xFF) !=
+                                    (vr[AVR_VR_BASE + b] & 0xFF)) ? 1 : 0;
+            break;
+        default:
+            return 0;
+        }
+    }
+    return 0;
+}

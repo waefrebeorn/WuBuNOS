@@ -79,6 +79,10 @@ static WArm64CC mir_to_arm64_cc(wubu_mir_op_t op) {
 }
 
 static int arm64_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size) {
+#if !defined(__aarch64__)
+    (void)p; (void)out; (void)out_size;
+    return -1; /* cannot compile ARM64 on this host */
+#endif
     /* Step 1: register allocation — 20 physical regs (X8-X27) */
     size_t assign_count = 0;
     wubu_reg_assign_t *assign = wubu_mir_alloc_regs(p, 20, &assign_count);

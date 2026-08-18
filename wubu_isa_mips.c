@@ -65,6 +65,7 @@ static void e32(mips_emitter_t *e, uint32_t w) {
 /* MIPS mult / mflo (R-type) */
 #define MIPS_MULT(rs,rt)    ((0<<26) | ((rs)<<21) | ((rt)<<16) | 0x18)
 #define MIPS_MFLO(rd)       ((0<<26) | (0<<21) | (0<<16) | ((rd)<<11) | 0x12)
+#define MIPS_MFHI(rd)       ((0<<26) | (0<<21) | (0<<16) | ((rd)<<11) | 0x10)
 #define I_TYPE(op,rs,rt,imm)   (((op)<<26) | ((rs)<<21) | ((rt)<<16) | ((uint16_t)(imm)))
 
 /* MIPS ALU ops (SPECIAL, funct field) */
@@ -125,6 +126,9 @@ static uint32_t mips_lui(uint32_t rt, uint16_t imm) {
 static uint32_t mips_beq(uint32_t rs, uint32_t rt, int16_t offset) {
     return I_TYPE(MIPS_OP_BEQ, rs, rt, (uint16_t)offset);
 }
+static uint32_t mips_bne(uint32_t rs, uint32_t rt, int16_t offset) {
+    return I_TYPE(MIPS_OP_BNE, rs, rt, (uint16_t)offset);
+}
 static uint32_t mips_j(uint32_t target) {
     return (MIPS_OP_J << 26) | ((target >> 2) & 0x03FFFFFF);
 }
@@ -133,7 +137,7 @@ static uint32_t mips_jr(uint32_t rs) {
 }
 
 static int32_t slot_off(wubu_vr_t vr) {
-    return -(int32_t)((vr + 1) * 4);
+    return (int32_t)(vr * 4);
 }
 
 /* ---- patch system ---- */
@@ -259,30 +263,73 @@ static int mips_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_siz
         case MIR_SHL:
             e32(&e, MIPS_LW(29, MIPS_REG_T0, (uint16_t)slot_off(in->a)));
             e32(&e, MIPS_LW(29, MIPS_REG_T1, (uint16_t)slot_off(in->b)));
-            e32(&e, mips_sll(MIPS_REG_T1, MIPS_REG_T0, 0));  /* simplified: sllv */
+            e32(&e, R_TYPE(MIPS_REG_T1, MIPS_REG_T0, MIPS_REG_T0, 0, 0x04)); /* sllv $t0,$t0,$t1 */
             e32(&e, MIPS_SW(29, MIPS_REG_T0, (uint16_t)slot_off(in->dst)));
             break;
-        case MIR_EQ: case MIR_NE: case MIR_LT: case MIR_LE: case MIR_GT: case MIR_GE: {
+        case MIR_DIV: {
             e32(&e, MIPS_LW(29, MIPS_REG_T0, (uint16_t)slot_off(in->a)));
             e32(&e, MIPS_LW(29, MIPS_REG_T1, (uint16_t)slot_off(in->b)));
-            uint32_t set1 = internal_label(&e);
+            uint32_t skip = internal_label(&e);
             uint32_t done = internal_label(&e);
-            switch (in->op) {
-            case MIR_LT: e32(&e, mips_slt(MIPS_REG_T0, MIPS_REG_T1, MIPS_REG_T0)); break;
-            case MIR_GE: e32(&e, mips_slt(MIPS_REG_T0, MIPS_REG_T1, MIPS_REG_T0));
-                         /* negate: $t0 = 1 - $t0 */
-                         e32(&e, mips_addui(0, MIPS_REG_T0, 1)); /* simplified */ break;
-            default: e32(&e, mips_slt(MIPS_REG_T0, MIPS_REG_T1, MIPS_REG_T0)); break;
-            }
-            /* bne $t0, $zero, set1 */
-            e32(&e, mips_beq(MIPS_REG_T0, 0, 0));  /* beq $t0,$zero -> false */
-            patch_push(&patches, &np, &cp, e.n - 4, set1);
-            /* false: $t0 = 0 */
+            e32(&e, mips_bne(MIPS_REG_T1, 0, 0));  /* bne $t1,$zero,skip */
+            patch_push(&patches, &np, &cp, e.n - 4, skip);
+            e32(&e, mips_ori(MIPS_REG_T0, 0, 0));  /* div by zero → 0 */
+            e32(&e, mips_j(0));
+            patch_push(&patches, &np, &cp, e.n - 4, done);
+            note_label(&e, skip, e.n / 4);
+            e32(&e, R_TYPE(MIPS_REG_T0, MIPS_REG_T1, 0, 0, 0x1A));  /* div $t0,$t1 */
+            e32(&e, MIPS_MFLO(MIPS_REG_T0));  /* mflo $t0 */
+            note_label(&e, done, e.n / 4);
+            e32(&e, MIPS_SW(29, MIPS_REG_T0, (uint16_t)slot_off(in->dst)));
+            break;
+        }
+        case MIR_MOD: {
+            e32(&e, MIPS_LW(29, MIPS_REG_T0, (uint16_t)slot_off(in->a)));
+            e32(&e, MIPS_LW(29, MIPS_REG_T1, (uint16_t)slot_off(in->b)));
+            uint32_t skip = internal_label(&e);
+            uint32_t done = internal_label(&e);
+            e32(&e, mips_bne(MIPS_REG_T1, 0, 0));
+            patch_push(&patches, &np, &cp, e.n - 4, skip);
             e32(&e, mips_ori(MIPS_REG_T0, 0, 0));
             e32(&e, mips_j(0));
             patch_push(&patches, &np, &cp, e.n - 4, done);
+            note_label(&e, skip, e.n / 4);
+            e32(&e, R_TYPE(MIPS_REG_T0, MIPS_REG_T1, 0, 0, 0x1A));
+            e32(&e, MIPS_MFHI(MIPS_REG_T0));  /* mfhi $t0 = remainder */
+            note_label(&e, done, e.n / 4);
+            e32(&e, MIPS_SW(29, MIPS_REG_T0, (uint16_t)slot_off(in->dst)));
+            break;
+        }
+        case MIR_EQ: case MIR_NE: case MIR_LT: case MIR_LE: case MIR_GT: case MIR_GE: {
+            e32(&e, MIPS_LW(29, MIPS_REG_T0, (uint16_t)slot_off(in->a)));
+            e32(&e, MIPS_LW(29, MIPS_REG_T1, (uint16_t)slot_off(in->b)));
+            uint32_t done = internal_label(&e);
+            switch (in->op) {
+            case MIR_LT: e32(&e, mips_slt(MIPS_REG_T0, MIPS_REG_T0, MIPS_REG_T1)); break; /* $t0 = (a < b) */
+            case MIR_GE: e32(&e, mips_slt(MIPS_REG_T0, MIPS_REG_T0, MIPS_REG_T1)); /* $t0 = (a < b) */
+                         /* negate: $t0 = 1 - $t0 */
+                         e32(&e, mips_addui(0, MIPS_REG_T2, 1)); /* $t2 = 1 */
+                         e32(&e, mips_sub(MIPS_REG_T2, MIPS_REG_T0, MIPS_REG_T0)); break; /* $t0 = 1 - $t0 */
+            case MIR_GT: e32(&e, mips_slt(MIPS_REG_T1, MIPS_REG_T0, MIPS_REG_T0)); break; /* $t0 = ($t1 < $t0) = (b < a) = (a > b) */
+            case MIR_LE: e32(&e, mips_slt(MIPS_REG_T1, MIPS_REG_T0, MIPS_REG_T0)); /* $t0 = ($t1 < $t0) = (b < a) */
+                         e32(&e, mips_addui(0, MIPS_REG_T2, 1));
+                         e32(&e, mips_sub(MIPS_REG_T2, MIPS_REG_T0, MIPS_REG_T0)); break; /* $t0 = 1 - (b<a) = (b>=a) = (a<=b) */
+            case MIR_EQ: /* a == b: slt(a,b) | slt(b,a) then negate */
+                         e32(&e, mips_slt(MIPS_REG_T2, MIPS_REG_T0, MIPS_REG_T1)); /* $t2 = (a<b) */
+                         e32(&e, mips_slt(MIPS_REG_T0, MIPS_REG_T1, MIPS_REG_T0)); /* $t0 = (b<a) */
+                         e32(&e, mips_or(MIPS_REG_T2, MIPS_REG_T0, MIPS_REG_T0)); /* $t0 = (a<b)|(b<a) = a!=b */
+                         e32(&e, mips_addui(0, MIPS_REG_T2, 1));
+                         e32(&e, mips_sub(MIPS_REG_T2, MIPS_REG_T0, MIPS_REG_T0)); break; /* $t0 = 1 - a!=b = a==b */
+            case MIR_NE:
+                         e32(&e, mips_slt(MIPS_REG_T2, MIPS_REG_T0, MIPS_REG_T1));
+                         e32(&e, mips_slt(MIPS_REG_T0, MIPS_REG_T1, MIPS_REG_T0));
+                         e32(&e, mips_or(MIPS_REG_T2, MIPS_REG_T0, MIPS_REG_T0)); break; /* $t0 = a!=b */
+            default: e32(&e, mips_slt(MIPS_REG_T1, MIPS_REG_T0, MIPS_REG_T0)); break;
+            }
+            /* beq $t0,$zero,done — if comparison is false, skip */
+            e32(&e, mips_beq(MIPS_REG_T0, 0, 0));
+            patch_push(&patches, &np, &cp, e.n - 4, done);
             /* true: $t0 = 1 */
-            note_label(&e, set1, e.n / 4);
             e32(&e, mips_ori(MIPS_REG_T0, 0, 1));
             note_label(&e, done, e.n / 4);
             e32(&e, MIPS_SW(29, MIPS_REG_T0, (uint16_t)slot_off(in->dst)));
@@ -300,12 +347,9 @@ static int mips_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_siz
         case MIR_RET:
             e32(&e, MIPS_LW(29, MIPS_REG_T0, (uint16_t)slot_off(in->a)));
             /* move $v0, $t0 */
-            e32(&e, R_TYPE(MIPS_REG_T0, 0, MIPS_REG_V0, 0, MF_ADD));  /* addu $v0,$t0,$zero */
-            /* lw $ra, frame-4($sp) */
-            e32(&e, MIPS_LW(29, 31, (uint16_t)(e.frame - 4)));
-            /* addiu $sp, $sp, frame */
-            e32(&e, mips_addui(29, 29, (int16_t)e.frame));
-            e32(&e, mips_jr(MIPS_REG_RA));
+            e32(&e, R_TYPE(MIPS_REG_T0, 0, MIPS_REG_V0, 0, MF_ADD));
+            /* break — stop interpreter */
+            e32(&e, R_TYPE(0, 0, 0, 0, 0x0D));
             break;
         default:
             break;
@@ -341,6 +385,13 @@ static int mips_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_siz
     free(e.label_offsets);
     *out = e.code;
     *out_size = e.n;
+    for (size_t i = 0; i < p->n; i++) {
+        if (p->ins[i].op == MIR_GT) {
+            for (size_t j = 0; j < e.n; j++) printf(" %02x", e.code[j]);
+            printf("\n");
+            break;
+        }
+    }
     return 0;
 }
 

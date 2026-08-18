@@ -131,6 +131,10 @@ static void x86_patch_push(x86_patch_t **patches, size_t *np, size_t *cap,
 /* ---- the full compile function with regalloc ---- */
 
 static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size) {
+#if !defined(__x86_64__)
+    (void)p; (void)out; (void)out_size;
+    return -1; /* cannot compile x86-64 on this host */
+#endif
     /* Step 1: call the MIR register allocator */
     size_t assign_count = 0;
     wubu_reg_assign_t *assign = wubu_mir_alloc_regs(p, 10, &assign_count);

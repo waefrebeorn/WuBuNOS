@@ -17,6 +17,22 @@
 
 #define I8051_VR_BASE 0x30
 
+/* Extended opcodes (0xFF prefix) */
+#define I8051_EXT    0xFF
+#define I8051_RET    0x22
+#define EXT_MUL      0x01
+#define EXT_DIV      0x02
+#define EXT_MOD      0x03
+#define EXT_SHL      0x04
+#define EXT_SHR      0x05
+#define EXT_GT       0x08
+#define EXT_LT       0x09
+#define EXT_GE       0x0A
+#define EXT_LE       0x0B
+#define EXT_EQ       0x0C
+#define EXT_NE       0x0D
+#define EXT_RET      0x0E
+
 typedef struct {
     uint8_t *code;
     size_t n, cap;
@@ -130,6 +146,52 @@ static int i8051_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
             e8(&e, 0xF4);               /* CPL A */
             e8(&e, 0xF5); e8(&e, slot);
             break;
+        case MIR_SHL:
+            sa = (uint8_t)(I8051_VR_BASE + in->a);
+            e8(&e, 0xE5); e8(&e, sa);    /* MOV A, [sa] */
+            e8(&e, 0xFF); e8(&e, EXT_SHL); e8(&e, (uint8_t)in->b);
+            e8(&e, 0xF5); e8(&e, slot);
+            break;
+        case MIR_SHR:
+            sa = (uint8_t)(I8051_VR_BASE + in->a);
+            e8(&e, 0xE5); e8(&e, sa);    /* MOV A, [sa] */
+            e8(&e, 0xFF); e8(&e, EXT_SHR); e8(&e, (uint8_t)in->b);
+            e8(&e, 0xF5); e8(&e, slot);
+            break;
+        case MIR_MOD:
+            sa = (uint8_t)(I8051_VR_BASE + in->a);
+            sb = (uint8_t)(I8051_VR_BASE + in->b);
+            e8(&e, 0xE5); e8(&e, sb);    /* MOV A, [sb] */
+            e8(&e, 0xF5); e8(&e, 0xF0);  /* MOV B, A */
+            e8(&e, 0xE5); e8(&e, sa);    /* MOV A, [sa] */
+            e8(&e, 0x84);                /* DIV AB → A=quotient, B=remainder */
+            e8(&e, 0xE5); e8(&e, 0xF0);  /* MOV A, B (remainder) */
+            e8(&e, 0xF5); e8(&e, slot);
+            break;
+        case MIR_GT:
+        case MIR_LT:
+        case MIR_GE:
+        case MIR_LE:
+        case MIR_EQ:
+        case MIR_NE: {
+            /* Signed comparison using EXT ops */
+            sa = (uint8_t)(I8051_VR_BASE + in->a);
+            sb = (uint8_t)(I8051_VR_BASE + in->b);
+            uint8_t ext_op;
+            switch (in->op) {
+                case MIR_GT: ext_op = EXT_GT; break;
+                case MIR_LT: ext_op = EXT_LT; break;
+                case MIR_GE: ext_op = EXT_GE; break;
+                case MIR_LE: ext_op = EXT_LE; break;
+                case MIR_EQ: ext_op = EXT_EQ; break;
+                case MIR_NE: ext_op = EXT_NE; break;
+                default: ext_op = EXT_EQ; break;
+            }
+            e8(&e, 0xE5); e8(&e, sa);    /* MOV A, [sa] */
+            e8(&e, 0xFF); e8(&e, ext_op); e8(&e, (uint8_t)in->a); e8(&e, (uint8_t)in->b);
+            e8(&e, 0xF5); e8(&e, slot);  /* MOV [slot], A */
+            break;
+        }
         case MIR_RET:
             sa = (uint8_t)(I8051_VR_BASE + in->a);
             e8(&e, 0xE5); e8(&e, sa);   /* MOV A, [sa] */
