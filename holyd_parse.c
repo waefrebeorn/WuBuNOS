@@ -1,5 +1,5 @@
 /*
- * holyc_parse.c  --  WuBuNOS HolyC Parser + AST Utilities
+ * holyd_parse.c  --  WuBuNOS HolyD Parser + AST Utilities
  *
  * Recursive descent parser: tokens → AST.
  * Ported from ZealOS/src/Compiler/ParseExp.ZC + ParseStatement.ZC
@@ -26,7 +26,7 @@
  *   primary     → INT_LIT | FLOAT_LIT | STRING_LIT | IDENT | '(' expr ')'
  */
 
-#include "holyc.h"
+#include "holyd.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -43,8 +43,8 @@
 
 /* -- Parser State ------------------------------------------------- */
 
-static void parse_error(HCParser *p, const char *msg) {
-    if (p->n_errors < HC_MAX_ERRORS) {
+static void parse_error(HDParser *p, const char *msg) {
+    if (p->n_errors < HD_MAX_ERRORS) {
         snprintf(p->errors[p->n_errors], 256, "line %d: %s",
                  p->lex->line, msg);
         p->n_errors++;
@@ -52,22 +52,22 @@ static void parse_error(HCParser *p, const char *msg) {
     p->has_error = true;
 }
 
-static HCTokenType peek(HCParser *p) {
+static HDTokenType peek(HDParser *p) {
     return p->lex->tok.type;
 }
 
-static HCTokenType advance(HCParser *p) {
-    HCTokenType t = p->lex->tok.type;
-    hc_lex_next(p->lex);
+static HDTokenType advance(HDParser *p) {
+    HDTokenType t = p->lex->tok.type;
+    hd_lex_next(p->lex);
     return t;
 }
 
-static bool match(HCParser *p, HCTokenType type) {
+static bool match(HDParser *p, HDTokenType type) {
     if (peek(p) == type) { advance(p); return true; }
     return false;
 }
 
-static void expect(HCParser *p, HCTokenType type) {
+static void expect(HDParser *p, HDTokenType type) {
     if (peek(p) == type) { advance(p); return; }
     char msg[128];
     snprintf(msg, sizeof(msg), "expected token %d, got %d", type, peek(p));
@@ -76,18 +76,18 @@ static void expect(HCParser *p, HCTokenType type) {
 
 /* -- Forward Declarations ----------------------------------------- */
 
-static HCASTNode *parse_expr(HCParser *p);
-static HCASTNode *parse_stmt(HCParser *p);
-static HCASTNode *parse_decl(HCParser *p);
+static HDASTNode *parse_expr(HDParser *p);
+static HDASTNode *parse_stmt(HDParser *p);
+static HDASTNode *parse_decl(HDParser *p);
 
 /* -- Parse Type --------------------------------------------------- */
 
-static HCType *parse_type(HCParser *p) {
-    HCType *t = (HCType *)calloc(1, sizeof(HCType));
-    t->kind = HC_TYPE_I64; /* HolyC default */
+static HDType *parse_type(HDParser *p) {
+    HDType *t = (HDType *)calloc(1, sizeof(HDType));
+    t->kind = HD_TYPE_I64; /* HolyD default */
 
     switch (peek(p)) {
-        case HC_TOK_IDENT: {
+        case HD_TOK_IDENT: {
             /* A typedef'd name is a type: `typedef int MyInt; MyInt x;`.
              * Look it up in the parser's typedef registry. */
             const char *id = p->lex->tok.text;
@@ -96,7 +96,7 @@ static HCType *parse_type(HCParser *p) {
                 if (strcmp(p->typedef_names[i], id) == 0) { found_typedef = i; break; }
             }
             if (found_typedef >= 0) {
-                HCType *rt = p->typedef_types[found_typedef];
+                HDType *rt = p->typedef_types[found_typedef];
                 advance(p);
                 /* do NOT return rt early — fall through so the pointer-star
                  * loop below wraps it (`typedef struct{int x;}S; S* p` must
@@ -107,70 +107,70 @@ static HCType *parse_type(HCParser *p) {
             }
             break;
         }
-        case HC_KW_U0:   t->kind = HC_TYPE_VOID; advance(p); break;
-        case HC_KW_I8:   t->kind = HC_TYPE_I8;   advance(p); break;
-        case HC_KW_I16:  t->kind = HC_TYPE_I16;  advance(p); break;
-        case HC_KW_I32:  t->kind = HC_TYPE_I32;  advance(p); break;
-        case HC_KW_I64:  t->kind = HC_TYPE_I64;  advance(p);
+        case HD_KW_U0:   t->kind = HD_TYPE_VOID; advance(p); break;
+        case HD_KW_I8:   t->kind = HD_TYPE_I8;   advance(p); break;
+        case HD_KW_I16:  t->kind = HD_TYPE_I16;  advance(p); break;
+        case HD_KW_I32:  t->kind = HD_TYPE_I32;  advance(p); break;
+        case HD_KW_I64:  t->kind = HD_TYPE_I64;  advance(p);
                          /* `long long` = two I64 tokens (both 64-bit on
                           * x86-64). Consume the optional second `long` so
                           * `long long x;` / `sizeof(long long)` parse. */
-                         if (peek(p) == HC_KW_I64) advance(p);
+                         if (peek(p) == HD_KW_I64) advance(p);
                          break;
-        case HC_KW_U8:   t->kind = HC_TYPE_U8;   advance(p); break;
-        case HC_KW_U16:  t->kind = HC_TYPE_U16;  advance(p); break;
-        case HC_KW_U32:  t->kind = HC_TYPE_U32;  advance(p); break;
-        case HC_KW_U64:  t->kind = HC_TYPE_U64;  advance(p); break;
-        case HC_KW_F64:  t->kind = HC_TYPE_F64;  advance(p); break;
-        case HC_KW_BOOL:  t->kind = HC_TYPE_BOOL; advance(p); break;
-        case HC_KW_ENUM: {
+        case HD_KW_U8:   t->kind = HD_TYPE_U8;   advance(p); break;
+        case HD_KW_U16:  t->kind = HD_TYPE_U16;  advance(p); break;
+        case HD_KW_U32:  t->kind = HD_TYPE_U32;  advance(p); break;
+        case HD_KW_U64:  t->kind = HD_TYPE_U64;  advance(p); break;
+        case HD_KW_F64:  t->kind = HD_TYPE_F64;  advance(p); break;
+        case HD_KW_BOOL:  t->kind = HD_TYPE_BOOL; advance(p); break;
+        case HD_KW_ENUM: {
             /* enum [Name] { A, B=2, C } — parse enumerators, register each
              * as a constant (GREEN=1) so later idents resolve. */
             advance(p); /* enum */
-            char tag[HC_MAX_IDENT_LEN] = {0};
-            if (peek(p) == HC_TOK_IDENT) {
-                strncpy(tag, p->lex->tok.text, HC_MAX_IDENT_LEN - 1);
-                strncpy(t->name, p->lex->tok.text, HC_MAX_IDENT_LEN - 1);
+            char tag[HD_MAX_IDENT_LEN] = {0};
+            if (peek(p) == HD_TOK_IDENT) {
+                strncpy(tag, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
+                strncpy(t->name, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
                 advance(p);
             }
-            if (peek(p) == HC_TOK_LBRACE) {
+            if (peek(p) == HD_TOK_LBRACE) {
                 advance(p); /* { */
                 int64_t val = 0;
-                while (peek(p) != HC_TOK_RBRACE && peek(p) != HC_TOK_EOF) {
-                    if (peek(p) == HC_TOK_IDENT) {
-                        char cname[HC_MAX_IDENT_LEN];
-                        strncpy(cname, p->lex->tok.text, HC_MAX_IDENT_LEN - 1);
+                while (peek(p) != HD_TOK_RBRACE && peek(p) != HD_TOK_EOF) {
+                    if (peek(p) == HD_TOK_IDENT) {
+                        char cname[HD_MAX_IDENT_LEN];
+                        strncpy(cname, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
                         advance(p);
-                        if (match(p, HC_TOK_ASSIGN)) {
-                            if (peek(p) == HC_TOK_INT) { val = p->lex->tok.int_val; advance(p); }
+                        if (match(p, HD_TOK_ASSIGN)) {
+                            if (peek(p) == HD_TOK_INT) { val = p->lex->tok.int_val; advance(p); }
                         }
                         /* register enumerator constant */
                         if (p->n_enum_consts < 64) {
-                            strncpy(p->enum_const_names[p->n_enum_consts], cname, HC_MAX_IDENT_LEN - 1);
+                            strncpy(p->enum_const_names[p->n_enum_consts], cname, HD_MAX_IDENT_LEN - 1);
                             p->enum_const_vals[p->n_enum_consts] = val;
                             p->n_enum_consts++;
                         }
                         val++;
                     }
-                    if (peek(p) == HC_TOK_COMMA) advance(p);
+                    if (peek(p) == HD_TOK_COMMA) advance(p);
                     else break;
                 }
-                expect(p, HC_TOK_RBRACE);
-                t->kind = HC_TYPE_ENUM;
+                expect(p, HD_TOK_RBRACE);
+                t->kind = HD_TYPE_ENUM;
                 t->size = 4;
                 /* register the tag */
                 if (tag[0] != '\0') {
                     for (int i = 0; i < p->n_named_types; i++)
                         if (strcmp(p->named_type_names[i], tag) == 0) { p->named_types[i] = t; goto struct_done; }
                     if (p->n_named_types < 64) {
-                        strncpy(p->named_type_names[p->n_named_types], tag, HC_MAX_IDENT_LEN - 1);
+                        strncpy(p->named_type_names[p->n_named_types], tag, HD_MAX_IDENT_LEN - 1);
                         p->named_types[p->n_named_types] = t;
                         p->n_named_types++;
                     }
                 }
                 goto struct_done;
             }
-            t->kind = HC_TYPE_ENUM;
+            t->kind = HD_TYPE_ENUM;
             t->size = 4;
             /* enum Color; reference */
             if (tag[0] != '\0') {
@@ -179,99 +179,99 @@ static HCType *parse_type(HCParser *p) {
             }
             break;
         }
-        case HC_KW_STRUCT:
-        case HC_KW_UNION: {
+        case HD_KW_STRUCT:
+        case HD_KW_UNION: {
             /* Struct/union type: (struct|union) Name { ... } or Name.
              * Same member grammar; a union overlaps all members at offset 0. */
-            HCTypeKind comp_kind = (peek(p) == HC_KW_STRUCT) ? HC_TYPE_STRUCT : HC_TYPE_UNION;
+            HDTypeKind comp_kind = (peek(p) == HD_KW_STRUCT) ? HD_TYPE_STRUCT : HD_TYPE_UNION;
             advance(p); /* struct | union */
-            char tag[HC_MAX_IDENT_LEN] = {0};
-            if (peek(p) == HC_TOK_IDENT) {
-                strncpy(tag, p->lex->tok.text, HC_MAX_IDENT_LEN - 1);
-                strncpy(t->name, p->lex->tok.text, HC_MAX_IDENT_LEN - 1);
+            char tag[HD_MAX_IDENT_LEN] = {0};
+            if (peek(p) == HD_TOK_IDENT) {
+                strncpy(tag, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
+                strncpy(t->name, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
                 advance(p);
             }
-            if (peek(p) == HC_TOK_LBRACE) {
+            if (peek(p) == HD_TOK_LBRACE) {
                 /* Definition with members */
                 advance(p); /* { */
                 int64_t max_size = 0;
                 int max_align = 1;
-                while (peek(p) != HC_TOK_RBRACE && peek(p) != HC_TOK_EOF) {
-                    HCType *member_type = parse_type(p);
+                while (peek(p) != HD_TOK_RBRACE && peek(p) != HD_TOK_EOF) {
+                    HDType *member_type = parse_type(p);
                     /* Function-pointer member: `int (*fn)(int,int);` — the
                      * member name is inside `(*...)`, so after parse_type
                      * (which read `int`) the next token is `(` not IDENT.
                      * Detect `(*` and build a pointer-to-function type. */
                     bool mem_is_fnp = false;
-                    if (peek(p) == HC_TOK_LPAREN) {
+                    if (peek(p) == HD_TOK_LPAREN) {
                         int saved_pos = p->lex->pos;
                         advance(p); /* ( */
-                        if (peek(p) == HC_TOK_STAR) {
+                        if (peek(p) == HD_TOK_STAR) {
                             advance(p); /* * */
                             mem_is_fnp = true;
                         } else {
                             /* `(name)` — not a fn ptr, restore */
                             p->lex->pos = saved_pos;
-                            hc_lex_next(p->lex);
+                            hd_lex_next(p->lex);
                         }
                     }
-                    if (peek(p) != HC_TOK_IDENT) {
+                    if (peek(p) != HD_TOK_IDENT) {
                         parse_error(p, "expected member name");
                         break;
                     }
-                    if (t->n_members < HC_MAX_PARAMS) {
-                        strncpy(t->members[t->n_members].name, p->lex->tok.text, HC_MAX_IDENT_LEN - 1);
+                    if (t->n_members < HD_MAX_PARAMS) {
+                        strncpy(t->members[t->n_members].name, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
                         advance(p); /* consume member name */
                         if (mem_is_fnp) {
                             /* `int (*fn)(int,int)` — consume `)` then `(params)`.
                              * Build PTR(FUNC(...)). */
-                            expect(p, HC_TOK_RPAREN);
-                            if (peek(p) == HC_TOK_LPAREN) {
+                            expect(p, HD_TOK_RPAREN);
+                            if (peek(p) == HD_TOK_LPAREN) {
                                 advance(p);
-                                HCType *fn = (HCType *)calloc(1, sizeof(HCType));
-                                fn->kind = HC_TYPE_FUNC;
-                                fn->param_types = (HCType **)calloc(HC_MAX_PARAMS, sizeof(HCType *));
+                                HDType *fn = (HDType *)calloc(1, sizeof(HDType));
+                                fn->kind = HD_TYPE_FUNC;
+                                fn->param_types = (HDType **)calloc(HD_MAX_PARAMS, sizeof(HDType *));
                                 int pi = 0;
-                                if (peek(p) != HC_TOK_RPAREN) {
+                                if (peek(p) != HD_TOK_RPAREN) {
                                     fn->param_types[pi] = parse_type(p);
-                                    if (peek(p) == HC_TOK_IDENT) advance(p);
+                                    if (peek(p) == HD_TOK_IDENT) advance(p);
                                     pi++;
-                                    while (match(p, HC_TOK_COMMA) && pi < HC_MAX_PARAMS) {
+                                    while (match(p, HD_TOK_COMMA) && pi < HD_MAX_PARAMS) {
                                         fn->param_types[pi] = parse_type(p);
-                                        if (peek(p) == HC_TOK_IDENT) advance(p);
+                                        if (peek(p) == HD_TOK_IDENT) advance(p);
                                         pi++;
                                     }
                                 }
                                 fn->n_params = pi;
-                                expect(p, HC_TOK_RPAREN);
-                                HCType *fpt = (HCType *)calloc(1, sizeof(HCType));
-                                fpt->kind = HC_TYPE_PTR;
+                                expect(p, HD_TOK_RPAREN);
+                                HDType *fpt = (HDType *)calloc(1, sizeof(HDType));
+                                fpt->kind = HD_TYPE_PTR;
                                 fpt->base = fn;
                                 fpt->size = 8;
                                 member_type = fpt;
                             } else {
                                 /* `int (*fn)` — plain pointer-to-int */
-                                HCType *pt = (HCType *)calloc(1, sizeof(HCType));
-                                pt->kind = HC_TYPE_PTR;
+                                HDType *pt = (HDType *)calloc(1, sizeof(HDType));
+                                pt->kind = HD_TYPE_PTR;
                                 pt->base = member_type;
                                 pt->size = 8;
                                 member_type = pt;
                             }
                         }
                         /* member may itself be an array: name[N] */
-                        if (peek(p) == HC_TOK_LBRACKET) {
+                        if (peek(p) == HD_TOK_LBRACKET) {
                             advance(p);
                             int asz = 0;
-                            if (peek(p) == HC_TOK_INT) { asz = (int)p->lex->tok.int_val; advance(p); }
-                            expect(p, HC_TOK_RBRACKET);
-                            HCType *ma = (HCType *)calloc(1, sizeof(HCType));
-                            ma->kind = HC_TYPE_ARRAY;
+                            if (peek(p) == HD_TOK_INT) { asz = (int)p->lex->tok.int_val; advance(p); }
+                            expect(p, HD_TOK_RBRACKET);
+                            HDType *ma = (HDType *)calloc(1, sizeof(HDType));
+                            ma->kind = HD_TYPE_ARRAY;
                             ma->base = member_type;
                             ma->array_size = asz;
                             member_type = ma;
                         }
-                        size_t msz = hc_type_size(member_type);
-                        if (comp_kind == HC_TYPE_UNION) {
+                        size_t msz = hd_type_size(member_type);
+                        if (comp_kind == HD_TYPE_UNION) {
                             /* union: every member starts at offset 0; size = max */
                             t->members[t->n_members].offset = 0;
                             if ((int64_t)msz > max_size) max_size = (int64_t)msz;
@@ -280,6 +280,15 @@ static HCType *parse_type(HCParser *p) {
                             t->members[t->n_members].offset = t->size;
                             t->size += msz;
                             int align = (int)msz;
+                            /* A zero-size member (void / undeclared type) is
+                             * ill-formed C, but the frontend must NEVER crash
+                             * on adversarial input. Clamp align to >=1 so the
+                             * `size % align` rounding below can't divide by
+                             * zero (SIGFPE), and keep the AST well-formed so
+                             * no caller hits a dangling NULL type. The member
+                             * is still recorded; codegen will reject a
+                             * zero-size access at use-site if it ever occurs. */
+                            if (align < 1) align = 1;
                             if (align > t->align) t->align = align;
                             if ((t->size % align) != 0)
                                 t->size += align - (t->size % align);
@@ -287,11 +296,11 @@ static HCType *parse_type(HCParser *p) {
                         t->members[t->n_members].type = member_type;
                         t->n_members++;
                     }
-                    expect(p, HC_TOK_SEMI);
+                    expect(p, HD_TOK_SEMI);
                 }
-                expect(p, HC_TOK_RBRACE);
+                expect(p, HD_TOK_RBRACE);
                 t->kind = comp_kind;
-                if (comp_kind == HC_TYPE_UNION) {
+                if (comp_kind == HD_TYPE_UNION) {
                     t->size = max_size;
                     t->align = max_align;
                 } else {
@@ -312,7 +321,7 @@ static HCType *parse_type(HCParser *p) {
                         }
                     }
                     if (p->n_named_types < 64) {
-                        strncpy(p->named_type_names[p->n_named_types], tag, HC_MAX_IDENT_LEN - 1);
+                        strncpy(p->named_type_names[p->n_named_types], tag, HD_MAX_IDENT_LEN - 1);
                         p->named_types[p->n_named_types] = t;
                         p->n_named_types++;
                     }
@@ -325,11 +334,11 @@ static HCType *parse_type(HCParser *p) {
             if (tag[0] != '\0') {
                 for (int i = 0; i < p->n_named_types; i++) {
                     if (strcmp(p->named_type_names[i], tag) == 0) {
-                        HCType *reg = p->named_types[i];
+                        HDType *reg = p->named_types[i];
                         /* shallow-copy the layout into the fresh node */
                         *t = *reg;
                         t->name[0] = '\0';
-                        strncpy(t->name, tag, HC_MAX_IDENT_LEN - 1);
+                        strncpy(t->name, tag, HD_MAX_IDENT_LEN - 1);
                         goto struct_done;
                     }
                 }
@@ -341,10 +350,10 @@ static HCType *parse_type(HCParser *p) {
 
 struct_done:
     /* Pointer types: type * */
-    while (peek(p) == HC_TOK_STAR) {
+    while (peek(p) == HD_TOK_STAR) {
         advance(p);
-        HCType *ptr = (HCType *)calloc(1, sizeof(HCType));
-        ptr->kind = HC_TYPE_PTR;
+        HDType *ptr = (HDType *)calloc(1, sizeof(HDType));
+        ptr->kind = HD_TYPE_PTR;
         ptr->base = t;
         t = ptr;
     }
@@ -356,14 +365,14 @@ struct_done:
 
 /* sizeof expr parses a cast; declared here so parse_primary can use it
  * before parse_cast's later forward-declaration. */
-static HCASTNode *parse_cast(HCParser *p);
+static HDASTNode *parse_cast(HDParser *p);
 
-static HCASTNode *parse_primary(HCParser *p) {
+static HDASTNode *parse_primary(HDParser *p) {
     /* An enum constant ident is an int literal: `GREEN` → 1. */
-    if (peek(p) == HC_TOK_IDENT) {
+    if (peek(p) == HD_TOK_IDENT) {
         for (int i = 0; i < p->n_enum_consts; i++) {
             if (strcmp(p->enum_const_names[i], p->lex->tok.text) == 0) {
-                HCASTNode *n = hc_ast_new(HC_AST_INT_LIT);
+                HDASTNode *n = hd_ast_new(HD_AST_INT_LIT);
                 n->int_val = p->enum_const_vals[i];
                 advance(p);
                 return n;
@@ -371,31 +380,31 @@ static HCASTNode *parse_primary(HCParser *p) {
         }
     }
     switch (peek(p)) {
-        case HC_TOK_INT: {
-            HCASTNode *n = hc_ast_new(HC_AST_INT_LIT);
+        case HD_TOK_INT: {
+            HDASTNode *n = hd_ast_new(HD_AST_INT_LIT);
             n->int_val = p->lex->tok.int_val;
             advance(p);
             return n;
         }
-        case HC_TOK_FLOAT: {
-            HCASTNode *n = hc_ast_new(HC_AST_FLOAT_LIT);
+        case HD_TOK_FLOAT: {
+            HDASTNode *n = hd_ast_new(HD_AST_FLOAT_LIT);
             n->float_val = p->lex->tok.float_val;
             advance(p);
             return n;
         }
-        case HC_TOK_STRING: {
-            HCASTNode *n = hc_ast_new(HC_AST_STRING_LIT);
+        case HD_TOK_STRING: {
+            HDASTNode *n = hd_ast_new(HD_AST_STRING_LIT);
             /* use str_val (the decoded string incl. escape sequences),
              * NOT text (which is the raw source span and can be empty
              * after a previous token's trailing-quote advance). */
-            strncpy(n->str_val, p->lex->tok.str_val, HC_MAX_STRING_LEN - 1);
+            strncpy(n->str_val, p->lex->tok.str_val, HD_MAX_STRING_LEN - 1);
             advance(p);
             return n;
         }
-        case HC_TOK_CHAR: {
-            HCASTNode *n = hc_ast_new(HC_AST_CHAR_LIT);
+        case HD_TOK_CHAR: {
+            HDASTNode *n = hd_ast_new(HD_AST_CHAR_LIT);
             /* the lexer puts the decoded char in str_val[0]; int_val
-             * is only set for HC_TOK_INT (the scanner path doesn't
+             * is only set for HD_TOK_INT (the scanner path doesn't
              * touch int_val for chars). Codegen reads str_val[0], so
              * populate both for safety. */
             n->str_val[0] = p->lex->tok.str_val[0];
@@ -403,59 +412,59 @@ static HCASTNode *parse_primary(HCParser *p) {
             advance(p);
             return n;
         }
-        case HC_TOK_IDENT: {
-            HCASTNode *n = hc_ast_new(HC_AST_IDENT);
-            strncpy(n->ident, p->lex->tok.text, HC_MAX_IDENT_LEN - 1);
+        case HD_TOK_IDENT: {
+            HDASTNode *n = hd_ast_new(HD_AST_IDENT);
+            strncpy(n->ident, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
             advance(p);
             return n;
         }
-        case HC_KW_SIZEOF: {
+        case HD_KW_SIZEOF: {
             /* sizeof(type) or sizeof expr — emit the type size as a literal.
              * After '(': if it's a type keyword, parse the type; otherwise
              * parse the inner expression and expect ')'. No backtracking —
              * capturing lex->pos mid-token points past the token, so a
              * pos-restore lands on the wrong char. */
             advance(p); /* sizeof */
-            HCASTNode *n = hc_ast_new(HC_AST_SIZEOF);
-            if (peek(p) == HC_TOK_LPAREN) {
+            HDASTNode *n = hd_ast_new(HD_AST_SIZEOF);
+            if (peek(p) == HD_TOK_LPAREN) {
                 advance(p); /* ( */
                 int t = peek(p);
-                int is_type_kw = (t >= HC_KW_I0 && t <= HC_KW_VOLATILE);
+                int is_type_kw = (t >= HD_KW_I0 && t <= HD_KW_VOLATILE);
                 if (is_type_kw) {
                     n->type = parse_type(p);
-                    expect(p, HC_TOK_RPAREN);
+                    expect(p, HD_TOK_RPAREN);
                     return n;
                 }
                 n->child = parse_expr(p);     /* sizeof (expr) */
-                expect(p, HC_TOK_RPAREN);
+                expect(p, HD_TOK_RPAREN);
                 return n;
             }
             n->child = parse_cast(p);   /* sizeof expr (no parens) */
             return n;
         }
-        case HC_TOK_LPAREN: {
+        case HD_TOK_LPAREN: {
             advance(p); /* ( */
-            HCASTNode *expr = parse_expr(p);
-            expect(p, HC_TOK_RPAREN);
+            HDASTNode *expr = parse_expr(p);
+            expect(p, HD_TOK_RPAREN);
             return expr;
         }
-        case HC_TOK_LBRACE: {
+        case HD_TOK_LBRACE: {
             /* Braced initializer: {expr, expr, ...} — parse as a list
              * of expressions for array/struct init. Returns a BRACE_INIT
              * node containing the element expressions. */
             advance(p); /* consume { */
-            HCASTNode *init = hc_ast_new(HC_AST_BRACE_INIT);
+            HDASTNode *init = hd_ast_new(HD_AST_BRACE_INIT);
             if (!init) { p->has_error = true; return NULL; }
-            while (peek(p) != HC_TOK_RBRACE && peek(p) != HC_TOK_EOF) {
-                hc_ast_add_arg(init, parse_expr(p));
-                if (peek(p) == HC_TOK_COMMA) {
+            while (peek(p) != HD_TOK_RBRACE && peek(p) != HD_TOK_EOF) {
+                hd_ast_add_arg(init, parse_expr(p));
+                if (peek(p) == HD_TOK_COMMA) {
                     advance(p);
-                    if (peek(p) == HC_TOK_RBRACE) break;
+                    if (peek(p) == HD_TOK_RBRACE) break;
                 } else {
                     break;
                 }
             }
-            expect(p, HC_TOK_RBRACE);
+            expect(p, HD_TOK_RBRACE);
             return init;
         }
         default:
@@ -464,58 +473,58 @@ static HCASTNode *parse_primary(HCParser *p) {
     }
 }
 
-static HCASTNode *parse_postfix(HCParser *p) {
-    HCASTNode *expr = parse_primary(p);
+static HDASTNode *parse_postfix(HDParser *p) {
+    HDASTNode *expr = parse_primary(p);
 
     while (true) {
-        if (peek(p) == HC_TOK_LPAREN) {
+        if (peek(p) == HD_TOK_LPAREN) {
             /* Function call */
             advance(p); /* ( */
-            HCASTNode *call = hc_ast_new(HC_AST_FUNC_CALL);
+            HDASTNode *call = hd_ast_new(HD_AST_FUNC_CALL);
             call->callee = expr;
-            if (peek(p) != HC_TOK_RPAREN) {
-                hc_ast_add_arg(call, parse_expr(p));
-                while (match(p, HC_TOK_COMMA))
-                    hc_ast_add_arg(call, parse_expr(p));
+            if (peek(p) != HD_TOK_RPAREN) {
+                hd_ast_add_arg(call, parse_expr(p));
+                while (match(p, HD_TOK_COMMA))
+                    hd_ast_add_arg(call, parse_expr(p));
             }
-            expect(p, HC_TOK_RPAREN);
+            expect(p, HD_TOK_RPAREN);
             expr = call;
-        } else if (peek(p) == HC_TOK_LBRACKET) {
+        } else if (peek(p) == HD_TOK_LBRACKET) {
             /* Array index */
             advance(p); /* [ */
-            HCASTNode *idx = hc_ast_new(HC_AST_INDEX);
+            HDASTNode *idx = hd_ast_new(HD_AST_INDEX);
             idx->left = expr;
             idx->right = parse_expr(p);
-            expect(p, HC_TOK_RBRACKET);
+            expect(p, HD_TOK_RBRACKET);
             expr = idx;
-        } else if (peek(p) == HC_TOK_DOT) {
+        } else if (peek(p) == HD_TOK_DOT) {
             /* Member access */
             advance(p); /* . */
-            HCASTNode *mem = hc_ast_new(HC_AST_MEMBER);
+            HDASTNode *mem = hd_ast_new(HD_AST_MEMBER);
             mem->left = expr;
-            if (peek(p) == HC_TOK_IDENT) {
-                strncpy(mem->ident, p->lex->tok.text, HC_MAX_IDENT_LEN - 1);
+            if (peek(p) == HD_TOK_IDENT) {
+                strncpy(mem->ident, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
                 advance(p);
             }
             expr = mem;
-        } else if (peek(p) == HC_TOK_ARROW) {
+        } else if (peek(p) == HD_TOK_ARROW) {
             /* Arrow access */
             advance(p); /* -> */
-            HCASTNode *mem = hc_ast_new(HC_AST_ARROW);
+            HDASTNode *mem = hd_ast_new(HD_AST_ARROW);
             mem->left = expr;
-            if (peek(p) == HC_TOK_IDENT) {
-                strncpy(mem->ident, p->lex->tok.text, HC_MAX_IDENT_LEN - 1);
+            if (peek(p) == HD_TOK_IDENT) {
+                strncpy(mem->ident, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
                 advance(p);
             }
             expr = mem;
-        } else if (peek(p) == HC_TOK_PLUS_PLUS) {
+        } else if (peek(p) == HD_TOK_PLUS_PLUS) {
             advance(p);
-            HCASTNode *inc = hc_ast_new(HC_AST_POST_INC);
+            HDASTNode *inc = hd_ast_new(HD_AST_POST_INC);
             inc->child = expr;
             expr = inc;
-        } else if (peek(p) == HC_TOK_MINUS_MINUS) {
+        } else if (peek(p) == HD_TOK_MINUS_MINUS) {
             advance(p);
-            HCASTNode *dec = hc_ast_new(HC_AST_POST_DEC);
+            HDASTNode *dec = hd_ast_new(HD_AST_POST_DEC);
             dec->child = expr;
             expr = dec;
         } else {
@@ -528,46 +537,46 @@ static HCASTNode *parse_postfix(HCParser *p) {
 
 /* -- Parse Unary -------------------------------------------------- */
 
-static HCASTNode *parse_unary(HCParser *p) {
-    if (peek(p) == HC_TOK_MINUS) {
+static HDASTNode *parse_unary(HDParser *p) {
+    if (peek(p) == HD_TOK_MINUS) {
         advance(p);
-        HCASTNode *n = hc_ast_new(HC_AST_NEG);
+        HDASTNode *n = hd_ast_new(HD_AST_NEG);
         n->child = parse_unary(p);
         return n;
     }
-    if (peek(p) == HC_TOK_BANG) {
+    if (peek(p) == HD_TOK_BANG) {
         advance(p);
-        HCASTNode *n = hc_ast_new(HC_AST_NOT);
+        HDASTNode *n = hd_ast_new(HD_AST_NOT);
         n->child = parse_unary(p);
         return n;
     }
-    if (peek(p) == HC_TOK_TILDE) {
+    if (peek(p) == HD_TOK_TILDE) {
         advance(p);
-        HCASTNode *n = hc_ast_new(HC_AST_BITNOT);
+        HDASTNode *n = hd_ast_new(HD_AST_BITNOT);
         n->child = parse_unary(p);
         return n;
     }
-    if (peek(p) == HC_TOK_STAR) {
+    if (peek(p) == HD_TOK_STAR) {
         advance(p);
-        HCASTNode *n = hc_ast_new(HC_AST_DEREF);
+        HDASTNode *n = hd_ast_new(HD_AST_DEREF);
         n->child = parse_unary(p);
         return n;
     }
-    if (peek(p) == HC_TOK_AMP) {
+    if (peek(p) == HD_TOK_AMP) {
         advance(p);
-        HCASTNode *n = hc_ast_new(HC_AST_ADDR);
+        HDASTNode *n = hd_ast_new(HD_AST_ADDR);
         n->child = parse_unary(p);
         return n;
     }
-    if (peek(p) == HC_TOK_PLUS_PLUS) {
+    if (peek(p) == HD_TOK_PLUS_PLUS) {
         advance(p);
-        HCASTNode *n = hc_ast_new(HC_AST_PRE_INC);
+        HDASTNode *n = hd_ast_new(HD_AST_PRE_INC);
         n->child = parse_unary(p);
         return n;
     }
-    if (peek(p) == HC_TOK_MINUS_MINUS) {
+    if (peek(p) == HD_TOK_MINUS_MINUS) {
         advance(p);
-        HCASTNode *n = hc_ast_new(HC_AST_PRE_DEC);
+        HDASTNode *n = hd_ast_new(HD_AST_PRE_DEC);
         n->child = parse_unary(p);
         return n;
     }
@@ -576,41 +585,41 @@ static HCASTNode *parse_unary(HCParser *p) {
 
 /* -- Parse Binary (precedence climbing) --------------------------- */
 
-typedef struct { HCTokenType tok; HCASTKind ast; } BinOp;
+typedef struct { HDTokenType tok; HDASTKind ast; } BinOp;
 
 static const BinOp mul_ops[] = {
-    {HC_TOK_STAR,  HC_AST_MUL}, {HC_TOK_SLASH, HC_AST_DIV}, {HC_TOK_PERCENT, HC_AST_MOD},
-    {HC_TOK_EOF,   0},
+    {HD_TOK_STAR,  HD_AST_MUL}, {HD_TOK_SLASH, HD_AST_DIV}, {HD_TOK_PERCENT, HD_AST_MOD},
+    {HD_TOK_EOF,   0},
 };
 static const BinOp add_ops[] = {
-    {HC_TOK_PLUS,  HC_AST_ADD}, {HC_TOK_MINUS, HC_AST_SUB},
-    {HC_TOK_EOF,   0},
+    {HD_TOK_PLUS,  HD_AST_ADD}, {HD_TOK_MINUS, HD_AST_SUB},
+    {HD_TOK_EOF,   0},
 };
 static const BinOp shift_ops[] = {
-    {HC_TOK_SHL,   HC_AST_SHL}, {HC_TOK_SHR, HC_AST_SHR},
-    {HC_TOK_EOF,   0},
+    {HD_TOK_SHL,   HD_AST_SHL}, {HD_TOK_SHR, HD_AST_SHR},
+    {HD_TOK_EOF,   0},
 };
 static const BinOp cmp_ops[] = {
-    {HC_TOK_LT,    HC_AST_LT}, {HC_TOK_GT, HC_AST_GT},
-    {HC_TOK_LE,    HC_AST_LE}, {HC_TOK_GE, HC_AST_GE},
-    {HC_TOK_EOF,   0},
+    {HD_TOK_LT,    HD_AST_LT}, {HD_TOK_GT, HD_AST_GT},
+    {HD_TOK_LE,    HD_AST_LE}, {HD_TOK_GE, HD_AST_GE},
+    {HD_TOK_EOF,   0},
 };
 static const BinOp eq_ops[] = {
-    {HC_TOK_EQ,    HC_AST_EQ}, {HC_TOK_NE, HC_AST_NE},
-    {HC_TOK_EOF,   0},
+    {HD_TOK_EQ,    HD_AST_EQ}, {HD_TOK_NE, HD_AST_NE},
+    {HD_TOK_EOF,   0},
 };
-static const BinOp bitand_ops[] = {{HC_TOK_AMP, HC_AST_BITAND}, {HC_TOK_EOF, 0}};
-static const BinOp bitxor_ops[] = {{HC_TOK_CARET, HC_AST_BITXOR}, {HC_TOK_EOF, 0}};
-static const BinOp bitor_ops[]  = {{HC_TOK_PIPE, HC_AST_BITOR}, {HC_TOK_EOF, 0}};
+static const BinOp bitand_ops[] = {{HD_TOK_AMP, HD_AST_BITAND}, {HD_TOK_EOF, 0}};
+static const BinOp bitxor_ops[] = {{HD_TOK_CARET, HD_AST_BITXOR}, {HD_TOK_EOF, 0}};
+static const BinOp bitor_ops[]  = {{HD_TOK_PIPE, HD_AST_BITOR}, {HD_TOK_EOF, 0}};
 
-static HCASTNode *parse_binop(HCParser *p, HCASTNode *(*higher)(HCParser*), const BinOp *ops) {
-    HCASTNode *left = higher(p);
+static HDASTNode *parse_binop(HDParser *p, HDASTNode *(*higher)(HDParser*), const BinOp *ops) {
+    HDASTNode *left = higher(p);
     while (true) {
         bool found = false;
-        for (int i = 0; ops[i].tok != HC_TOK_EOF; i++) {
+        for (int i = 0; ops[i].tok != HD_TOK_EOF; i++) {
             if (peek(p) == ops[i].tok) {
                 advance(p);
-                HCASTNode *n = hc_ast_new(ops[i].ast);
+                HDASTNode *n = hd_ast_new(ops[i].ast);
                 n->left = left;
                 n->right = higher(p);
                 left = n;
@@ -624,13 +633,13 @@ static HCASTNode *parse_binop(HCParser *p, HCASTNode *(*higher)(HCParser*), cons
 }
 
 /* -- Parse Cast ----------------------------------------------------- */
-static HCASTNode *parse_cast(HCParser *p);
+static HDASTNode *parse_cast(HDParser *p);
 
-static HCASTNode *parse_mul(HCParser *p)      { return parse_binop(p, parse_cast, mul_ops); }
+static HDASTNode *parse_mul(HDParser *p)      { return parse_binop(p, parse_cast, mul_ops); }
 
 /* -- Parse Cast ----------------------------------------------------- */
-static HCASTNode *parse_cast(HCParser *p) {
-    if (peek(p) == HC_TOK_LPAREN) {
+static HDASTNode *parse_cast(HDParser *p) {
+    if (peek(p) == HD_TOK_LPAREN) {
         /* Look ahead to see if this is a cast: (type) expr */
         /* Save lexer state for backtracking */
         int saved_pos = p->lex->pos;
@@ -640,12 +649,12 @@ static HCASTNode *parse_cast(HCParser *p) {
         
         /* Check if next token is a type keyword or identifier (typedef name) */
         bool is_type = false;
-        HCTokenType tok = peek(p);
-        if (tok == HC_KW_I8 || tok == HC_KW_I16 || tok == HC_KW_I32 ||
-            tok == HC_KW_I64 || tok == HC_KW_U8 || tok == HC_KW_U16 ||
-            tok == HC_KW_U32 || tok == HC_KW_U64 || tok == HC_KW_F64 ||
-            tok == HC_KW_BOOL || tok == HC_KW_STRUCT || tok == HC_KW_UNION ||
-            tok == HC_KW_ENUM || tok == HC_KW_TYPEDEF) {
+        HDTokenType tok = peek(p);
+        if (tok == HD_KW_I8 || tok == HD_KW_I16 || tok == HD_KW_I32 ||
+            tok == HD_KW_I64 || tok == HD_KW_U8 || tok == HD_KW_U16 ||
+            tok == HD_KW_U32 || tok == HD_KW_U64 || tok == HD_KW_F64 ||
+            tok == HD_KW_BOOL || tok == HD_KW_STRUCT || tok == HD_KW_UNION ||
+            tok == HD_KW_ENUM || tok == HD_KW_TYPEDEF) {
             is_type = true;
         }
         /* An IDENT after `(` is only a cast if it's a typedef name or an enum
@@ -653,7 +662,7 @@ static HCASTNode *parse_cast(HCParser *p) {
          * `(x+1)`, NOT a cast `(Type)x`. Previously any leading IDENT was
          * treated as a type, so `(x)` was mis-tokenized as a cast and the
          * inner `x` was lost, causing "expected RPAREN, got IDENT". */
-        if (tok == HC_TOK_IDENT) {
+        if (tok == HD_TOK_IDENT) {
             const char *id = p->lex->tok.text;
             for (int i = 0; i < p->n_typedefs; i++)
                 if (strcmp(p->typedef_names[i], id) == 0) { is_type = true; break; }
@@ -664,10 +673,10 @@ static HCASTNode *parse_cast(HCParser *p) {
         
         if (is_type) {
             /* This is a cast - parse the type */
-            HCType *cast_type = parse_type(p);
-            expect(p, HC_TOK_RPAREN);
-            HCASTNode *expr = parse_cast(p);  /* right-associative for nested casts */
-            HCASTNode *n = hc_ast_new(HC_AST_CAST);
+            HDType *cast_type = parse_type(p);
+            expect(p, HD_TOK_RPAREN);
+            HDASTNode *expr = parse_cast(p);  /* right-associative for nested casts */
+            HDASTNode *n = hd_ast_new(HD_AST_CAST);
             n->child = expr;
             n->type = cast_type;
             return n;
@@ -682,36 +691,36 @@ static HCASTNode *parse_cast(HCParser *p) {
         p->lex->pos = saved_pos - 1;
         p->lex->line = saved_line;
         p->lex->col = saved_col;
-        hc_lex_next(p->lex);
+        hd_lex_next(p->lex);
         return parse_postfix(p);
     }
     return parse_unary(p);
 }
-static HCASTNode *parse_add(HCParser *p)      { return parse_binop(p, parse_mul, add_ops); }
-static HCASTNode *parse_shift(HCParser *p)    { return parse_binop(p, parse_add, shift_ops); }
-static HCASTNode *parse_cmp(HCParser *p)      { return parse_binop(p, parse_shift, cmp_ops); }
-static HCASTNode *parse_eq(HCParser *p)       { return parse_binop(p, parse_cmp, eq_ops); }
-static HCASTNode *parse_bitand(HCParser *p)   { return parse_binop(p, parse_eq, bitand_ops); }
-static HCASTNode *parse_bitxor(HCParser *p)   { return parse_binop(p, parse_bitand, bitxor_ops); }
-static HCASTNode *parse_bitor(HCParser *p)    { return parse_binop(p, parse_bitxor, bitor_ops); }
+static HDASTNode *parse_add(HDParser *p)      { return parse_binop(p, parse_mul, add_ops); }
+static HDASTNode *parse_shift(HDParser *p)    { return parse_binop(p, parse_add, shift_ops); }
+static HDASTNode *parse_cmp(HDParser *p)      { return parse_binop(p, parse_shift, cmp_ops); }
+static HDASTNode *parse_eq(HDParser *p)       { return parse_binop(p, parse_cmp, eq_ops); }
+static HDASTNode *parse_bitand(HDParser *p)   { return parse_binop(p, parse_eq, bitand_ops); }
+static HDASTNode *parse_bitxor(HDParser *p)   { return parse_binop(p, parse_bitand, bitxor_ops); }
+static HDASTNode *parse_bitor(HDParser *p)    { return parse_binop(p, parse_bitxor, bitor_ops); }
 
 /* logic_and, logic_or */
-static HCASTNode *parse_logic_and(HCParser *p) {
-    HCASTNode *left = parse_bitor(p);
-    while (peek(p) == HC_TOK_AND) {
+static HDASTNode *parse_logic_and(HDParser *p) {
+    HDASTNode *left = parse_bitor(p);
+    while (peek(p) == HD_TOK_AND) {
         advance(p);
-        HCASTNode *n = hc_ast_new(HC_AST_AND);
+        HDASTNode *n = hd_ast_new(HD_AST_AND);
         n->left = left; n->right = parse_bitor(p);
         left = n;
     }
     return left;
 }
 
-static HCASTNode *parse_logic_or(HCParser *p) {
-    HCASTNode *left = parse_logic_and(p);
-    while (peek(p) == HC_TOK_OR) {
+static HDASTNode *parse_logic_or(HDParser *p) {
+    HDASTNode *left = parse_logic_and(p);
+    while (peek(p) == HD_TOK_OR) {
         advance(p);
-        HCASTNode *n = hc_ast_new(HC_AST_OR);
+        HDASTNode *n = hd_ast_new(HD_AST_OR);
         n->left = left; n->right = parse_logic_and(p);
         left = n;
     }
@@ -720,14 +729,14 @@ static HCASTNode *parse_logic_or(HCParser *p) {
 
 /* -- Parse Ternary ------------------------------------------------ */
 
-static HCASTNode *parse_ternary(HCParser *p) {
-    HCASTNode *expr = parse_logic_or(p);
-    if (peek(p) == HC_TOK_QUESTION) {
+static HDASTNode *parse_ternary(HDParser *p) {
+    HDASTNode *expr = parse_logic_or(p);
+    if (peek(p) == HD_TOK_QUESTION) {
         advance(p);
-        HCASTNode *n = hc_ast_new(HC_AST_TERNARY);
+        HDASTNode *n = hd_ast_new(HD_AST_TERNARY);
         n->cond = expr;
         n->then_branch = parse_expr(p);
-        expect(p, HC_TOK_COLON);
+        expect(p, HD_TOK_COLON);
         n->else_branch = parse_ternary(p);
         return n;
     }
@@ -736,27 +745,27 @@ static HCASTNode *parse_ternary(HCParser *p) {
 
 /* -- Parse Assignment --------------------------------------------- */
 
-static HCASTNode *parse_assign(HCParser *p) {
-    HCASTNode *left = parse_ternary(p);
+static HDASTNode *parse_assign(HDParser *p) {
+    HDASTNode *left = parse_ternary(p);
 
-    HCASTKind assign_kind = 0;
+    HDASTKind assign_kind = 0;
     switch (peek(p)) {
-        case HC_TOK_ASSIGN:       assign_kind = HC_AST_ASSIGN; break;
-        case HC_TOK_PLUS_ASSIGN:  assign_kind = HC_AST_ADD_ASSIGN; break;
-        case HC_TOK_MINUS_ASSIGN: assign_kind = HC_AST_SUB_ASSIGN; break;
-        case HC_TOK_STAR_ASSIGN:  assign_kind = HC_AST_MUL_ASSIGN; break;
-        case HC_TOK_SLASH_ASSIGN: assign_kind = HC_AST_DIV_ASSIGN; break;
-        case HC_TOK_PERCENT_ASSIGN: assign_kind = HC_AST_MOD_ASSIGN; break;
-        case HC_TOK_SHL_ASSIGN:   assign_kind = HC_AST_SHL_ASSIGN; break;
-        case HC_TOK_SHR_ASSIGN:   assign_kind = HC_AST_SHR_ASSIGN; break;
-        case HC_TOK_AMP_ASSIGN:   assign_kind = HC_AST_AMP_ASSIGN; break;
-        case HC_TOK_PIPE_ASSIGN:  assign_kind = HC_AST_PIPE_ASSIGN; break;
-        case HC_TOK_CARET_ASSIGN: assign_kind = HC_AST_CARET_ASSIGN; break;
+        case HD_TOK_ASSIGN:       assign_kind = HD_AST_ASSIGN; break;
+        case HD_TOK_PLUS_ASSIGN:  assign_kind = HD_AST_ADD_ASSIGN; break;
+        case HD_TOK_MINUS_ASSIGN: assign_kind = HD_AST_SUB_ASSIGN; break;
+        case HD_TOK_STAR_ASSIGN:  assign_kind = HD_AST_MUL_ASSIGN; break;
+        case HD_TOK_SLASH_ASSIGN: assign_kind = HD_AST_DIV_ASSIGN; break;
+        case HD_TOK_PERCENT_ASSIGN: assign_kind = HD_AST_MOD_ASSIGN; break;
+        case HD_TOK_SHL_ASSIGN:   assign_kind = HD_AST_SHL_ASSIGN; break;
+        case HD_TOK_SHR_ASSIGN:   assign_kind = HD_AST_SHR_ASSIGN; break;
+        case HD_TOK_AMP_ASSIGN:   assign_kind = HD_AST_AMP_ASSIGN; break;
+        case HD_TOK_PIPE_ASSIGN:  assign_kind = HD_AST_PIPE_ASSIGN; break;
+        case HD_TOK_CARET_ASSIGN: assign_kind = HD_AST_CARET_ASSIGN; break;
         default: return left;
     }
 
     advance(p);
-    HCASTNode *n = hc_ast_new(assign_kind);
+    HDASTNode *n = hd_ast_new(assign_kind);
     n->left = left;
     n->right = parse_assign(p);
     return n;
@@ -764,22 +773,22 @@ static HCASTNode *parse_assign(HCParser *p) {
 
 /* -- Parse Expression --------------------------------------------- */
 
-static HCASTNode *parse_expr(HCParser *p) {
+static HDASTNode *parse_expr(HDParser *p) {
     return parse_assign(p);
 }
 
 /* -- Parse Block -------------------------------------------------- */
 
-HCASTNode *parse_block(HCParser *p) {
-    expect(p, HC_TOK_LBRACE);
-    HCASTNode *block = hc_ast_new(HC_AST_BLOCK);
+HDASTNode *parse_block(HDParser *p) {
+    expect(p, HD_TOK_LBRACE);
+    HDASTNode *block = hd_ast_new(HD_AST_BLOCK);
     if (!block) { p->has_error = true; return NULL; }
-    while (peek(p) != HC_TOK_RBRACE && peek(p) != HC_TOK_EOF) {
+    while (peek(p) != HD_TOK_RBRACE && peek(p) != HD_TOK_EOF) {
         int start_pos = p->lex->pos;
         /* Peek ahead: if the next non-statement token is '}', this is the
          * last statement in the block. Allow omitting the trailing semicolon
-         * for expression statements (HolyC block-as-expression syntax). */
-        hc_ast_add_stmt(block, parse_stmt(p));
+         * for expression statements (HolyD block-as-expression syntax). */
+        hd_ast_add_stmt(block, parse_stmt(p));
         if (!p->has_error && p->lex->pos == start_pos) {
             parse_error(p, "unexpected token in block");
             break;
@@ -787,7 +796,7 @@ HCASTNode *parse_block(HCParser *p) {
         if (p->has_error) {
             /* If the error is a missing semicolon before '}', clear it —
              * the last statement in a block doesn't need one. */
-            if (peek(p) == HC_TOK_RBRACE) {
+            if (peek(p) == HD_TOK_RBRACE) {
                 p->has_error = false;
                 p->n_errors = 0;
             } else {
@@ -795,152 +804,152 @@ HCASTNode *parse_block(HCParser *p) {
             }
         }
     }
-    expect(p, HC_TOK_RBRACE);
+    expect(p, HD_TOK_RBRACE);
     return block;
 }
 
-HCASTNode *hc_parse_block(HCParser *p) {
+HDASTNode *hd_parse_block(HDParser *p) {
     return parse_block(p);
 }
 
 /* -- Parse Statement ---------------------------------------------- */
 
-static HCASTNode *parse_stmt(HCParser *p) {
+static HDASTNode *parse_stmt(HDParser *p) {
     /* If statement */
-    if (match(p, HC_KW_IF)) {
-        HCASTNode *n = hc_ast_new(HC_AST_IF);
-        expect(p, HC_TOK_LPAREN);
+    if (match(p, HD_KW_IF)) {
+        HDASTNode *n = hd_ast_new(HD_AST_IF);
+        expect(p, HD_TOK_LPAREN);
         n->cond = parse_expr(p);
-        expect(p, HC_TOK_RPAREN);
+        expect(p, HD_TOK_RPAREN);
         n->then_branch = parse_stmt(p);
-        if (match(p, HC_KW_ELSE))
+        if (match(p, HD_KW_ELSE))
             n->else_branch = parse_stmt(p);
         return n;
     }
 
     /* While statement */
-    if (match(p, HC_KW_WHILE)) {
-        HCASTNode *n = hc_ast_new(HC_AST_WHILE);
-        expect(p, HC_TOK_LPAREN);
+    if (match(p, HD_KW_WHILE)) {
+        HDASTNode *n = hd_ast_new(HD_AST_WHILE);
+        expect(p, HD_TOK_LPAREN);
         n->cond = parse_expr(p);
-        expect(p, HC_TOK_RPAREN);
+        expect(p, HD_TOK_RPAREN);
         n->body = parse_stmt(p);
         return n;
     }
 
     /* Do-while statement: do body while(cond); */
-    if (match(p, HC_KW_DO)) {
-        HCASTNode *n = hc_ast_new(HC_AST_DO_WHILE);
+    if (match(p, HD_KW_DO)) {
+        HDASTNode *n = hd_ast_new(HD_AST_DO_WHILE);
         n->body = parse_stmt(p);
-        if (match(p, HC_KW_WHILE)) {
-            expect(p, HC_TOK_LPAREN);
+        if (match(p, HD_KW_WHILE)) {
+            expect(p, HD_TOK_LPAREN);
             n->cond = parse_expr(p);
-            expect(p, HC_TOK_RPAREN);
+            expect(p, HD_TOK_RPAREN);
         } else {
             n->cond = NULL;  /* infinite loop if no while-clause */
         }
-        match(p, HC_TOK_SEMI);
+        match(p, HD_TOK_SEMI);
         return n;
     }
 
     /* Switch statement: switch(expr) { case VAL: ... default: ... } */
-    if (match(p, HC_KW_SWITCH)) {
-        HCASTNode *n = hc_ast_new(HC_AST_SWITCH);
-        expect(p, HC_TOK_LPAREN);
+    if (match(p, HD_KW_SWITCH)) {
+        HDASTNode *n = hd_ast_new(HD_AST_SWITCH);
+        expect(p, HD_TOK_LPAREN);
         n->cond = parse_expr(p);
-        expect(p, HC_TOK_RPAREN);
+        expect(p, HD_TOK_RPAREN);
         /* Parse the body as a sequence of case/default labels + statements.
          * We collect case nodes (cond=value or NULL for default) in n->body's
          * stmts array. */
-        HCASTNode *body = hc_ast_new(HC_AST_BLOCK);
-        expect(p, HC_TOK_LBRACE);
-        HCASTNode *current = NULL;   /* the case node being filled */
-        while (peek(p) != HC_TOK_RBRACE && peek(p) != HC_TOK_EOF) {
-            if (match(p, HC_KW_CASE)) {
-                current = hc_ast_new(HC_AST_CASE);
+        HDASTNode *body = hd_ast_new(HD_AST_BLOCK);
+        expect(p, HD_TOK_LBRACE);
+        HDASTNode *current = NULL;   /* the case node being filled */
+        while (peek(p) != HD_TOK_RBRACE && peek(p) != HD_TOK_EOF) {
+            if (match(p, HD_KW_CASE)) {
+                current = hd_ast_new(HD_AST_CASE);
                 current->cond = parse_expr(p);
-                expect(p, HC_TOK_COLON);
-                current->body = hc_ast_new(HC_AST_BLOCK);
-                hc_ast_add_stmt(body, current);
-            } else if (match(p, HC_KW_DEFAULT)) {
-                expect(p, HC_TOK_COLON);
-                current = hc_ast_new(HC_AST_CASE);
+                expect(p, HD_TOK_COLON);
+                current->body = hd_ast_new(HD_AST_BLOCK);
+                hd_ast_add_stmt(body, current);
+            } else if (match(p, HD_KW_DEFAULT)) {
+                expect(p, HD_TOK_COLON);
+                current = hd_ast_new(HD_AST_CASE);
                 current->cond = NULL;   /* default */
-                current->body = hc_ast_new(HC_AST_BLOCK);
-                hc_ast_add_stmt(body, current);
+                current->body = hd_ast_new(HD_AST_BLOCK);
+                hd_ast_add_stmt(body, current);
             } else {
                 if (!current) {
                     parse_error(p, "statement before first case in switch");
                     break;
                 }
-                hc_ast_add_stmt(current->body, parse_stmt(p));
+                hd_ast_add_stmt(current->body, parse_stmt(p));
             }
         }
-        expect(p, HC_TOK_RBRACE);
+        expect(p, HD_TOK_RBRACE);
         n->body = body;
         return n;
     }
 
     /* For statement */
-    if (match(p, HC_KW_FOR)) {
-        HCASTNode *n = hc_ast_new(HC_AST_FOR);
-        expect(p, HC_TOK_LPAREN);
+    if (match(p, HD_KW_FOR)) {
+        HDASTNode *n = hd_ast_new(HD_AST_FOR);
+        expect(p, HD_TOK_LPAREN);
         /* C11 allows a DECLARATION in the for-init (`for(int i=0; ...)`)
          * which starts with a type keyword, not an expression. parse_expr
-         * would fail on `int i=0` (HC_KW_I32 isn't an expr). Detect a
-         * type-keyword start and route to hc_parse_decl instead. */
-        HCTokenType itok = peek(p);
-        bool type_start = (itok == HC_KW_I8 || itok == HC_KW_I16 ||
-                           itok == HC_KW_I32 || itok == HC_KW_I64 ||
-                           itok == HC_KW_U8  || itok == HC_KW_U16 ||
-                           itok == HC_KW_U32 || itok == HC_KW_U64 ||
-                           itok == HC_KW_F64 || itok == HC_KW_BOOL ||
-                           itok == HC_KW_U0);
+         * would fail on `int i=0` (HD_KW_I32 isn't an expr). Detect a
+         * type-keyword start and route to hd_parse_decl instead. */
+        HDTokenType itok = peek(p);
+        bool type_start = (itok == HD_KW_I8 || itok == HD_KW_I16 ||
+                           itok == HD_KW_I32 || itok == HD_KW_I64 ||
+                           itok == HD_KW_U8  || itok == HD_KW_U16 ||
+                           itok == HD_KW_U32 || itok == HD_KW_U64 ||
+                           itok == HD_KW_F64 || itok == HD_KW_BOOL ||
+                           itok == HD_KW_U0);
         if (type_start)
-            n->init_expr = hc_parse_decl(p);   /* consumes decl + trailing ; */
+            n->init_expr = hd_parse_decl(p);   /* consumes decl + trailing ; */
         else {
             n->init_expr = parse_expr(p);
-            expect(p, HC_TOK_SEMI);
+            expect(p, HD_TOK_SEMI);
         }
         n->cond = parse_expr(p);
-        expect(p, HC_TOK_SEMI);
+        expect(p, HD_TOK_SEMI);
         n->update = parse_expr(p);
-        expect(p, HC_TOK_RPAREN);
+        expect(p, HD_TOK_RPAREN);
         n->body = parse_stmt(p);
         return n;
     }
 
     /* Return statement */
-    if (match(p, HC_KW_RETURN)) {
-        HCASTNode *n = hc_ast_new(HC_AST_RETURN);
-        if (peek(p) != HC_TOK_SEMI)
+    if (match(p, HD_KW_RETURN)) {
+        HDASTNode *n = hd_ast_new(HD_AST_RETURN);
+        if (peek(p) != HD_TOK_SEMI)
             n->child = parse_expr(p);
-        expect(p, HC_TOK_SEMI);
+        expect(p, HD_TOK_SEMI);
         return n;
     }
 
     /* Break */
-    if (match(p, HC_KW_BREAK)) {
-        expect(p, HC_TOK_SEMI);
-        return hc_ast_new(HC_AST_BREAK);
+    if (match(p, HD_KW_BREAK)) {
+        expect(p, HD_TOK_SEMI);
+        return hd_ast_new(HD_AST_BREAK);
     }
 
     /* Continue */
-    if (match(p, HC_KW_CONTINUE)) {
-        expect(p, HC_TOK_SEMI);
-        return hc_ast_new(HC_AST_CONTINUE);
+    if (match(p, HD_KW_CONTINUE)) {
+        expect(p, HD_TOK_SEMI);
+        return hd_ast_new(HD_AST_CONTINUE);
     }
 
     /* goto label; */
-    if (match(p, HC_KW_GOTO)) {
-        HCASTNode *n = hc_ast_new(HC_AST_GOTO);
-        if (peek(p) != HC_TOK_IDENT) {
+    if (match(p, HD_KW_GOTO)) {
+        HDASTNode *n = hd_ast_new(HD_AST_GOTO);
+        if (peek(p) != HD_TOK_IDENT) {
             parse_error(p, "goto requires a label name");
             return n;
         }
-        strncpy(n->ident, p->lex->tok.text, HC_MAX_IDENT_LEN - 1);
+        strncpy(n->ident, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
         advance(p);
-        expect(p, HC_TOK_SEMI);
+        expect(p, HD_TOK_SEMI);
         return n;
     }
 
@@ -949,14 +958,14 @@ static HCASTNode *parse_stmt(HCParser *p) {
      * advance, and restore by direct assignment (a pos-restore + re-lex
      * lands on the wrong char because lex->pos mid-token points past the
      * token — same trap as sizeof). */
-    if (peek(p) == HC_TOK_IDENT) {
-        HCToken saved_tok = p->lex->tok;
+    if (peek(p) == HD_TOK_IDENT) {
+        HDToken saved_tok = p->lex->tok;
         int saved_pos = p->lex->pos;
         advance(p);              /* ident */
-        bool is_label = (peek(p) == HC_TOK_COLON);
+        bool is_label = (peek(p) == HD_TOK_COLON);
         if (is_label) {
-            HCASTNode *n = hc_ast_new(HC_AST_LABEL);
-            strncpy(n->ident, saved_tok.text, HC_MAX_IDENT_LEN - 1);
+            HDASTNode *n = hd_ast_new(HD_AST_LABEL);
+            strncpy(n->ident, saved_tok.text, HD_MAX_IDENT_LEN - 1);
             advance(p);          /* : */
             return n;
         }
@@ -966,71 +975,74 @@ static HCASTNode *parse_stmt(HCParser *p) {
     }
 
     /* Block */
-    if (peek(p) == HC_TOK_LBRACE) {
+    if (peek(p) == HD_TOK_LBRACE) {
         return parse_block(p);
     }
 
     /* Variable declaration (type followed by ident) */
-    if (peek(p) >= HC_KW_I0 && peek(p) <= HC_KW_VOLATILE) {
-        return hc_parse_decl(p);
+    {
+        HDTokenType _t = peek(p);
+        if (_t >= HD_KW_I0 && _t <= HD_KW_VOLATILE) {
+            return hd_parse_decl(p);
+        }
     }
 
     /* A typedef'd name IS a type — `Point p;` is a decl. */
-    if (peek(p) == HC_TOK_IDENT) {
+    if (peek(p) == HD_TOK_IDENT) {
         for (int i = 0; i < p->n_typedefs; i++) {
             if (strcmp(p->typedef_names[i], p->lex->tok.text) == 0)
-                return hc_parse_decl(p);
+                return hd_parse_decl(p);
         }
         /* Also treat enum-constant idents as constants (PARSE as const decl
          * so the codegen records them as module-level globals). */
         for (int i = 0; i < p->n_enum_consts; i++) {
             if (strcmp(p->enum_const_names[i], p->lex->tok.text) == 0)
-                return hc_parse_decl(p);
+                return hd_parse_decl(p);
         }
     }
 
     /* Expression statement */
-    HCASTNode *expr = parse_expr(p);
-    expect(p, HC_TOK_SEMI);
-    HCASTNode *n = hc_ast_new(HC_AST_EXPR_STMT);
+    HDASTNode *expr = parse_expr(p);
+    expect(p, HD_TOK_SEMI);
+    HDASTNode *n = hd_ast_new(HD_AST_EXPR_STMT);
     n->child = expr;
     return n;
 }
 
 /* -- Parse Declaration -------------------------------------------- */
 
-HCASTNode *hc_parse_decl(HCParser *p) {
+HDASTNode *hd_parse_decl(HDParser *p) {
     /* Handle `typedef`: `typedef <type> <name>;` — parse the type, take the
      * name, register it in the typedef registry so later declarations use it
      * as a type. Returns a no-op decl node. */
-    if (match(p, HC_KW_TYPEDEF)) {
-        HCType *base = parse_type(p);
-        if (peek(p) != HC_TOK_IDENT) {
+    if (match(p, HD_KW_TYPEDEF)) {
+        HDType *base = parse_type(p);
+        if (peek(p) != HD_TOK_IDENT) {
             parse_error(p, "expected typedef name");
             return NULL;
         }
         if (p->n_typedefs < 64) {
-            strncpy(p->typedef_names[p->n_typedefs], p->lex->tok.text, HC_MAX_IDENT_LEN - 1);
+            strncpy(p->typedef_names[p->n_typedefs], p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
             p->typedef_types[p->n_typedefs] = base;
             p->n_typedefs++;
         }
         advance(p); /* consume the typedef name */
-        expect(p, HC_TOK_SEMI);
-        HCASTNode *n = hc_ast_new(HC_AST_STRUCT_DECL); /* no-op */
+        expect(p, HD_TOK_SEMI);
+        HDASTNode *n = hd_ast_new(HD_AST_STRUCT_DECL); /* no-op */
         n->type = base;
         return n;
     }
 
     /* Handle `static` storage class: strip it and parse the rest as a normal
      * declaration (static only matters for linking, which this JIT doesn't). */
-    if (match(p, HC_KW_STATIC)) {
-        return hc_parse_decl(p);
+    if (match(p, HD_KW_STATIC)) {
+        return hd_parse_decl(p);
     }
 
     /* Handle extern "C" func_name(params) -> ret_type; */
-    if (match(p, HC_KW_EXTERN)) {
+    if (match(p, HD_KW_EXTERN)) {
         /* Expect "C" string literal */
-        if (!match(p, HC_TOK_STRING)) {
+        if (!match(p, HD_TOK_STRING)) {
             parse_error(p, "expected extern string literal (e.g., \"C\")");
             return NULL;
         }
@@ -1041,42 +1053,42 @@ HCASTNode *hc_parse_decl(HCParser *p) {
         }
 
         /* Parse return type */
-        HCType *ret_type = parse_type(p);
+        HDType *ret_type = parse_type(p);
         if (!ret_type) {
             parse_error(p, "expected return type after extern \"C\"");
             return NULL;
         }
 
         /* Expect function name */
-        if (peek(p) != HC_TOK_IDENT) {
+        if (peek(p) != HD_TOK_IDENT) {
             parse_error(p, "expected function name");
             return NULL;
         }
-        char func_name[HC_MAX_IDENT_LEN];
-        strncpy(func_name, p->lex->tok.text, HC_MAX_IDENT_LEN - 1);
+        char func_name[HD_MAX_IDENT_LEN];
+        strncpy(func_name, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
         advance(p);
 
         /* Expect ( for parameters */
-        expect(p, HC_TOK_LPAREN);
+        expect(p, HD_TOK_LPAREN);
 
         /* Create extern declaration AST node */
-        HCASTNode *ext = hc_ast_new(HC_AST_EXTERN_DECL);
+        HDASTNode *ext = hd_ast_new(HD_AST_EXTERN_DECL);
         ext->extern_ret_type = ret_type;
-        strncpy(ext->extern_c_name, func_name, HC_MAX_IDENT_LEN - 1);
+        strncpy(ext->extern_c_name, func_name, HD_MAX_IDENT_LEN - 1);
         ext->extern_n_params = 0;
 
         /* Parse parameters */
         int pi = 0;
-        if (peek(p) != HC_TOK_RPAREN) {
+        if (peek(p) != HD_TOK_RPAREN) {
             ext->extern_param_types[pi] = parse_type(p);
-            if (peek(p) == HC_TOK_IDENT) {
+            if (peek(p) == HD_TOK_IDENT) {
                 /* Skip parameter name */
                 advance(p);
             }
             pi++;
-            while (match(p, HC_TOK_COMMA) && pi < HC_MAX_PARAMS) {
+            while (match(p, HD_TOK_COMMA) && pi < HD_MAX_PARAMS) {
                 ext->extern_param_types[pi] = parse_type(p);
-                if (peek(p) == HC_TOK_IDENT) {
+                if (peek(p) == HD_TOK_IDENT) {
                     advance(p);
                 }
                 pi++;
@@ -1084,51 +1096,51 @@ HCASTNode *hc_parse_decl(HCParser *p) {
         }
         ext->extern_n_params = pi;
 
-        expect(p, HC_TOK_RPAREN);
+        expect(p, HD_TOK_RPAREN);
 
         /* Optional -> ret_type for explicit return type */
-        if (match(p, HC_TOK_ARROW)) {
-            HCType *explicit_ret = parse_type(p);
+        if (match(p, HD_TOK_ARROW)) {
+            HDType *explicit_ret = parse_type(p);
             if (explicit_ret) ext->extern_ret_type = explicit_ret;
         }
 
-        expect(p, HC_TOK_SEMI);
+        expect(p, HD_TOK_SEMI);
         return ext;
     }
 
-    HCType *type = parse_type(p);
+    HDType *type = parse_type(p);
 
     /* Check if this is a struct/union/enum type definition without a variable name */
-    if (type->kind == HC_TYPE_STRUCT || type->kind == HC_TYPE_UNION || type->kind == HC_TYPE_ENUM) {
-        if (peek(p) == HC_TOK_SEMI) {
+    if (type->kind == HD_TYPE_STRUCT || type->kind == HD_TYPE_UNION || type->kind == HD_TYPE_ENUM) {
+        if (peek(p) == HD_TOK_SEMI) {
             /* Type definition like "struct Point { ... };"
              * For an ENUM, also emit the enumerator constants as module-level
              * globals so `int c = GREEN;` resolves GREEN to 1. */
             advance(p);
-            HCASTNode *n = hc_ast_new(type->kind == HC_TYPE_ENUM ? HC_AST_BLOCK : HC_AST_STRUCT_DECL);
+            HDASTNode *n = hd_ast_new(type->kind == HD_TYPE_ENUM ? HD_AST_BLOCK : HD_AST_STRUCT_DECL);
             n->type = type;
-            if (type->kind == HC_TYPE_ENUM && p->n_enum_consts > 0) {
+            if (type->kind == HD_TYPE_ENUM && p->n_enum_consts > 0) {
                 /* build a BLOCK: enum decl + one const VAR_DECL per enumerator */
                 int nconsts = p->n_enum_consts;
                 p->n_enum_consts = 0;  /* consume: they're now in the AST */
                 for (int c = 0; c < nconsts; c++) {
-                    HCASTNode *vd = hc_ast_new(HC_AST_VAR_DECL);
-                    strncpy(vd->ident, p->enum_const_names[c], HC_MAX_IDENT_LEN - 1);
-                    HCASTNode *init = hc_ast_new(HC_AST_INT_LIT);
+                    HDASTNode *vd = hd_ast_new(HD_AST_VAR_DECL);
+                    strncpy(vd->ident, p->enum_const_names[c], HD_MAX_IDENT_LEN - 1);
+                    HDASTNode *init = hd_ast_new(HD_AST_INT_LIT);
                     init->int_val = p->enum_const_vals[c];
                     vd->init = init;
                     vd->type = type;
-                    hc_ast_add_stmt(n, vd);
+                    hd_ast_add_stmt(n, vd);
                 }
-                HCASTNode *ed = hc_ast_new(HC_AST_STRUCT_DECL);
+                HDASTNode *ed = hd_ast_new(HD_AST_STRUCT_DECL);
                 ed->type = type;
-                hc_ast_add_stmt(n, ed);
+                hd_ast_add_stmt(n, ed);
             }
             return n;
         }
     }
 
-    if (peek(p) != HC_TOK_IDENT && peek(p) != HC_TOK_STAR && peek(p) != HC_TOK_LPAREN) {
+    if (peek(p) != HD_TOK_IDENT && peek(p) != HD_TOK_STAR && peek(p) != HD_TOK_LPAREN) {
         parse_error(p, "expected identifier");
         return NULL;
     }
@@ -1142,36 +1154,36 @@ HCASTNode *hc_parse_decl(HCParser *p) {
      * Parenthesized `(name)` for plain function decls is uncommon and
      * treated as identical to the non-paren form. */
     int is_ptr = 0;
-    char name[HC_MAX_IDENT_LEN];
+    char name[HD_MAX_IDENT_LEN];
 
-    if (peek(p) == HC_TOK_STAR) {
+    if (peek(p) == HD_TOK_STAR) {
         /* `int *p` — simple pointer */
         is_ptr = 1;
         advance(p); /* * */
-        if (peek(p) != HC_TOK_IDENT) {
+        if (peek(p) != HD_TOK_IDENT) {
             parse_error(p, "expected ident after '*'");
             return NULL;
         }
-        strncpy(name, p->lex->tok.text, HC_MAX_IDENT_LEN - 1);
-        name[HC_MAX_IDENT_LEN - 1] = '\0';
+        strncpy(name, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
+        name[HD_MAX_IDENT_LEN - 1] = '\0';
         advance(p); /* name */
-    } else if (peek(p) == HC_TOK_LPAREN) {
+    } else if (peek(p) == HD_TOK_LPAREN) {
         /* Could be `(*name)(params)` (function pointer) or `(name)` (fn decl).
          * Lookahead: the token after '(' tells us which. */
         int saved_pos = p->lex->pos;
         advance(p); /* ( */
-        if (peek(p) == HC_TOK_STAR) {
+        if (peek(p) == HD_TOK_STAR) {
             /* `(*name)` — function pointer declarator */
             advance(p); /* * */
-            if (peek(p) != HC_TOK_IDENT) {
+            if (peek(p) != HD_TOK_IDENT) {
                 parse_error(p, "expected ident after '(*'");
                 return NULL;
             }
-            strncpy(name, p->lex->tok.text, HC_MAX_IDENT_LEN - 1);
-            name[HC_MAX_IDENT_LEN - 1] = '\0';
+            strncpy(name, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
+            name[HD_MAX_IDENT_LEN - 1] = '\0';
             advance(p); /* name */
-            expect(p, HC_TOK_RPAREN);
-            if (peek(p) == HC_TOK_LPAREN) {
+            expect(p, HD_TOK_RPAREN);
+            if (peek(p) == HD_TOK_LPAREN) {
                 is_func_ptr = 1;
             } else {
                 /* `(*p)` with no params — treat as plain pointer */
@@ -1181,23 +1193,23 @@ HCASTNode *hc_parse_decl(HCParser *p) {
             /* `(name)` — backtrack, treat as plain name (func decl or var) */
             p->lex->pos = saved_pos;
             p->lex->line = 0;
-            hc_lex_next(p->lex);
-            if (peek(p) != HC_TOK_IDENT) {
+            hd_lex_next(p->lex);
+            if (peek(p) != HD_TOK_IDENT) {
                 parse_error(p, "expected identifier");
                 return NULL;
             }
-            strncpy(name, p->lex->tok.text, HC_MAX_IDENT_LEN - 1);
-            name[HC_MAX_IDENT_LEN - 1] = '\0';
+            strncpy(name, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
+            name[HD_MAX_IDENT_LEN - 1] = '\0';
             advance(p); /* name */
         }
     } else {
         /* Plain: `int name` or `int name(params)` */
-        if (peek(p) != HC_TOK_IDENT) {
+        if (peek(p) != HD_TOK_IDENT) {
             parse_error(p, "expected identifier");
             return NULL;
         }
-        strncpy(name, p->lex->tok.text, HC_MAX_IDENT_LEN - 1);
-        name[HC_MAX_IDENT_LEN - 1] = '\0';
+        strncpy(name, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
+        name[HD_MAX_IDENT_LEN - 1] = '\0';
         advance(p); /* name */
     }
 
@@ -1205,70 +1217,70 @@ HCASTNode *hc_parse_decl(HCParser *p) {
      * Build a pointer-to-function type; the RHS `add` will later emit the
      * function's address via the function-table lookup in gen_expr. */
     if (is_func_ptr) {
-        HCType *fn = (HCType *)calloc(1, sizeof(HCType));
-        fn->kind = HC_TYPE_FUNC;
-        fn->param_types = (HCType **)calloc(HC_MAX_PARAMS, sizeof(HCType *));
+        HDType *fn = (HDType *)calloc(1, sizeof(HDType));
+        fn->kind = HD_TYPE_FUNC;
+        fn->param_types = (HDType **)calloc(HD_MAX_PARAMS, sizeof(HDType *));
         /* parse params list */
         advance(p); /* ( */
         int pi = 0;
-        if (peek(p) != HC_TOK_RPAREN) {
+        if (peek(p) != HD_TOK_RPAREN) {
             fn->param_types[pi] = parse_type(p);
-            if (peek(p) == HC_TOK_IDENT) advance(p);
+            if (peek(p) == HD_TOK_IDENT) advance(p);
             pi++;
-            while (match(p, HC_TOK_COMMA) && pi < HC_MAX_PARAMS) {
+            while (match(p, HD_TOK_COMMA) && pi < HD_MAX_PARAMS) {
                 fn->param_types[pi] = parse_type(p);
-                if (peek(p) == HC_TOK_IDENT) advance(p);
+                if (peek(p) == HD_TOK_IDENT) advance(p);
                 pi++;
             }
         }
         fn->n_params = pi;
-        expect(p, HC_TOK_RPAREN);
-        HCType *pt = (HCType *)calloc(1, sizeof(HCType));
-        pt->kind = HC_TYPE_PTR; pt->base = fn; pt->size = 8;
+        expect(p, HD_TOK_RPAREN);
+        HDType *pt = (HDType *)calloc(1, sizeof(HDType));
+        pt->kind = HD_TYPE_PTR; pt->base = fn; pt->size = 8;
         type = pt;
-        HCASTNode *var = hc_ast_new(HC_AST_VAR_DECL);
-        strncpy(var->ident, name, HC_MAX_IDENT_LEN - 1);
+        HDASTNode *var = hd_ast_new(HD_AST_VAR_DECL);
+        strncpy(var->ident, name, HD_MAX_IDENT_LEN - 1);
         var->type = type;
-        if (match(p, HC_TOK_ASSIGN))
+        if (match(p, HD_TOK_ASSIGN))
             var->init = parse_expr(p);
-        expect(p, HC_TOK_SEMI);
+        expect(p, HD_TOK_SEMI);
         return var;
     }
 
     /* Simple pointer variable: `int *p = expr ;` — wrap base type in PTR. */
     if (is_ptr) {
-        HCType *pt = (HCType *)calloc(1, sizeof(HCType));
-        pt->kind = HC_TYPE_PTR; pt->base = type; pt->size = 8;
+        HDType *pt = (HDType *)calloc(1, sizeof(HDType));
+        pt->kind = HD_TYPE_PTR; pt->base = type; pt->size = 8;
         type = pt;
     }
 
     /* Function declaration: type name(params) { body } */
-    if (peek(p) == HC_TOK_LPAREN) {
+    if (peek(p) == HD_TOK_LPAREN) {
         advance(p); /* ( */
-        HCASTNode *func = hc_ast_new(HC_AST_FUNC_DECL);
-        strncpy(func->ident, name, HC_MAX_IDENT_LEN - 1);
+        HDASTNode *func = hd_ast_new(HD_AST_FUNC_DECL);
+        strncpy(func->ident, name, HD_MAX_IDENT_LEN - 1);
         func->type = type;
 
         /* Parse parameters */
         int pi = 0;
-        if (peek(p) != HC_TOK_RPAREN) {
+        if (peek(p) != HD_TOK_RPAREN) {
             func->param_types[pi] = parse_type(p);
-            if (peek(p) == HC_TOK_IDENT) {
-                strncpy(func->param_names[pi], p->lex->tok.text, HC_MAX_IDENT_LEN - 1);
+            if (peek(p) == HD_TOK_IDENT) {
+                strncpy(func->param_names[pi], p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
                 advance(p);
             }
             pi++;
-            while (match(p, HC_TOK_COMMA) && pi < HC_MAX_PARAMS) {
+            while (match(p, HD_TOK_COMMA) && pi < HD_MAX_PARAMS) {
                 func->param_types[pi] = parse_type(p);
-                if (peek(p) == HC_TOK_IDENT) {
-                    strncpy(func->param_names[pi], p->lex->tok.text, HC_MAX_IDENT_LEN - 1);
+                if (peek(p) == HD_TOK_IDENT) {
+                    strncpy(func->param_names[pi], p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
                     advance(p);
                 }
                 pi++;
             }
         }
         func->n_params = pi;
-        expect(p, HC_TOK_RPAREN);
+        expect(p, HD_TOK_RPAREN);
 
         /* Parse body */
         func->body = parse_block(p);
@@ -1278,73 +1290,73 @@ HCASTNode *hc_parse_decl(HCParser *p) {
     /* Variable declaration: type name [= expr] ;  (also type name[N] for
      * arrays — previously `[N]` was left unparsed, so int x[3] degraded to
      * a scalar and array indexing read garbage) */
-    HCASTNode *var = hc_ast_new(HC_AST_VAR_DECL);
-    strncpy(var->ident, name, HC_MAX_IDENT_LEN - 1);
+    HDASTNode *var = hd_ast_new(HD_AST_VAR_DECL);
+    strncpy(var->ident, name, HD_MAX_IDENT_LEN - 1);
 
     /* Array declarator: name[N][M]... — the RIGHTMOST dimension is the
      * INNERMOST, so int a[2][3] is ARRAY(ARRAY(int,3),2) (2 rows of 3).
      * Collect all sizes, then build the type innermost→outermost. */
     int dims[8], n_dims = 0;
-    while (peek(p) == HC_TOK_LBRACKET) {
+    while (peek(p) == HD_TOK_LBRACKET) {
         advance(p); /* [ */
         int arr_size = 0;
-        if (peek(p) != HC_TOK_RBRACKET) {
-            HCTokenType st = peek(p);
-            if (st == HC_TOK_INT) { arr_size = (int)p->lex->tok.int_val; advance(p); }
+        if (peek(p) != HD_TOK_RBRACKET) {
+            HDTokenType st = peek(p);
+            if (st == HD_TOK_INT) { arr_size = (int)p->lex->tok.int_val; advance(p); }
         }
-        expect(p, HC_TOK_RBRACKET);
+        expect(p, HD_TOK_RBRACKET);
         if (n_dims < 8) dims[n_dims++] = arr_size;
     }
     if (n_dims > 0) {
-        HCType *base_type = type;
+        HDType *base_type = type;
         for (int d = n_dims - 1; d >= 0; d--) {
-            HCType *arr = (HCType *)calloc(1, sizeof(HCType));
-            arr->kind = HC_TYPE_ARRAY;
+            HDType *arr = (HDType *)calloc(1, sizeof(HDType));
+            arr->kind = HD_TYPE_ARRAY;
             arr->base = base_type;
             arr->array_size = dims[d];
-            arr->size = (dims[d] > 0) ? hc_type_size(base_type) * dims[d]
-                                      : hc_type_size(base_type);
+            arr->size = (dims[d] > 0) ? hd_type_size(base_type) * dims[d]
+                                      : hd_type_size(base_type);
             base_type = arr;
         }
         type = base_type;
     }
     var->type = type;
 
-    if (match(p, HC_TOK_ASSIGN)) {
+    if (match(p, HD_TOK_ASSIGN)) {
         var->init = parse_expr(p);
     }
-    expect(p, HC_TOK_SEMI);
+    expect(p, HD_TOK_SEMI);
     return var;
 }
 
 /* -- Parse Compilation Unit --------------------------------------- */
 
-void hc_parse_init(HCParser *p, HCLexer *lex) {
+void hd_parse_init(HDParser *p, HDLexer *lex) {
     memset(p, 0, sizeof(*p));
     p->lex = lex;
 }
 
-HCASTNode *hc_parse_compilation_unit(HCParser *p) {
-    HCASTNode *unit = hc_ast_new(HC_AST_BLOCK);
+HDASTNode *hd_parse_compilation_unit(HDParser *p) {
+    HDASTNode *unit = hd_ast_new(HD_AST_BLOCK);
 
-    while (peek(p) != HC_TOK_EOF && !p->has_error) {
-        HCASTNode *decl = hc_parse_decl(p);
-        if (decl) hc_ast_add_stmt(unit, decl);
+    while (peek(p) != HD_TOK_EOF && !p->has_error) {
+        HDASTNode *decl = hd_parse_decl(p);
+        if (decl) hd_ast_add_stmt(unit, decl);
         else break;
     }
 
     return unit;
 }
 
-HCASTNode *hc_parse_expr(HCParser *p) {
+HDASTNode *hd_parse_expr(HDParser *p) {
     return parse_expr(p);
 }
 
-HCASTNode *hc_parse_stmt(HCParser *p) {
+HDASTNode *hd_parse_stmt(HDParser *p) {
     return parse_stmt(p);
 }
 
-HCTokenType hc_parse_peek(HCParser *p) {
+HDTokenType hd_parse_peek(HDParser *p) {
     return peek(p);
 }
 
