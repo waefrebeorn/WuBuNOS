@@ -1211,6 +1211,36 @@ HDASTNode *hd_parse_decl(HDParser *p) {
         strncpy(name, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
         name[HD_MAX_IDENT_LEN - 1] = '\0';
         advance(p); /* name */
+
+        /* Function definition: `int name(params) { body }` — NOT a function
+         * pointer variable (`int (*name)(params)` is handled by is_func_ptr).
+         * Codegen already emits HD_AST_FUNC_DECL bodies, so parsing them makes
+         * real C programs (and the gauntlet's `int main(){...}` TUs) build. */
+        if (peek(p) == HD_TOK_LPAREN && !is_func_ptr) {
+            HDASTNode *fn = hd_ast_new(HD_AST_FUNC_DECL);
+            fn->type = type;
+            strncpy(fn->ident, name, HD_MAX_IDENT_LEN - 1);
+            fn->n_params = 0;
+            advance(p); /* ( */
+            if (peek(p) != HD_TOK_RPAREN) {
+                HDType *pt = parse_type(p);
+                if (peek(p) == HD_TOK_IDENT) advance(p);
+                fn->param_types[fn->n_params++] = pt;
+                while (match(p, HD_TOK_COMMA) && fn->n_params < HD_MAX_PARAMS) {
+                    pt = parse_type(p);
+                    if (peek(p) == HD_TOK_IDENT) advance(p);
+                    fn->param_types[fn->n_params++] = pt;
+                }
+            }
+            expect(p, HD_TOK_RPAREN);
+            if (peek(p) == HD_TOK_LBRACE) {
+                fn->body = parse_block(p);
+            } else {
+                /* declaration without body: `int foo(int);` — consume ; */
+                expect(p, HD_TOK_SEMI);
+            }
+            return fn;
+        }
     }
 
     /* Function pointer variable: `int (*op)(params) [= init] ;`
