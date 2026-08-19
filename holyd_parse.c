@@ -1224,12 +1224,24 @@ HDASTNode *hd_parse_decl(HDParser *p) {
             advance(p); /* ( */
             if (peek(p) != HD_TOK_RPAREN) {
                 HDType *pt = parse_type(p);
-                if (peek(p) == HD_TOK_IDENT) advance(p);
-                fn->param_types[fn->n_params++] = pt;
+                char pname[HD_MAX_IDENT_LEN] = {0};
+                if (peek(p) == HD_TOK_IDENT) {
+                    strncpy(pname, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
+                    advance(p);
+                }
+                fn->param_types[fn->n_params] = pt;
+                strncpy(fn->param_names[fn->n_params], pname, HD_MAX_IDENT_LEN - 1);
+                fn->n_params++;
                 while (match(p, HD_TOK_COMMA) && fn->n_params < HD_MAX_PARAMS) {
                     pt = parse_type(p);
-                    if (peek(p) == HD_TOK_IDENT) advance(p);
-                    fn->param_types[fn->n_params++] = pt;
+                    pname[0] = '\0';
+                    if (peek(p) == HD_TOK_IDENT) {
+                        strncpy(pname, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
+                        advance(p);
+                    }
+                    fn->param_types[fn->n_params] = pt;
+                    strncpy(fn->param_names[fn->n_params], pname, HD_MAX_IDENT_LEN - 1);
+                    fn->n_params++;
                 }
             }
             expect(p, HD_TOK_RPAREN);
