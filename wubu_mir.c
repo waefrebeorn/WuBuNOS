@@ -141,6 +141,17 @@ void wubu_mir_place_label(wubu_mir_prog_t *p, uint32_t label)
     i->label = label;
 }
 
+void wubu_mir_tgemm(wubu_mir_prog_t *p, wubu_vr_t a, wubu_vr_t b,
+                  wubu_vr_t dst, int M, int N, int K)
+{
+    wubu_mir_instr_t *i = emit(p);
+    if (i) {
+        i->op = MIR_T_GEMM;
+        i->a = a; i->b = b; i->dst = dst;
+        i->imm = ((uint64_t)M << 22) | ((uint64_t)N << 11) | (uint64_t)K;
+    }
+}
+
 void wubu_mir_ret(wubu_mir_prog_t *p, wubu_vr_t v)
 {
     wubu_mir_instr_t *i = emit(p);

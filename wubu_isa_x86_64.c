@@ -131,6 +131,19 @@ static void x86_patch_push(x86_patch_t **patches, size_t *np, size_t *cap,
 
 /* ---- the full compile function with regalloc ---- */
 
+/* scalar tensor GEMM: C += A*B (row-major, int64).
+ * Mirrors MIR_T_GEMM interpreter semantics exactly. */
+static void wubu_tgemm_scalar(int64_t *mem, int64_t A, int64_t B,
+                              int64_t C, int M, int N, int K)
+{
+    for (int i = 0; i < M; i++)
+        for (int j = 0; j < N; j++) {
+            int64_t acc = mem[C + (int64_t)i * N + j];
+            for (int k = 0; k < K; k++)
+                acc += mem[A + (int64_t)i * K + k] * mem[B + (int64_t)k * N + j];
+            mem[C + (int64_t)i * N + j] = acc;
+        }
+}
 static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size) {
 #if !defined(__x86_64__)
     (void)p; (void)out; (void)out_size;
@@ -379,6 +392,48 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             e32(&e, 0);
             break;
         }
+        case MIR_T_GEMM: {
+            /* Native tensor-MADD via libcall to wubu_tgemm_scalar.
+             * SysV ABI: rdi=&mem[0], rsi=Abase, rdx=Bbase, rcx=Cbase,
+             *          r8=M, r9=N, stack(K).
+             * We use r11 for the helper pointer (movabs r11) — r11 is NOT in
+             * the MIR regalloc map (reg_x86[]), so it's safe to clobber. The
+             * peephole shrink_movabs leaves `49 BB imm64` intact when the
+             * address exceeds 2GiB (typical for host symbols). */
+            int M = (int)(in->imm >> 22);
+            int N = (int)((in->imm >> 11) & 0x7FF);
+            int K = (int)(in->imm & 0x7FF);
+            int sa = VR_ENC(in->a);
+            int sb = VR_ENC(in->b);
+            int sd = VR_ENC(in->dst);
+            /* rdi = &mem[0]  (lea rdi,[rbp-mem_off]; modrm 0xBD = mod10 reg7 rm5(rbp+disp32))
+             * 0x3D (mod00 rm101) would wrongly encode [rip+disp32]. */
+            rex(&e,1,0,0,0); e8(&e,0x8D); e8(&e,0xBD); e32(&e,(uint32_t)(-(int32_t)e.mem_off));
+            /* rsi = A (vr value / slot index) */
+            if (sa>=0) emit_mov_reg(&e,6,sa);            else emit_load_rbp(&e,6,VR_SPILL(in->a));
+            /* rdx = B */
+            if (sb>=0) emit_mov_reg(&e,2,sb);            else emit_load_rbp(&e,2,VR_SPILL(in->b));
+            /* rcx = C */
+            if (sd>=0) emit_mov_reg(&e,1,sd);            else emit_load_rbp(&e,1,VR_SPILL(in->dst));
+            /* r8d = M (41 B8)  — but 41 B8 matches shrink_movabs? No, B8 here is
+             * a reg-load not movabs: shrink checks `code[i]==0x48` for the plain
+             * case. 41 B8 is the `need_rex_b` (0x49) branch ONLY. 41 != 49, so
+             * 41 B8 is NOT matched by shrink_movabs. Safe. */
+            e8(&e,0x41); e8(&e,0xB8); e32(&e,(uint32_t)M);     /* r8d = M */
+            e8(&e,0x41); e8(&e,0xB9); e32(&e,(uint32_t)N);     /* r9d = N */
+            /* push K (7th arg, on stack): 6A ib (imm8) if K<128, else 68 id */
+            if ((uint32_t)K < 0x80u)     { e8(&e,0x6A); e8(&e,(uint8_t)K); }
+            else                          { e8(&e,0x68); e32(&e,(uint32_t)K); }
+            /* movabs r11, &wubu_tgemm_scalar (REX.WB + B8 = 49 BB imm64).
+             * rex(1,0,0,1) = 0x49. If addr > 2GB, shrink_movabs leaves it
+             * intact; if it shrinks it's a bug we avoid by keeping addr wide. */
+            rex(&e,1,0,0,1); e8(&e,0xBB); e64(&e,(uint64_t)&wubu_tgemm_scalar);
+            /* call r11 (FF D3 with REX.B → 41 FF D3; without 0x41 it decodes as call rbx!) */
+            e8(&e,0x41); e8(&e,0xFF); e8(&e,0xD3);
+            /* add rsp,8 (restore stack for K arg) */
+            e8(&e,0x48); e8(&e,0x83); e8(&e,0xC4); e8(&e,0x08);
+            break;
+        }
         case MIR_RET: {
             /* If result is already in rax (lookahead skip), don't reload */
             if (!result_in_rax) {
@@ -464,6 +519,10 @@ static int64_t x86_run(const uint8_t *code, size_t size, int64_t arg) {
     memcpy(exec, code, size);
     wubu_clear_cache(exec, size);
     int64_t (*fn)(void) = (int64_t (*)(void))exec;
+    if (getenv("DEBUG_TGEMM")) {
+        FILE *f = fopen("/tmp/jit.bin","wb");
+        if (f){ fwrite(code,size,1,f); fclose(f); }
+    }
     int64_t r = fn();
     jit_free_exec(exec, size);
     return r;

@@ -202,6 +202,21 @@ int64_t wubu_mir_interp(const wubu_mir_prog_t *p)
         /* bfloat16 */
         case MIR_BF16_TO_F32: vr[in->dst] = wubu_sf_bf16_to_f32((uint16_t)vr[in->a]); pc++; break;
         case MIR_F32_TO_BF16: vr[in->dst] = wubu_sf_f32_to_bf16((uint32_t)vr[in->a]); pc++; break;
+        case MIR_T_GEMM: {
+            /* C += A*B, int64, row-major, packed M/N/K in imm */
+            int M = (int)(in->imm >> 22);
+            int N = (int)((in->imm >> 11) & 0x7FF);
+            int K = (int)(in->imm & 0x7FF);
+            int64_t a = vr[in->a], b = vr[in->b], c = vr[in->dst];
+            for (int i = 0; i < M; i++)
+                for (int j = 0; j < N; j++) {
+                    int64_t acc = mem[c + (int64_t)i * N + j];
+                    for (int k = 0; k < K; k++)
+                        acc += mem[a + (int64_t)i * K + k] * mem[b + (int64_t)k * N + j];
+                    mem[c + (int64_t)i * N + j] = acc;
+                }
+            pc++; break;
+        }
         case MIR_RET:
             if (call_sp > 0) {
                 /* returning from a called function: restore the caller's

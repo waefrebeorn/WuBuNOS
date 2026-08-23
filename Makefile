@@ -90,7 +90,7 @@ gauntlet: $(FRONT) $(MIR) $(ISA) $(INTERP) $(OS_INTERP) $(JIT_SRC) $(GAUN)
 
 # ---- Run targets ----
 
-test: test_isa_driver test_softfloat test_peephole test_elf_cubin test_mir_float test_fuzz_diff
+test: test_isa_driver test_softfloat test_peephole test_elf_cubin test_mir_float test_fuzz_diff test_tgemm
 	@echo "=== ISA Driver Test ==="
 	./test_isa_driver
 
@@ -122,6 +122,17 @@ test_mir_float: wubu_mir.c wubu_mir_interp.c wubu_mir_opt.c wubu_mir_lower.c \
 test_fuzz_diff: tools/test_fuzz_diff.c $(MIR) $(ISA) $(INTERP) $(OS_INTERP)
 	$(CC) $(CFLAGS) -I. -o $@ $^
 	./$@ 3000
+
+# T_GEMM tensor-op: correctness vs naive C + interpreter/interp/JIT timing
+# Lean build: real x86-64 JIT driver + all interp drivers + jit_stub for exec alloc.
+# NOTE: filter out wubu_isa_jit_stubs.c (which provides a stub wubu_isa_x86_64)
+# so the real JIT in wubu_isa_x86_64.c links instead.
+test_tgemm: tools/test_tgemm.c $(MIR) $(filter-out wubu_isa_jit_stubs.c,$(ISA)) \
+            $(INTERP) $(OS_INTERP) wubu_isa_x86_64.c jit_stub.c \
+            jit_stub_arm64.c
+	$(CC) $(CFLAGS) -I. -I$(OS_ROOT) -o $@ $^
+	cp $@ /tmp/test_tgemm_keep 2>/dev/null || true
+	./$@ 24 24 24 || /tmp/test_tgemm_keep 2>&1 | head -8
 
 clean:
 	rm -f test_isa_driver test_mir_opt gauntlet_runner

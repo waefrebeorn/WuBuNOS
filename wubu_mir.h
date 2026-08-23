@@ -93,7 +93,15 @@ typedef enum {
     MIR_F64_TO_F32,    /* dst = (f32)f64(a)  (RNE) */
     /* bfloat16: the AGI tensor dtype. bf16 travels as uint16 in low bits. */
     MIR_BF16_TO_F32,   /* dst = widen_bf16(a)   (exact) */
-    MIR_F32_TO_BF16    /* dst = narrow_f32(a)   (RNE) */
+    MIR_F32_TO_BF16,   /* dst = narrow_f32(a)   (RNE) */
+    /* T_GEMM: tensor matrix multiply C += A*B (int64 elements).
+     * vrs: a=A(base), b=B(base), dst=C(base); imm packs M,N,K:
+     *   imm = ((uint64_t)M << 22) | ((uint64_t)N << 11) | (uint64_t)K
+     * A is M×K row-major, B is K×N row-major, C is M×N row-major,
+     * all in the MIR flat mem[] array. Lowered to a register-tiled
+     * triple loop (x86-64 native emits AVX/sse2 integer MADD-style
+     * block accumulation). */
+    MIR_T_GEMM
 } wubu_mir_op_t;
 
 #define MIR_MAX_FUNCTIONS 256
@@ -154,6 +162,10 @@ wubu_vr_t wubu_mir_alloc(wubu_mir_prog_t *p, int64_t n_elements);
 wubu_vr_t wubu_mir_load(wubu_mir_prog_t *p, wubu_vr_t addr);
 void wubu_mir_store(wubu_mir_prog_t *p, wubu_vr_t addr, wubu_vr_t val);
 void wubu_mir_ret(wubu_mir_prog_t *p, wubu_vr_t v);
+/* Emit MIR_T_GEMM: mem[dst] += A[i*N+k]*B[k*N+j] accumulation.
+ * a=Abase, b=Bbase, dst=Cbase, M/N/K are the matrix shapes. */
+void wubu_mir_tgemm(wubu_mir_prog_t *p, wubu_vr_t a, wubu_vr_t b,
+                   wubu_vr_t dst, int M, int N, int K);
 /* Emit MIR_CALL to prog->funcs[func_id] (args must be in v1..vN already). */
 void wubu_mir_call(wubu_mir_prog_t *p, uint32_t func_id);
 
