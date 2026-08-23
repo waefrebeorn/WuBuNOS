@@ -120,6 +120,47 @@ static int64_t run_prog(const wubu_mir_prog_t *p, const wubu_isa_driver_t *d){
     return wubu_mir_interp(p);
 }
 
+
+/* ---- float differential: MIR_FADD/FSUB/FMUL/FDIV vs host float ----
+ * The oracle is the HOST float unit (hardware IEEE-754); the MIR interpreter
+ * must match bit-for-bit through the soft-float runtime. */
+static long fuzz_float(long n){
+    long ok=0, bad=0;
+    for (long s=0; s<n; s++){
+        uint32_t ab[2]; float av[2];
+        for (int k=0;k<2;k++){
+            uint32_t bits = (uint32_t)(lcg_next() >> 32);
+            /* constrain to sane magnitudes to avoid inf/nan noise in v1 */
+            bits &= 0x7F7FFFFFu; if (bits > 0x4B000000u) bits = 0x4B000000u | (bits & 0x7FFFFF);
+            ab[k]=bits; memcpy(&av[k],&bits,4);
+        }
+        int op = (int)(lcg_next() % 4);
+        wubu_mir_op_t mo = (op==0)?MIR_FADD:(op==1)?MIR_FSUB:(op==2)?MIR_FMUL:MIR_FDIV;
+        wubu_mir_prog_t p; wubu_mir_init(&p);
+        wubu_vr_t va = wubu_mir_const(&p, (int64_t)(uint32_t)ab[0]);
+        wubu_vr_t vb = wubu_mir_const(&p, (int64_t)(uint32_t)ab[1]);
+        wubu_vr_t vr = wubu_mir_binop(&p, mo, va, vb);
+        wubu_mir_ret(&p, vr);
+        uint32_t got = (uint32_t)wubu_mir_interp(&p);
+        wubu_mir_free(&p);
+        /* Host oracle: C promotes float ops to double, so `a-b` would be
+         * DOUBLE-ROUNDED (exact diff in double, then to float) which differs
+         * from correctly-rounded f32 in cancellation cases. Force true f32
+         * arithmetic through volatile stores (rounds at each assignment). */
+        volatile float fa = av[0], fb = av[1], fr_;
+        switch(op){case 0: fr_=fa+fb;break;case 1: fr_=fa-fb;break;
+                   case 2: fr_=fa*fb;break;default: fr_=fa/fb;break;}
+        float want = fr_;
+        uint32_t wbits; memcpy(&wbits,&want,4);
+        if (got == wbits || (/* both zero */ (got&0x7FFFFFFF)==0 && (wbits&0x7FFFFFFF)==0)) ok++;
+        else { bad++; if (bad<=10)
+            printf("[fmismatch] op=%d a=%08X b=%08X got=%08X want=%08X\n",
+                   op,ab[0],ab[1],got,wbits); }
+    }
+    printf("  float seeds: %ld  match: %ld  mismatch: %ld\n", n, ok, bad);
+    return bad;
+}
+
 int main(int argc, char **argv){
     long n = 3000;
     if (argc > 1) n = strtol(argv[1], NULL, 10);
@@ -193,6 +234,8 @@ int main(int argc, char **argv){
         /* ORACLE 2: interpreter vs itself must always agree with want (sanity). */
     }
 
+    long fbad = fuzz_float(n/2);
+    mismatch += fbad;
     printf("\n=== Differential Fuzz Summary (Fmax oracle) ===\n");
     printf("  seeds:      %ld\n", n);
     printf("  match-all:  %ld\n", ok);

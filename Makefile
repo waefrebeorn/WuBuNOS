@@ -90,7 +90,7 @@ gauntlet: $(FRONT) $(MIR) $(ISA) $(INTERP) $(OS_INTERP) $(JIT_SRC) $(GAUN)
 
 # ---- Run targets ----
 
-test: test_isa_driver test_softfloat test_peephole test_elf_cubin test_fuzz_diff
+test: test_isa_driver test_softfloat test_peephole test_elf_cubin test_mir_float test_fuzz_diff
 	@echo "=== ISA Driver Test ==="
 	./test_isa_driver
 
@@ -107,6 +107,13 @@ test_elf_cubin: wubu_elf64_cubin.c wubu_elf64_cubin.h tools/test_elf_cubin.c
 # x86 peephole self-tests (driven by the superoptimizer discovery loop)
 test_peephole: x86_peephole.c x86_peephole.h tools/test_x86_peephole.c
 	$(CC) $(CFLAGS) -I. -o $@ tools/test_x86_peephole.c x86_peephole.c
+	./$@
+
+# MIR-level float ops through the soft-float runtime
+test_mir_float: wubu_mir.c wubu_mir_interp.c wubu_mir_opt.c wubu_mir_lower.c \
+                wubu_mir_regalloc.c x86_peephole.c wubu_softfloat.c tools/test_mir_float.c
+	$(CC) $(CFLAGS) -I. -o $@ tools/test_mir_float.c wubu_mir.c wubu_mir_interp.c \
+		wubu_mir_opt.c wubu_mir_lower.c wubu_mir_regalloc.c x86_peephole.c wubu_softfloat.c -lm
 	./$@
 
 # Differential fuzz oracle: random-MIR cross-check across backends

@@ -60,6 +60,45 @@ static uint64_t sf_round(sf_raw_t r, int prec, int bias, int pack64) {
 
     int sh = sf_clz64(r.m);  r.m <<= sh; r.k -= sh;   /* MSB at bit 63 */
     int width = 64 - sf_clz64(r.m);
+
+    /* Subnormal results are rounded ONCE, directly at target precision.
+     * Round-to-24-then-shift double-rounds and loses ties (observed on mul). */
+    {
+        int32_t top_exp = r.k + width - 1;          /* unbiased exp of MSB */
+        if (top_exp < emin) {
+            /* usable significand bits below the binary point of the MSB */
+            int eff = prec - (emin - top_exp);
+            uint64_t msb_bit = (pack64 ? F64_MINNORM : F32_MINNORM)
+                                   >> (pack64 ? 52 : 23);      /* min subnormal */
+            if (eff < 1) {
+                /* value < smallest normal ulp: RNE against half the min
+                 * subnormal. Exact compare: m * 2^k vs 2^(emin-prec). */
+                int32_t shift = (emin - prec) - r.k;
+                if (shift >= 64) return (uint64_t)r.sign << (pack64 ? 63 : 31);
+                if (shift <= 0)
+                    return ((uint64_t)r.sign << (pack64 ? 63 : 31)) | msb_bit;
+                uint64_t threshold = (uint64_t)1 << shift;   /* half min subnormal */
+                if (r.m > threshold)
+                    return ((uint64_t)r.sign << 63) | msb_bit;
+                /* m == threshold: exact tie -> even target is min-subnormal's
+                 * significand 1 (odd) so ties round DOWN to zero. */
+                return (uint64_t)r.sign << (pack64 ? 63 : 31);
+            }
+            int drop2 = width - eff;
+            uint64_t keep = r.m >> drop2;
+            uint64_t rem  = r.m & (((uint64_t)1 << drop2) - 1);
+            uint64_t half = (uint64_t)1 << (drop2 - 1);
+            if (rem > half || (rem == half && (keep & 1))) keep++;
+            if (keep >= ((uint64_t)1 << (prec - 1))) {
+                /* rounded up into the smallest normal */
+                return ((uint64_t)r.sign << (pack64 ? 63 : 31)) |
+                       (pack64 ? F64_MINNORM : F32_MINNORM);
+            }
+            /* keep IS the fraction field: LSB aligned at 2^(emin-prec+1)
+             * since eff = prec - (emin - top_exp). */
+            return ((uint64_t)r.sign << (pack64 ? 63 : 31)) | keep;
+        }
+    }
     int drop = width - prec;
     if (drop < 1) drop = 1;
     uint64_t keep = r.m >> drop;
@@ -160,36 +199,49 @@ uint32_t wubu_sf_f32_add(uint32_t A, uint32_t B) {
     }
     int same = (asg == bsg);
     int32_t dk = a.k - b.k;
+    /* Wide alignment: shift the smaller operand right by dk but KEEP two
+     * extra low bits (guard+sticky folded into the mantissa itself). This
+     * makes add/sub exact-in-wide-arithmetic; sf_round does all rounding. */
     uint64_t bm = b.m;
-    int b_guard = 0, b_stick = 0;
-    if (dk > 63) { bm = 0; b_stick = 1; }
-    else if (dk >= 1) {
-        b_guard = (int)((bm >> (dk - 1)) & 1);
-        b_stick = (int)((bm & (((uint64_t)1 << (dk - 1)) - 1)) != 0);
-        bm >>= dk;
-    }
-    sf_raw_t r; r.sign = asg; r.g2 = b_guard; r.s2 = b_stick;
+    int32_t bk = b.k;
+    if (dk > 62) { bm >>= (dk - 2); if (!(bm >> 1)) bm = 1; bk = a.k - 2; }  /* tiny: fold to sticky */
+    else if (dk > 0) bk = b.k + 0; /* unchanged; alignment below via shift amount dk */
+    sf_raw_t r; r.sign = asg;
     if (same) {
-        if (b_guard && (b_stick || (bm & 1))) bm++;
-        r.m = a.m + bm; r.k = a.k;
+        if (dk > 0) {
+            uint64_t sticky = (dk >= 64 || (bm << (64 - (dk > 63 ? 63 : dk))) != 0) ? 1 : 0;
+            uint64_t aligned;
+            if (dk >= 64) aligned = (bm != 0);
+            else {
+                aligned = bm >> dk;
+                if ((bm & (((uint64_t)1 << dk) - 1)) != 0) aligned |= 1;
+            }
+            (void)sticky;
+            r.m = a.m + aligned; r.k = a.k;
+        } else {
+            r.m = a.m + bm; r.k = a.k;
+        }
+        if (r.m < a.m || (dk > 0 && (r.m >> 63) == 0 && r.m >= (1ull<<63))) {
+            /* carry out of bit 63 */
+        }
         if (r.m < a.m) {
-            r.s2 |= (r.m & 1);
+            r.s2 = (int)(r.m & 1);
             r.m = (r.m >> 1) | (1ull << 63);
             r.k++;
         }
         r.g2 = 0; r.s2 = 0;
     } else {
-        r.m = a.m - bm; r.k = a.k;
-        if (r.m == 0) {
-            if (!b_guard && !b_stick) return 0u;
-            /* exact half-ulp cancellation: pull guard in to represent x.5 exactly */
-            r.m = (1ull << 63);
-            r.g2 = b_guard; r.s2 = b_stick; r.k = a.k - 1;
-        } else {
-            if (b_guard) { r.m = (r.m << 1) - 1; r.g2 = 0; r.s2 = b_stick; r.k--; }
-            else         { r.g2 = 0; r.s2 = b_stick; }
-            norm64(&r.m, &r.k);
+        /* effective subtraction on aligned magnitudes */
+        uint64_t aligned;
+        if (dk >= 64) aligned = (bm != 0) ? 1 : 0;
+        else {
+            aligned = bm >> dk;
+            if ((bm & (((uint64_t)1 << dk) - 1)) != 0) aligned |= 1;  /* OR sticky into LSB */
         }
+        r.m = a.m - aligned; r.k = a.k;
+        if (r.m == 0) return 0u;   /* exact cancellation (aligned form keeps sticky) */
+        norm64(&r.m, &r.k);
+        r.g2 = 0; r.s2 = 0;
     }
     return (uint32_t)sf_round(r, 24, F32_BIAS, 0) | (uint32_t)(asg << 31);
 }
