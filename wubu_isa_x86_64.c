@@ -519,10 +519,6 @@ static int64_t x86_run(const uint8_t *code, size_t size, int64_t arg) {
     memcpy(exec, code, size);
     wubu_clear_cache(exec, size);
     int64_t (*fn)(void) = (int64_t (*)(void))exec;
-    if (getenv("DEBUG_TGEMM")) {
-        FILE *f = fopen("/tmp/jit.bin","wb");
-        if (f){ fwrite(code,size,1,f); fclose(f); }
-    }
     int64_t r = fn();
     jit_free_exec(exec, size);
     return r;
