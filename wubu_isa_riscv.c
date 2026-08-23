@@ -304,6 +304,21 @@ static void ecall(riscv_emitter_t *e)
     emit32(e, inst);
 }
 
+/* Float hostcall: CUSTOM-0 opcode 0x0B followed by four data words
+ * {fn, dst_off, sa_off, sb_off} (frame-relative byte offsets of the
+ * vr slots). The interpreter reads the words straight from the code
+ * stream and services the op through wubu_softfloat. */
+static void emit_fhostcall(riscv_emitter_t *e, uint8_t fn,
+                           int32_t dst_off, int32_t sa_off, int32_t sb_off)
+{
+    uint32_t inst = 0x0B;   /* CUSTOM-0 */
+    emit32(e, inst);
+    emit32(e, (uint32_t)fn);
+    emit32(e, (uint32_t)dst_off);
+    emit32(e, (uint32_t)sa_off);
+    emit32(e, (uint32_t)sb_off);
+}
+
 /* ret = jalr x0, x1, 0 */
 static void ret_instr(riscv_emitter_t *e)
 {
@@ -563,6 +578,46 @@ static int riscv_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
             np++;
             break;
         }
+
+        case MIR_FADD:
+        case MIR_FSUB:
+        case MIR_FMUL:
+        case MIR_FDIV: {
+            /* fp ops via soft-float hostcall; f32 bits live in the
+             * low 4 bytes of each vr's 8-byte frame slot. */
+            uint8_t fn = (in->op==MIR_FADD)?0:(in->op==MIR_FSUB)?1:(in->op==MIR_FMUL)?2:3;
+            emit_fhostcall(&e, fn,
+                           (int32_t)slot_off(0, in->dst),
+                           (int32_t)slot_off(0, in->a),
+                           (int32_t)slot_off(0, in->b));
+            break;
+        }
+        case MIR_FNEG:
+            emit_fhostcall(&e, 10,
+                           (int32_t)slot_off(0, in->dst),
+                           (int32_t)slot_off(0, in->a),
+                           (int32_t)slot_off(0, in->a));
+            break;
+        case MIR_FEQ: case MIR_FNE: case MIR_FLT: case MIR_FLE: {
+            uint8_t fn = (in->op==MIR_FEQ)?6:(in->op==MIR_FNE)?7:(in->op==MIR_FLT)?8:9;
+            emit_fhostcall(&e, fn,
+                           (int32_t)slot_off(0, in->dst),
+                           (int32_t)slot_off(0, in->a),
+                           (int32_t)slot_off(0, in->b));
+            break;
+        }
+        case MIR_FRET:
+            /* float return: hostcall copies slot bits into cpu.fret */
+            emit_fhostcall(&e, 11,
+                           (int32_t)slot_off(0, in->a),
+                           (int32_t)slot_off(0, in->a),
+                           (int32_t)slot_off(0, in->a));
+            /* epilogue + ret so run() exits cleanly */
+            mv(&e, REG_SP, REG_FP);
+            load_d(&e, REG_FP, REG_SP, 0);
+            addi(&e, REG_SP, REG_SP, (int32_t)e.frame);
+            ret_instr(&e);
+            break;
 
         case MIR_RET:
             load_d(&e, REG_A0, REG_FP, (int32_t)slot_off(e.frame, in->a));

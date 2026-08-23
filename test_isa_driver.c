@@ -340,21 +340,18 @@ static void test_6502_float(void)
     wubu_vr_t vb = wubu_mir_const(&prog, (int64_t)(uint32_t)b_bits);
     wubu_vr_t r  = wubu_mir_binop(&prog, MIR_FADD, va, vb);
     wubu_mir_fret(&prog, r);
-    const char *names[] = {"6502"};
-    int64_t result = 0;
-    const wubu_isa_driver_t *d = wubu_isa_find("6502");
-    CHECK(d != NULL, "6502 driver present");
-    uint8_t *dbg_code=NULL; size_t dbg_size=0;
-    if (d->compile(&prog,&dbg_code,&dbg_size)==0) {
-        printf("  [dbg] size=%zu:",dbg_size);
-        for(size_t i=0;i<dbg_size;i++) printf(" %02X",dbg_code[i]);
-        printf("\n");
-    }
-    if (d && run_with_driver(d, &prog, &result) == 0) {
-        uint32_t got = (uint32_t)result;
-        float fg; memcpy(&fg, &got, 4);
-        CHECK(got == 0x40680000 || fg == 3.75f, "6502 float add");
-        printf("  6502: fadd -> %08X (%f)\n", got, fg);
+    const char *fnames[] = {"6502", "riscv"};
+    for (int i = 0; i < 2; i++) {
+        const wubu_isa_driver_t *fd = wubu_isa_find(fnames[i]);
+        if (!fd) { printf("  skip %s\n", fnames[i]); continue; }
+        int64_t result = 0;
+        if (run_with_driver(fd, &prog, &result) == 0) {
+            uint32_t got = (uint32_t)result;
+            float fg; memcpy(&fg, &got, 4);
+            char msg[64]; snprintf(msg, sizeof(msg), "%s float add", fd->name);
+            CHECK(got == 0x40700000 && fg == 3.75f, msg);
+            printf("  %s: fadd -> %08X (%f)\n", fd->name, got, fg);
+        }
     }
     wubu_mir_free(&prog);
 }
