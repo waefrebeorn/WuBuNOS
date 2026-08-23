@@ -22,7 +22,7 @@ LDFLAGS = -lm
 
 # MIR mid-level IR + optimizer
 MIR     = wubu_mir.c wubu_mir_opt.c wubu_mir_lower.c wubu_mir_regalloc.c \
-          wubu_mir_interp.c x86_peephole.c wubu_softfloat.c
+          wubu_mir_interp.c x86_peephole.c wubu_softfloat.c wubu_tgemm.c
 
 # ISA drivers (10 interpreter-based + 2 JIT stubs)
 ISA     = wubu_isa_driver.c wubu_isa_jit_stubs.c \
