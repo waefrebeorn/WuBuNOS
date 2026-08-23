@@ -13,6 +13,7 @@
  * C11, self-contained.
  */
 #include <stdint.h>
+#include "wubu_softfloat.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -27,6 +28,8 @@ typedef struct {
     uint64_t steps;           /* non-termination guard counter */
     uint8_t n, z, v, c, x;    /* condition codes */
     uint8_t mem[M68K_MEM];
+    int fret_valid;
+    uint32_t fret;
 } m68k_cpu_t;
 
 static uint16_t fetch16(m68k_cpu_t *cpu, const uint8_t *code, size_t size)
@@ -280,8 +283,50 @@ int64_t wubu_m68k_run(const uint8_t *code, size_t size, int64_t arg)
             continue;
         }
 
+        /* 0x0B00: WUBU_HOSTCALL escape (undefined op in 68000 opcode map).
+         * Reads fn + 3 slot-displacements from A6. */
+        if (w == 0x0B00) {
+            uint16_t wfn   = fetch16(&cpu, code, size);
+            uint16_t wdst  = fetch16(&cpu, code, size);
+            uint16_t wsa   = fetch16(&cpu, code, size);
+            uint16_t wsb   = fetch16(&cpu, code, size);
+            uint32_t base = (uint32_t)cpu.a[6];   /* A6 = frame pointer */
+            uint32_t _a1 = base + (int16_t)wsa;
+            uint32_t fa = ((uint32_t)cpu.mem[_a1] << 24) |
+                          ((uint32_t)cpu.mem[_a1+1] << 16) |
+                          ((uint32_t)cpu.mem[_a1+2] << 8) |
+                          (uint32_t)cpu.mem[_a1+3];
+            uint32_t _a2 = base + (int16_t)wsb;
+            uint32_t fb = ((uint32_t)cpu.mem[_a2] << 24) |
+                          ((uint32_t)cpu.mem[_a2+1] << 16) |
+                          ((uint32_t)cpu.mem[_a2+2] << 8) |
+                          (uint32_t)cpu.mem[_a2+3];
+            uint32_t r  = 0;
+            uint8_t fn = (uint8_t)(wfn & 0xFF);
+            switch (fn) {
+            case 0:  r = wubu_sf_f32_add(fa, fb); break;
+            case 1:  r = wubu_sf_f32_sub(fa, fb); break;
+            case 2:  r = wubu_sf_f32_mul(fa, fb); break;
+            case 3:  r = wubu_sf_f32_div(fa, fb); break;
+            case 10: r = fa ^ 0x80000000u; break;
+            case 6:  r = (wubu_sf_f32_cmp(fa,fb)==0)?0xFFFFFFFFu:0; break;
+            case 7:  r = (wubu_sf_f32_cmp(fa,fb)!=0)?0xFFFFFFFFu:0; break;
+            case 8:  r = (wubu_sf_f32_cmp(fa,fb) <0)?0xFFFFFFFFu:0; break;
+            case 9:  r = (wubu_sf_f32_cmp(fa,fb)<=0)?0xFFFFFFFFu:0; break;
+            case 11: r = fa; cpu.fret = fa; cpu.fret_valid = 1; break;
+            default: break;
+            }
+            uint32_t _a = base + (int16_t)wdst;
+            cpu.mem[_a]     = (uint8_t)((uint32_t)r >> 24);
+            cpu.mem[_a + 1] = (uint8_t)((uint32_t)r >> 16);
+            cpu.mem[_a + 2] = (uint8_t)((uint32_t)r >> 8);
+            cpu.mem[_a + 3] = (uint8_t)r;
+            continue;
+        }
+
         /* unrecognized: halt (defensive — a decode miss must not loop) */
         break;
     }
+    if (cpu.fret_valid) return (int64_t)(int32_t)cpu.fret;
     return (int64_t)cpu.d[0];
 }
