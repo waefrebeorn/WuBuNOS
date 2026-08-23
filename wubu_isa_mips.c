@@ -344,6 +344,38 @@ static int mips_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_siz
             e32(&e, mips_beq(MIPS_REG_T0, 0, 0));  /* beq $t0,$zero -> label */
             patch_push(&patches, &np, &cp, e.n - 4, in->label);
             break;
+        case MIR_FADD:
+        case MIR_FSUB:
+        case MIR_FMUL:
+        case MIR_FDIV: {
+            uint32_t fn = (in->op==MIR_FADD)?0:(in->op==MIR_FSUB)?1:(in->op==MIR_FMUL)?2:3;
+            e32(&e, 0xFC000000u);   /* WUBU_HOSTCALL: opcode 0x3F */
+            e32(&e, fn);
+            e32(&e, (uint32_t)slot_off(in->dst));
+            e32(&e, (uint32_t)slot_off(in->a));
+            e32(&e, (uint32_t)slot_off(in->b));
+            break;
+        }
+        case MIR_FEQ: case MIR_FNE: case MIR_FLT: case MIR_FLE: {
+            uint32_t fn = (in->op==MIR_FEQ)?6:(in->op==MIR_FNE)?7:(in->op==MIR_FLT)?8:9;
+            e32(&e, 0xFC000000u); e32(&e, fn);
+            e32(&e, (uint32_t)slot_off(in->dst));
+            e32(&e, (uint32_t)slot_off(in->a));
+            e32(&e, (uint32_t)slot_off(in->b));
+            break;
+        }
+        case MIR_FRET:
+            /* hostcall fn=11 puts slot bits into $v0; then epilogue+ret */
+            e32(&e, 0xFC000000u); e32(&e, 11);
+            e32(&e, (uint32_t)slot_off(in->a));   /* dst */
+            e32(&e, (uint32_t)slot_off(in->a));   /* sa = result cell */
+            e32(&e, (uint32_t)slot_off(in->a));   /* sb */
+            /* lw $ra, frame-4($sp); addiu $sp,$sp,frame; jr $ra */
+            e32(&e, MIPS_LW(29, 31, (uint16_t)(e.frame - 4)));
+            e32(&e, mips_addui(29, 29, (int16_t)e.frame));
+            e32(&e, 0x03E00008);  /* jr $ra */
+            break;
+
         case MIR_RET:
             e32(&e, MIPS_LW(29, MIPS_REG_T0, (uint16_t)slot_off(in->a)));
             /* move $v0, $t0 */

@@ -340,8 +340,8 @@ static void test_6502_float(void)
     wubu_vr_t vb = wubu_mir_const(&prog, (int64_t)(uint32_t)b_bits);
     wubu_vr_t r  = wubu_mir_binop(&prog, MIR_FADD, va, vb);
     wubu_mir_fret(&prog, r);
-    const char *fnames[] = {"6502", "riscv", "z80", "8051"};
-    for (int i = 0; i < 4; i++) {
+    const char *fnames[] = {"6502", "riscv", "z80", "8051", "mips"};
+    for (int i = 0; i < 5; i++) {
         const wubu_isa_driver_t *fd = wubu_isa_find(fnames[i]);
         if (!fd) { printf("  skip %s\n", fnames[i]); continue; }
         int64_t result = 0;
