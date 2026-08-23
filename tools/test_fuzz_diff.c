@@ -38,12 +38,14 @@ static uint64_t lcg_next(void){
  * them as 32-bit constants (the ISA contract), so the generator stays inside
  * int32 to remain comparable across every backend. */
 static int64_t rand_val(void){
-    int64_t v = (int64_t)(int32_t)(uint32_t)lcg_next();
+    /* widen to full 64-bit range so the oracle exercises i64 math */
+    int64_t v = (int64_t)((uint64_t)lcg_next() << 32 ^ lcg_next());
     return v ? v : 1;     /* avoid 0 -> would divide-by-zero in DIV/MOD */
 }
 /* MIR arithmetic contract: 32-bit two's complement (HolyD `int`, matching the
  * x86-64 JIT golden reference). */
-static int64_t wrap32(int64_t v){ return (int64_t)(int32_t)(uint32_t)(uint64_t)v; }
+/* HolyC-faithful: 64-bit intermediates, no implicit wrap. */
+static int64_t wrap32(int64_t v){ return v; }
 
 static const wubu_mir_op_t ARITH_OPS[] = {
     MIR_ADD, MIR_SUB, MIR_MUL, MIR_DIV, MIR_MOD,
@@ -89,16 +91,17 @@ static wubu_vr_t build_random(wubu_mir_prog_t *pg, int nstmts,
         /* Model EXACTLY what wubu_mir_interp does: WRAP32 after each op,
          * shift counts masked &31 on uint32/int32 operands. */
         switch (o){
-            case MIR_ADD: v = wrap32(v + cv); break;
-            case MIR_SUB: v = wrap32(v - cv); break;
-            case MIR_MUL: v = wrap32(v * cv); break;
-            case MIR_DIV: if (v == INT32_MIN && cv == -1) v = INT32_MIN; else v = wrap32(v / cv); break;
-            case MIR_MOD: if (v == INT32_MIN && cv == -1) v = 0;          else v = wrap32(v % cv); break;
-            case MIR_AND: v = wrap32(wrap32(v) & wrap32(cv)); break;
-            case MIR_OR:  v = wrap32(wrap32(v) | wrap32(cv)); break;
-            case MIR_XOR: v = wrap32(wrap32(v) ^ wrap32(cv)); break;
-            case MIR_SHL: v = wrap32((int64_t)((uint32_t)v << ((unsigned)cv & 31u))); break;
-            case MIR_SHR: v = wrap32((int64_t)((int32_t)v >> ((unsigned)cv & 31u))); break;
+            /* HolyC-faithful: pure int64 arithmetic, no implicit wrap */
+            case MIR_ADD: v = v + cv; break;
+            case MIR_SUB: v = v - cv; break;
+            case MIR_MUL: v = v * cv; break;
+            case MIR_DIV: if (cv != 0) v = (v == INT64_MIN && cv == -1) ? INT64_MIN : v / cv; break;
+            case MIR_MOD: if (cv != 0) v = (v == INT64_MIN && cv == -1) ? 0 : v % cv; break;
+            case MIR_AND: v = v & cv; break;
+            case MIR_OR:  v = v | cv; break;
+            case MIR_XOR: v = v ^ cv; break;
+            case MIR_SHL: v = (int64_t)((uint64_t)v << ((unsigned)cv & 63u)); break;
+            case MIR_SHR: v = v >> ((unsigned)cv & 63u); break;
             default: break;
         }
                 if (v < -32768 || v > 32767) *fits16 = 0;

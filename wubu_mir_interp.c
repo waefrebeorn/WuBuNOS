@@ -24,11 +24,10 @@
 #include <stdio.h>
 #include <string.h>
 
-/* HolyD `int` is modeled as a 32-bit two's-complement value, matching the
- * x86-64 JIT golden reference (which emits 32-bit `l`-suffixed ops). The MIR
- * register file is 64-bit for convenience, but integer arithmetic wraps to
- * 32 bits so results agree with the canonical `int` semantics. */
-#define WRAP32(v) ((int64_t)(int32_t)(v))
+/* HolyC/HolyD contract: `int` intermediates are 64-bit two's-complement;
+ * arithmetic NEVER wraps implicitly — only explicit narrowing ops truncate.
+ * The x86-64 driver already emits REX.W (64-bit) ops; the interpreter now
+ * matches it exactly, and the fuzz oracle models plain int64 arithmetic. */
 
 /*
  * Interpret a MIR program. Returns the value in vr0 at MIR_RET.
@@ -100,24 +99,24 @@ int64_t wubu_mir_interp(const wubu_mir_prog_t *p)
             vr[in->dst] = vr[in->a];
             pc++;
             break;
-        case MIR_ADD: vr[in->dst] = WRAP32(vr[in->a] + vr[in->b]); pc++; break;
-        case MIR_SUB: vr[in->dst] = WRAP32(vr[in->a] - vr[in->b]); pc++; break;
-        case MIR_MUL: vr[in->dst] = WRAP32(vr[in->a] * vr[in->b]); pc++; break;
+        case MIR_ADD: vr[in->dst] = vr[in->a] + vr[in->b]; pc++; break;
+        case MIR_SUB: vr[in->dst] = vr[in->a] - vr[in->b]; pc++; break;
+        case MIR_MUL: vr[in->dst] = vr[in->a] * vr[in->b]; pc++; break;
         case MIR_DIV:
-            vr[in->dst] = (vr[in->b] != 0) ? WRAP32(vr[in->a] / vr[in->b]) : 0;
+            vr[in->dst] = (vr[in->b] != 0) ? (vr[in->a] / vr[in->b]) : 0;
             pc++;
             break;
         case MIR_MOD:
-            vr[in->dst] = (vr[in->b] != 0) ? WRAP32(vr[in->a] % vr[in->b]) : 0;
+            vr[in->dst] = (vr[in->b] != 0) ? (vr[in->a] % vr[in->b]) : 0;
             pc++;
             break;
-        case MIR_AND: vr[in->dst] = WRAP32(vr[in->a] & vr[in->b]); pc++; break;
-        case MIR_OR:  vr[in->dst] = WRAP32(vr[in->a] | vr[in->b]); pc++; break;
-        case MIR_XOR: vr[in->dst] = WRAP32(vr[in->a] ^ vr[in->b]); pc++; break;
-        case MIR_SHL: vr[in->dst] = WRAP32((int64_t)((uint32_t)vr[in->a] << (vr[in->b] & 31))); pc++; break;
-        case MIR_SHR: vr[in->dst] = WRAP32((int64_t)((int32_t)vr[in->a] >> (vr[in->b] & 31))); pc++; break;
-        case MIR_NEG: vr[in->dst] = WRAP32(-vr[in->a]); pc++; break;
-        case MIR_NOT: vr[in->dst] = WRAP32(~vr[in->a]); pc++; break;
+        case MIR_AND: vr[in->dst] = vr[in->a] & vr[in->b]; pc++; break;
+        case MIR_OR:  vr[in->dst] = vr[in->a] | vr[in->b]; pc++; break;
+        case MIR_XOR: vr[in->dst] = vr[in->a] ^ vr[in->b]; pc++; break;
+        case MIR_SHL: vr[in->dst] = (int64_t)((uint64_t)vr[in->a] << (vr[in->b] & 63)); pc++; break;
+        case MIR_SHR: vr[in->dst] = vr[in->a] >> (vr[in->b] & 63); pc++; break;
+        case MIR_NEG: vr[in->dst] = -vr[in->a]; pc++; break;
+        case MIR_NOT: vr[in->dst] = ~vr[in->a]; pc++; break;
         case MIR_EQ: vr[in->dst] = (vr[in->a] == vr[in->b]) ? 1 : 0; pc++; break;
         case MIR_NE: vr[in->dst] = (vr[in->a] != vr[in->b]) ? 1 : 0; pc++; break;
         case MIR_LT: vr[in->dst] = (vr[in->a] <  vr[in->b]) ? 1 : 0; pc++; break;
@@ -183,7 +182,7 @@ int64_t wubu_mir_interp(const wubu_mir_prog_t *p)
         case MIR_FDIV: vr[in->dst] = wubu_sf_f32_div((uint32_t)vr[in->a], (uint32_t)vr[in->b]); pc++; break;
         case MIR_FNEG: vr[in->dst] = wubu_sf_f32_neg((uint32_t)vr[in->a]); pc++; break;
         case MIR_ITOF: vr[in->dst] = wubu_sf_i64_to_f32(vr[in->a]); pc++; break;
-        case MIR_FTOI: vr[in->dst] = WRAP32(wubu_sf_f32_to_i64((uint32_t)vr[in->a])); pc++; break;
+        case MIR_FTOI: vr[in->dst] = wubu_sf_f32_to_i64((uint32_t)vr[in->a]); pc++; break;
         case MIR_FEQ:  vr[in->dst] = (wubu_sf_f32_cmp((uint32_t)vr[in->a], (uint32_t)vr[in->b]) == 0); pc++; break;
         case MIR_FNE:  vr[in->dst] = (wubu_sf_f32_cmp((uint32_t)vr[in->a], (uint32_t)vr[in->b]) != 2)
                                      && (wubu_sf_f32_cmp((uint32_t)vr[in->a], (uint32_t)vr[in->b]) != 0); pc++; break;
