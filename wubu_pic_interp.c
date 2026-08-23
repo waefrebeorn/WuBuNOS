@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include "wubu_softfloat.h"
 
 #define PIC_RAM_SIZE 256
 #define PIC_VR_BASE 0x20
@@ -41,7 +42,9 @@
 #define PIC_NE    0x19 /* NE  fr      — W = (W != RAM[fr]) ? 1 : 0 */
 #define PIC_AND   0x1A /* AND fr      — W = W & RAM[fr]  */
 #define PIC_OR    0x1B /* OR  fr      — W = W | RAM[fr]  */
-#define PIC_XR    0x1C /* XR  fr      — W = W ^ RAM[fr]  */
+#define PIC_XR    0x1C
+#define PIC_FOP   0x20
+#define PIC_FRET  0x21 /* XR  fr      — W = W ^ RAM[fr]  */
 
 const char *wubu_pic_interp_name = "pic";
 
@@ -51,12 +54,14 @@ int64_t wubu_pic_interp(const uint8_t *code, size_t size, int64_t arg)
     memset(ram, 0, sizeof(ram));
 
     (void)arg;
-    uint8_t W = 0;  /* W register (8-bit accumulator) */
+    uint8_t W = 0;
+    uint32_t fret = 0;
+    unsigned fret_valid = 0;
     size_t pc = 0;
 
     while (pc < size) {
         uint8_t op = code[pc++];
-        uint8_t fr;
+        uint8_t fn=0, fr=0, sb=0, sd=0;
 
         switch (op) {
         case PIC_LIW: /* W = imm */
@@ -109,7 +114,8 @@ int64_t wubu_pic_interp(const uint8_t *code, size_t size, int64_t arg)
             ram[PIC_VR_BASE + fr] = (uint8_t)(ram[PIC_VR_BASE + fr] - 1);
             break;
         case PIC_RET: /* return W (sign-extend 8-bit) */
-            return (int64_t)(int8_t)W;
+            if (fret_valid) return (int64_t)(int32_t)fret;
+    return (int64_t)(int8_t)W;
         case PIC_MUL: /* W = (W * ram[fr]) & 0xFF */
             fr = code[pc++];
             W = (uint8_t)(W * (uint8_t)ram[PIC_VR_BASE + fr]);
@@ -168,6 +174,32 @@ int64_t wubu_pic_interp(const uint8_t *code, size_t size, int64_t arg)
             fr = code[pc++];
             W &= (uint8_t)ram[PIC_VR_BASE + fr];
             break;
+        case PIC_FOP: /* fn, fr(a), sb, sd (ram indices) */
+            fn = code[pc++]; fr = code[pc++]; sb = code[pc++]; sd = code[pc++];
+            {
+                uint32_t fa = (uint32_t)(ram[fr] & 0xFFFFFFFF);
+                uint32_t fb = (uint32_t)(ram[sb] & 0xFFFFFFFF);
+                uint32_t r = 0;
+                switch (fn) {
+                case 0: r = wubu_sf_f32_add(fa,fb); break;
+                case 1: r = wubu_sf_f32_sub(fa,fb); break;
+                case 2: r = wubu_sf_f32_mul(fa,fb); break;
+                case 3: r = wubu_sf_f32_div(fa,fb); break;
+                case 10: r = fa ^ 0x80000000u; break;
+                case 6: r = (wubu_sf_f32_cmp(fa,fb)==0)?0xFFFFFFFFu:0; break;
+                case 7: r = (wubu_sf_f32_cmp(fa,fb)!=0)?0xFFFFFFFFu:0; break;
+                case 8: r = (wubu_sf_f32_cmp(fa,fb) <0)?0xFFFFFFFFu:0; break;
+                case 9: r = (wubu_sf_f32_cmp(fa,fb)<=0)?0xFFFFFFFFu:0; break;
+                default: break;
+                }
+                ram[sd] = (int64_t)r;
+            }
+            break;
+        case PIC_FRET:
+            fr = code[pc++];
+            fret = (uint32_t)(ram[fr] & 0xFFFFFFFF);
+            fret_valid = 1;
+            break;
         case PIC_OR: /* W |= ram[fr] (same as ORW) */
             fr = code[pc++];
             W |= (uint8_t)ram[PIC_VR_BASE + fr];
@@ -180,5 +212,6 @@ int64_t wubu_pic_interp(const uint8_t *code, size_t size, int64_t arg)
             return 0;
         }
     }
+    if (fret_valid) return (int64_t)(int32_t)fret;
     return (int64_t)(int8_t)W;
 }

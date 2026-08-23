@@ -66,6 +66,8 @@ static void pic_note_label(pic_emitter_t *e, uint32_t label, size_t off) {
 #define PIC_LTU  0x15 /* LTU fr      — W = (W < RAM[fr]) ? 1 : 0 */
 #define PIC_EQ   0x16 /* EQ  fr      — W = (W == RAM[fr]) ? 1 : 0 */
 #define PIC_RET  0x0E /* RET         — return W */
+#define PIC_FOP  0x20 /* soft-float hostcall */
+#define PIC_FRET 0x21 /* soft-float return */
 
 static int pic_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size) {
     pic_emitter_t e;
@@ -214,6 +216,28 @@ static int pic_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             pic_ep8(&e, PIC_MVF);
             pic_ep8(&e, (uint8_t)in->dst);
             break;
+        case MIR_FADD:
+        case MIR_FSUB:
+        case MIR_FMUL:
+        case MIR_FDIV: {
+            uint8_t fn = (in->op==MIR_FADD)?0:(in->op==MIR_FSUB)?1:(in->op==MIR_FMUL)?2:3;
+            pic_ep8(&e, PIC_FOP); pic_ep8(&e, fn);
+            pic_ep8(&e, (uint8_t)in->a); pic_ep8(&e, (uint8_t)in->b);
+            pic_ep8(&e, (uint8_t)in->dst);
+            break;
+        }
+        case MIR_FEQ: case MIR_FNE: case MIR_FLT: case MIR_FLE: {
+            uint8_t fn = (in->op==MIR_FEQ)?6:(in->op==MIR_FNE)?7:(in->op==MIR_FLT)?8:9;
+            pic_ep8(&e, PIC_FOP); pic_ep8(&e, fn);
+            pic_ep8(&e, (uint8_t)in->a); pic_ep8(&e, (uint8_t)in->b);
+            pic_ep8(&e, (uint8_t)in->dst);
+            break;
+        }
+        case MIR_FRET:
+            pic_ep8(&e, PIC_FRET);
+            pic_ep8(&e, (uint8_t)in->a);
+            break;
+
         case MIR_RET:
             /* return RAM[a] */
             pic_ep8(&e, PIC_MVW);
