@@ -230,6 +230,17 @@ static void store_a_to_slot(z80_emitter_t *e, uint16_t vd)
     e16(e, vd);
 }
 
+/* Z80 has no free 1-byte opcode in the implemented subset; repurpose
+ * 0x0B (undocumented LD BC,imm16 / here used as WUBU_HOSTCALL prefix).
+ * Followed by: fn, then two 16-bit slot addrs (dst,sa,sb as 3x16). */
+static void emit_z80_fhostcall(z80_emitter_t *e, uint8_t fn,
+                               uint16_t dst, uint16_t sa, uint16_t sb)
+{
+    e8(e, 0x0B);         /* hostcall opcode */
+    e8(e, fn);
+    e16(e, dst); e16(e, sa); e16(e, sb);
+}
+
 /* ---- comparison: computes a <op> b into dst (0/1) ---- */
 /* The Z80 CP B sets: C flag on borrow (a < b), Z flag on equality.
  * Layout: the conditional jump(s) lead to set1 (true) or fall
@@ -398,11 +409,47 @@ static int z80_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
         uint16_t vd = z80_slot_addr(in->dst);
 
         switch (in->op) {
-        case MIR_CONST:
-            /* LD A, imm; LD (vd), A */
+        case MIR_CONST: {
+            /* LD A, imm; LD (vd), A — plus the 4-byte float cell so
+             * float hostcalls read the same constant bit pattern. */
+            int64_t v = in->imm;
+            uint16_t fbase = z80_fslot(in->dst);
+            for (int i = 0; i < 4; i++) {
+                e8(&e, Z80_LD_A_N);
+                e8(&e, (uint8_t)((v >> (i*8)) & 0xFF));
+                e8(&e, Z80_LD_NN_A);
+                e16(&e, (uint16_t)(fbase + i));
+            }
+            /* integer byte-0 store last (int ops read via slot addr) */
             e8(&e, Z80_LD_A_N);
-            e8(&e, (uint8_t)(in->imm & 0xFF));
+            e8(&e, (uint8_t)(v & 0xFF));
             store_a_to_slot(&e, vd);
+            break;
+        }
+
+        case MIR_FADD:
+        case MIR_FSUB:
+        case MIR_FMUL:
+        case MIR_FDIV: {
+            uint8_t fn = (in->op==MIR_FADD)?0:(in->op==MIR_FSUB)?1:(in->op==MIR_FMUL)?2:3;
+            emit_z80_fhostcall(&e, fn,
+                               z80_fslot(in->dst),
+                               z80_fslot(in->a),
+                               z80_fslot(in->b));
+            break;
+        }
+        case MIR_FNEG:
+            emit_z80_fhostcall(&e, 10, z80_fslot(in->dst), z80_fslot(in->a), z80_fslot(in->a));
+            break;
+        case MIR_FEQ: case MIR_FNE: case MIR_FLT: case MIR_FLE: {
+            uint8_t fn = (in->op==MIR_FEQ)?6:(in->op==MIR_FNE)?7:(in->op==MIR_FLT)?8:9;
+            emit_z80_fhostcall(&e, fn, z80_fslot(in->dst), z80_fslot(in->a), z80_fslot(in->b));
+            break;
+        }
+        case MIR_FRET:
+            emit_z80_fhostcall(&e, 11,
+                               z80_fslot(in->a), z80_fslot(in->a), z80_fslot(in->a));
+            e8(&e, 0x76); /* HALT */
             break;
 
         case MIR_MOV:

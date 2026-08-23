@@ -57,6 +57,16 @@ static inline uint8_t zp_fslot(wubu_vr_t vr) {
  * slot_addr(vr) = vr*2 (little-endian 16-bit cells). */
 #define Z80_SLOT_BASE 0x0000      /* vrs start at address 0; interpreter reserves 0..frame */
 static inline uint16_t z80_slot_addr(wubu_vr_t vr) { return (uint16_t)((uint32_t)vr * 2); }
+
+/* 4-byte little-endian float cells in a high region of the 64K address
+ * space so f32 operands never overlap the 2-byte integer slots.
+ * Layout: descends from 0xFFFB in steps of 4. */
+static inline uint16_t z80_fslot(wubu_vr_t vr) {
+    uint32_t off = (uint32_t)vr * 4u;
+    uint32_t base = 0xFFFBu;
+    if (off > (base - 0x8000u)) return 0x8000u;
+    return (uint16_t)(base - off);
+}
 static inline size_t z80_frame_size(size_t max_vr) { return ((max_vr + 1) * 2); }
 
 /* ---- 8086 imaginary register file (stack slots below BP) ----
