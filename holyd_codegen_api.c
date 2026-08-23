@@ -209,6 +209,7 @@ int64_t hd_eval(const char *source) {
     if (ast->kind == HD_AST_BLOCK) {
         /* Block context: local variables go on the stack, not data section */
         gen.in_function = true;
+        gen.module_scope = true;   /* top-level decls are globals: functions must see them */
         /* For expression context: generate all statements except last as
          * statements, then generate the last one as an expression so its
          * value ends up in rax (the return value). */
@@ -267,7 +268,6 @@ int64_t hd_eval(const char *source) {
 
     void *exec = jit_alloc_exec(gen.code_size + gen.data_size);
     if (!exec) { free(gen.code); free(gen.data); return 0; }
-
     memcpy(exec, gen.code, gen.code_size);
     /* Copy data section after code - string literals need to be readable */
     if (gen.data_size > 0) {

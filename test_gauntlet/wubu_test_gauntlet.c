@@ -36,7 +36,7 @@ void gauntlet_add_codegen_test(gauntlet_state_t *g, const codegen_test_entry_t *
 
 /* ---- Built-in test suites ---- */
 
-/* Integer arithmetic tests — HolyC expression format (no main(), just the value) */
+/* Integer arithmetic tests — HolyD expression format (no main(), just the value) */
 const test_entry_t gauntlet_integer_tests[] = {
     /* Basic ops */
     {"int_add_basic",     "1+2",           3,           TEST_CAT_INTEGER, 0, 100},
@@ -113,7 +113,7 @@ const test_entry_t gauntlet_integer_tests[] = {
 
 const uint32_t gauntlet_integer_test_count = sizeof(gauntlet_integer_tests) / sizeof(gauntlet_integer_tests[0]);
 
-/* Control flow tests — HolyC expression format (semicolons required) */
+/* Control flow tests — HolyD expression format (semicolons required) */
 const test_entry_t gauntlet_control_tests[] = {
     {"ctrl_ternary",      "1?42:0", 42, TEST_CAT_CONTROL, 0, 100},
     {"ctrl_ternary2",     "0?0:42", 42, TEST_CAT_CONTROL, 0, 100},
@@ -147,7 +147,7 @@ const test_entry_t gauntlet_control_tests[] = {
 
 const uint32_t gauntlet_control_test_count = sizeof(gauntlet_control_tests) / sizeof(gauntlet_control_tests[0]);
 
-/* Bitwise tests — HolyC expression format */
+/* Bitwise tests — HolyD expression format */
 const test_entry_t gauntlet_bitwise_tests[] = {
     {"bit_and",           "0xFF & 0x0F",   0x0F,        TEST_CAT_BITWISE, 0, 100},
     {"bit_or",            "0xF0 | 0x0F",   0xFF,        TEST_CAT_BITWISE, 0, 100},
@@ -174,7 +174,7 @@ const test_entry_t gauntlet_bitwise_tests[] = {
 
 const uint32_t gauntlet_bitwise_test_count = sizeof(gauntlet_bitwise_tests) / sizeof(gauntlet_bitwise_tests[0]);
 
-/* Comparison tests — HolyC expression format */
+/* Comparison tests — HolyD expression format */
 const test_entry_t gauntlet_comparison_tests[] = {
     {"cmp_eq_true",       "1==1",         1,           TEST_CAT_COMPARISON, 0, 100},
     {"cmp_eq_false",      "1==2",         0,           TEST_CAT_COMPARISON, 0, 100},
@@ -200,7 +200,7 @@ const test_entry_t gauntlet_comparison_tests[] = {
 
 const uint32_t gauntlet_comparison_test_count = sizeof(gauntlet_comparison_tests) / sizeof(gauntlet_comparison_tests[0]);
 
-/* Stress tests — HolyC expression format */
+/* Stress tests — HolyD expression format */
 const test_entry_t gauntlet_stress_tests[] = {
     {"stress_signed_overflow", "{int x=2147483647; x++; x<0}", 1, TEST_CAT_STRESS, 0, 100},
     {"stress_unsigned_wrap",   "{unsigned x=0; x--; x>0}", 1, TEST_CAT_STRESS, 0, 100},
@@ -226,7 +226,7 @@ const test_entry_t gauntlet_stress_tests[] = {
 
 const uint32_t gauntlet_stress_test_count = sizeof(gauntlet_stress_tests) / sizeof(gauntlet_stress_tests[0]);
 
-/* Memory tests — HolyC expression format (statements need semicolons) */
+/* Memory tests — HolyD expression format (statements need semicolons) */
 const test_entry_t gauntlet_memory_tests[] = {
     {"mem_local_var",     "{int x=42; x}", 42,          TEST_CAT_MEMORY, 0, 100},
     {"mem_array_access",  "{int a[3]={1,2,3}; a[1]}", 2, TEST_CAT_MEMORY, 0, 100},
@@ -277,7 +277,7 @@ void gauntlet_run_all(gauntlet_state_t *g) {
 
             for (uint32_t tgt = 0; tgt < g->n_targets; tgt++) {
                 /* For now: simulate test execution */
-                /* In real use: compile via holyc → target, run, check result */
+                /* In real use: compile via holyd → target, run, check result */
                 test_result_t result = TEST_PASS; /* Placeholder */
 
                 /* Store result */

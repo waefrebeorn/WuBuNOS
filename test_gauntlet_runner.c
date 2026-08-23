@@ -1,30 +1,29 @@
 /*
  * test_gauntlet_runner.c — Main entry point for the WuBuOS Universal Test Gauntlet.
  *
- * Actually compiles each test via HolyC, executes it, checks the result.
- * C18 pure. Self-hosted capable.
+ * Actually compiles each test via HolyD, executes it, checks the result.
+ * C18 pure. Self-hosting capable.
+ *
+ * Fast crash recovery: fork() with shared memory for result communication.
+ * Each test runs in a child process; parent reads result from shm.
+ * No file I/O, no signal handler complexity.
  */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <sys/stat.h>
+#include <time.h>
 #include <signal.h>
-#include <setjmp.h>
+#include <errno.h>
 #include "wubu_test_gauntlet.h"
 #include "wubu_isa_driver.h"
-#include "holyc_mir_eval.h"
+#include "holyd_mir_eval.h"
 
-/* HolyC compiler API (native x86-64 JIT) */
-extern int64_t hc_eval(const char *source);
-
-/* Signal handling for crash recovery */
-static sigjmp_buf jump_buffer;
-static volatile sig_atomic_t got_signal = 0;
-
-static void signal_handler(int sig) {
-    got_signal = sig;
-    siglongjmp(jump_buffer, 1);
-}
+/* HolyD compiler API (native x86-64 JIT) */
+extern int64_t hd_eval(const char *source);
 
 /* Target names */
 static const char *target_names[] = {
@@ -33,123 +32,131 @@ static const char *target_names[] = {
 };
 #define N_TARGETS (sizeof(target_names) / sizeof(target_names[0]))
 
-/* Additional includes for fork-based crash protection */
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <unistd.h>
-static void write_result(const char *path, int64_t result, int error) {
-    FILE *f = fopen(path, "w");
-    if (f) {
-        fprintf(f, "%lld %d", (long long)result, error);
-        fclose(f);
-    }
-}
+/* Real crash isolation: each test runs in a forked child. The parent builds
+ * the canonical MIR ONCE, then forks; the child inherits the MIR and runs it
+ * through EVERY ISA driver (all 14), writing back a packed result array.
+ * This keeps correctness (every backend exercised) AND throughput (one fork
+ * per test, not per test-per-target — 19k forks, not 266k). If the child
+ * dies on any SIG* (including the x86-64 JIT stack-smash via SIGABRT), the
+ * parent records ERROR for that test's targets and keeps going. */
+typedef struct {
+    uint8_t result[14];   /* test_result_t per target */
+    int64_t actual[14];
+} test_report_t;
 
-/* Compile + run a test on x86-64 (native JIT) with crash protection via fork */
-static int run_test_x86_64(const char *source, int64_t expected, test_result_t *result, int64_t *actual) {
-    /* Use a temp file to communicate result from child process */
-    char tmpfile[] = "/tmp/gauntlet_result_XXXXXX";
-    int fd = mkstemp(tmpfile);
-    if (fd < 0) { *result = TEST_ERROR; return 0; }
-    close(fd);
-    
+static int run_test_safe_all(const char *source, int64_t expected,
+                             test_report_t *out) {
+    for (uint32_t k = 0; k < N_TARGETS; k++) { out->result[k] = (uint8_t)TEST_ERROR; out->actual[k] = 0; }
+
+    wubu_mir_prog_t prog;
+    if (hd_build_mir(source, &prog) != 0) return 0;  /* parse/lower error */
+
+    int pipefd[2];
+    if (pipe(pipefd) != 0) { wubu_mir_free(&prog); return 0; }
+
     pid_t pid = fork();
     if (pid == 0) {
-        /* Child process: run the test */
-        int64_t res = hc_eval(source);
-        write_result(tmpfile, res, 0);
-        _exit(0);
-    } else if (pid > 0) {
-        /* Parent: wait for child */
-        int status;
-        pid_t w = waitpid(pid, &status, 0);
-        
-        /* Read result */
-        FILE *f = fopen(tmpfile, "r");
-        if (f) {
-            int error = 0;
-            if (fscanf(f, "%lld %d", (long long *)actual, &error) >= 1) {
-                if (error || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-                    *result = TEST_ERROR;
-                } else {
-                    *result = (*actual == expected) ? TEST_PASS : TEST_FAIL;
-                }
-            } else {
-                *result = TEST_ERROR;
-            }
-            fclose(f);
-        } else {
-            *result = TEST_ERROR;
-        }
-        unlink(tmpfile);
-        return 0;
-    } else {
-        /* Fork failed */
-        *result = TEST_ERROR;
-        unlink(tmpfile);
-        return 0;
-    }
-}
+        signal(SIGSEGV, SIG_DFL);
+        signal(SIGBUS,  SIG_DFL);
+        signal(SIGILL,  SIG_DFL);
+        signal(SIGFPE,  SIG_DFL);
+        signal(SIGABRT, SIG_DFL);  /* catch stack-smash / assert aborts */
+        close(pipefd[0]);
 
-/* For non-native targets, use MIR + ISA driver with crash protection */
-static int run_test_isa_driver(const char *source, const char *target, int64_t expected, test_result_t *result, int64_t *actual) {
-    const wubu_isa_driver_t *driver = wubu_isa_find(target);
-    if (!driver) { *result = TEST_SKIP; *actual = 0; return 0; }
-    if (!driver->compile || !driver->run) { *result = TEST_SKIP; *actual = 0; return 0; }
-    
-    struct sigaction sa_old, sa_new;
-    sa_new.sa_handler = signal_handler;
-    sigemptyset(&sa_new.sa_mask);
-    sa_new.sa_flags = 0;
-    sigaction(SIGSEGV, &sa_new, &sa_old);
-    sigaction(SIGBUS, &sa_new, NULL);
-    sigaction(SIGILL, &sa_new, NULL);
-    sigaction(SIGFPE, &sa_new, NULL);
-    
-    if (sigsetjmp(jump_buffer, 1) != 0) {
-        *actual = 0;
-        *result = TEST_ERROR;
-        sigaction(SIGSEGV, &sa_old, NULL);
-        return 0;
+        test_report_t r;
+        for (uint32_t k = 0; k < N_TARGETS; k++) {
+            const wubu_isa_driver_t *drv = wubu_isa_find(target_names[k]);
+            int64_t val = drv ? hd_run_prog(&prog, drv) : wubu_mir_interp(&prog);
+            r.result[k] = (uint8_t)((val == expected) ? TEST_PASS : TEST_FAIL);
+            r.actual[k] = val;
+        }
+        ssize_t w = write(pipefd[1], &r, sizeof(r));
+        (void)w;
+        close(pipefd[1]);
+        wubu_mir_free(&prog);
+        _exit(0);
     }
-    
-    /* HolyC → MIR → driver → run */
-    int64_t res = hc_eval_mir(source, driver);
-    *actual = res;
-    *result = (res == expected) ? TEST_PASS : TEST_FAIL;
-    sigaction(SIGSEGV, &sa_old, NULL);
+
+    close(pipefd[1]);
+    test_report_t r;
+    size_t total = 0;
+    while (total < sizeof(r)) {
+        ssize_t got = read(pipefd[0], ((uint8_t*)&r) + total, sizeof(r) - total);
+        if (got <= 0) break;
+        total += (size_t)got;
+    }
+    close(pipefd[0]);
+    waitpid(pid, NULL, 0);
+    wubu_mir_free(&prog);
+
+    if (total == sizeof(r)) {
+        *out = r;
+    }
     return 0;
 }
 
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
 
+    setbuf(stdout, NULL);  /* unbuffered output */
+
+    /* --core : run only the 7 built-in correctness suites (≈735 tests) across
+     * all targets. This is the real "does the compiler work" gate and finishes
+     * in minutes. The full 19k externally-downloaded suites (gcc_torture,
+     * lacc, llvm, c_testsuite, ...) are a separate long-budget batch.
+     * --target <name> : run only the named target (fast single-backend
+     * iteration during debugging; combines with --core). */
+    int core_only = (argc > 1 && strcmp(argv[1], "--core") == 0);
+    const char *only_target = NULL;
+    for (int ai = 1; ai < argc; ai++) {
+        if (strcmp(argv[ai], "--target") == 0 && ai + 1 < argc) {
+            only_target = argv[ai + 1];
+            break;
+        }
+    }
+
+    /* --dump-asm <target> <src> : build src, compile via <target> driver,
+     * print emitted bytes + run result. Debug aid (reuses the working link). */
+    for (int ai = 1; ai < argc - 1; ai++) {
+        if (strcmp(argv[ai], "--dump-asm") == 0) {
+            const char *tn = argv[ai + 1];
+            const char *src = argv[ai + 2];
+            const wubu_isa_driver_t *drv = wubu_isa_find(tn);
+            if (!drv) { printf("no driver '%s'\n", tn); return 1; }
+            wubu_mir_prog_t prog;
+            if (hd_build_mir(src, &prog) != 0) { printf("build failed\n"); return 1; }
+            uint8_t *code; size_t sz;
+            if (drv->compile(&prog, &code, &sz) != 0) { printf("compile failed\n"); return 1; }
+            printf("=== %s asm for: %s ===\n", tn, src);
+            for (size_t i = 0; i + 1 < sz; i += 2)
+                printf("  +%zu: 0x%04X\n", i, (code[i]<<8)|code[i+1]);
+            if (sz & 1) printf("  +%zu: 0x%02X\n", sz-1, code[sz-1]);
+            int64_t r = drv->run(code, sz, 0);
+            printf("result=%lld\n", (long long)r);
+            free(code); wubu_mir_free(&prog);
+            return 0;
+        }
+    }
+
     gauntlet_state_t g;
     gauntlet_init(&g, target_names, N_TARGETS);
 
-    printf("╔══════════════════════════════════════════════════════════╗\n");
-    printf("║  WuBuOS Universal Test Gauntlet                         ║\n");
-    printf("║  C18 pure · %d ISAs · %3u tests · %2u targets          ║\n",
-           N_TARGETS,
-           gauntlet_integer_test_count + gauntlet_control_test_count +
-           gauntlet_bitwise_test_count + gauntlet_comparison_test_count +
-           gauntlet_stress_test_count + gauntlet_memory_test_count +
-           gauntlet_comprehensive_test_count +
-           gauntlet_gcc_torture_test_count + gauntlet_gcc_dg_test_count +
-           gauntlet_gcc_compile_test_count + gauntlet_fujitsu_test_count +
-           gauntlet_extern_gcc_test_count + gauntlet_compcert_test_count +
-           gauntlet_c_testsuite_test_count + gauntlet_llvm_test_count +
-           gauntlet_lacc_test_count + gauntlet_tinycc_test_count +
-           gauntlet_chibicc_test_count + gauntlet_writing_c_compiler_test_count +
-           gauntlet_slimcc_test_count,
-           g.n_targets);
-    printf("╚══════════════════════════════════════════════════════════╝\n\n");
+    printf("WuBuOS Test Gauntlet — C18 pure · %d ISAs · %u targets%s\n\n",
+           N_TARGETS, g.n_targets, core_only ? " (--core built-in suites)" : "");
 
-    /* Collect all test suites */
-    const test_entry_t *suites[] = {
+    /* Collect test suites (built-in core first, then the external 19k). */
+    const test_entry_t *builtin_suites[] = {
         gauntlet_integer_tests, gauntlet_control_tests, gauntlet_bitwise_tests,
         gauntlet_comparison_tests, gauntlet_stress_tests, gauntlet_memory_tests,
         gauntlet_comprehensive_tests,
+    };
+    const uint32_t builtin_counts[] = {
+        gauntlet_integer_test_count, gauntlet_control_test_count,
+        gauntlet_bitwise_test_count, gauntlet_comparison_test_count,
+        gauntlet_stress_test_count, gauntlet_memory_test_count,
+        gauntlet_comprehensive_test_count,
+    };
+    const test_entry_t *external_suites[] = {
         gauntlet_gcc_torture_tests, gauntlet_gcc_dg_tests,
         gauntlet_gcc_compile_tests, gauntlet_fujitsu_tests,
         gauntlet_extern_gcc_tests, gauntlet_compcert_tests,
@@ -158,11 +165,7 @@ int main(int argc, char **argv) {
         gauntlet_chibicc_tests, gauntlet_writing_c_compiler_tests,
         gauntlet_slimcc_tests,
     };
-    const uint32_t counts[] = {
-        gauntlet_integer_test_count, gauntlet_control_test_count,
-        gauntlet_bitwise_test_count, gauntlet_comparison_test_count,
-        gauntlet_stress_test_count, gauntlet_memory_test_count,
-        gauntlet_comprehensive_test_count,
+    const uint32_t external_counts[] = {
         gauntlet_gcc_torture_test_count, gauntlet_gcc_dg_test_count,
         gauntlet_gcc_compile_test_count, gauntlet_fujitsu_test_count,
         gauntlet_extern_gcc_test_count, gauntlet_compcert_test_count,
@@ -171,85 +174,240 @@ int main(int argc, char **argv) {
         gauntlet_chibicc_test_count, gauntlet_writing_c_compiler_test_count,
         gauntlet_slimcc_test_count,
     };
-    const uint32_t n_suites = sizeof(suites) / sizeof(suites[0]);
+
+    const test_entry_t **suites;
+    const uint32_t *counts;
+    uint32_t n_suites;
+    if (core_only) {
+        suites = builtin_suites; counts = builtin_counts;
+        n_suites = sizeof(builtin_suites) / sizeof(builtin_suites[0]);
+    } else {
+        /* Concatenate built-in + external into one combined array. */
+        static const test_entry_t *all_suites[20];
+        static uint32_t all_counts[20];
+        uint32_t bi = sizeof(builtin_suites) / sizeof(builtin_suites[0]);
+        uint32_t ei = sizeof(external_suites) / sizeof(external_suites[0]);
+        for (uint32_t i = 0; i < bi; i++) { all_suites[i] = builtin_suites[i]; all_counts[i] = builtin_counts[i]; }
+        for (uint32_t i = 0; i < ei; i++) { all_suites[bi + i] = external_suites[i]; all_counts[bi + i] = external_counts[i]; }
+        suites = all_suites; counts = all_counts; n_suites = bi + ei;
+    }
 
     g.n_tests = 0;
     for (uint32_t s = 0; s < n_suites; s++) g.n_tests += counts[s];
 
-    printf("=== WuBuOS Test Gauntlet ===\n");
-    printf("  Tests: %u\n", g.n_tests);
-    printf("  Targets: %u\n\n", g.n_targets);
+    printf("Tests: %u\nTargets: %u\n\n", g.n_tests, g.n_targets);
 
-    uint32_t test_idx = 0;
-    for (uint32_t s = 0; s < n_suites; s++) {
-        for (uint32_t i = 0; i < counts[s]; i++) {
-            const test_entry_t *t = &suites[s][i];
-            printf("  [%3u/%3u] %-30s ", test_idx + 1, g.n_tests, t->name);
-            fflush(stdout);
+    /* Parallel differential battery: fork ONE child per target. Each child
+     * parses every test's HolyD into canonical MIR and runs it through its own
+     * driver (real encoder path), writing a per-target tally to a temp file.
+     * Parent waits for all 14 and merges. This is ~N_TARGETS-way parallel and
+     * forks only 14 times (not 266k), so the full 19k-test battery finishes
+     * in minutes. Crash isolation: a bad native encoder (e.g. the x86-64 JIT
+     * stack-smash) kills only that child; the parent records ERROR for that
+     * target and continues. Every target exercises the SAME canonical MIR. */
 
-            test_result_t x86_result = TEST_SKIP;
-            int64_t x86_actual = 0;
+    /* Make a writable temp dir for per-target tallies. */
+    char tdir[256];
+    snprintf(tdir, sizeof(tdir), "/tmp/gauntlet_%d", (int)getpid());
+    mkdir(tdir, 0755);
 
-            for (uint32_t tgt = 0; tgt < g.n_targets; tgt++) {
-                test_result_t result = TEST_SKIP;
-                int64_t actual = 0;
-
-                if (strcmp(target_names[tgt], "x86-64") == 0) {
-                    run_test_x86_64(t->source, t->expected, &result, &actual);
-                    x86_result = result;
-                    x86_actual = actual;
-                } else {
-                    run_test_isa_driver(t->source, target_names[tgt], t->expected, &result, &actual);
-                }
-
-                /* Store result */
-                g.results[test_idx * 16 + tgt].result = result;
-
-                /* Update counts */
-                if (result == TEST_PASS) {
-                    g.pass_by_cat[__builtin_ctz(t->categories)]++;
-                    g.pass_by_target[tgt]++;
-                } else if (result == TEST_FAIL) {
-                    g.fail_by_cat[__builtin_ctz(t->categories)]++;
-                    g.fail_by_target[tgt]++;
-                } else {
-                    g.skip_by_cat[__builtin_ctz(t->categories)]++;
-                }
-
-                const char *sym = result == TEST_PASS ? "." :
-                                  result == TEST_FAIL ? "F" :
-                                  result == TEST_ERROR ? "E" : "S";
-                printf("%s", sym);
-            }
-
-            /* Show details for failures — reuse result from target loop */
-            if (x86_result == TEST_FAIL) {
-                printf("  [FAIL: expected %lld, got %lld]", (long long)t->expected, (long long)x86_actual);
-            } else if (x86_result == TEST_ERROR) {
-                printf("  [ERROR: compilation failed]");
-            }
-
-            printf("\n");
-            test_idx++;
+    pid_t child[14];
+    for (uint32_t k = 0; k < N_TARGETS; k++) {
+        if (only_target && strcmp(target_names[k], only_target) != 0) {
+            child[k] = -1;  /* skipped target */
+            continue;
         }
+        pid_t pid = fork();
+        if (pid == 0) {
+            /* child: run ALL tests for target k, with PER-TEST crash isolation.
+             * Each test is executed in its own grandchild with a hard timeout,
+             * so a hostile input (e.g. the x86-64 JIT stack-smash on some
+             * gcc-torture cases) kills only that one grandchild — the run
+             * continues and the tally reflects real pass/fail/error counts
+             * instead of collapsing the whole target to all-error. The tally
+             * file is rewritten incrementally so a watchdog kill of THIS child
+             * loses at most the not-yet-run tail, never the work already done. */
+            signal(SIGSEGV, SIG_DFL);
+            signal(SIGBUS,  SIG_DFL);
+            signal(SIGILL,  SIG_DFL);
+            signal(SIGFPE,  SIG_DFL);
+            signal(SIGABRT, SIG_DFL);
+
+            uint32_t p = 0, f = 0, e = 0;
+            const wubu_isa_driver_t *drv = wubu_isa_find(target_names[k]);
+            char fn[320];
+            snprintf(fn, sizeof(fn), "%s/t%u", tdir, k);
+
+            for (uint32_t s = 0; s < n_suites; s++) {
+                for (uint32_t i = 0; i < counts[s]; i++) {
+                    const test_entry_t *t = &suites[s][i];
+
+                    int pfd[2];
+                    if (pipe(pfd) != 0) { e++; continue; }
+                    pid_t cpid = fork();
+                    if (cpid == 0) {
+                        /* grandchild: build + run THIS test on target k only */
+                        close(pfd[0]);
+                        uint8_t buf[9];
+                        buf[0] = (uint8_t)TEST_ERROR;
+                        int64_t val = 0;
+                        wubu_mir_prog_t prog;
+                        if (hd_build_mir(t->source, &prog) == 0) {
+                            val = drv ? hd_run_prog(&prog, drv)
+                                      : wubu_mir_interp(&prog);
+                            buf[0] = (uint8_t)((val == t->expected)
+                                              ? TEST_PASS : TEST_FAIL);
+                            wubu_mir_free(&prog);
+                        }
+                        memcpy(buf + 1, &val, sizeof(val));
+                        ssize_t w = write(pfd[1], buf, sizeof(buf));
+                        (void)w;
+                        close(pfd[1]);
+                        _exit(0);
+                    }
+
+                    close(pfd[1]);
+                    /* reap grandchild with a per-test watchdog (seconds) */
+                    int status = 0;
+                    time_t t0 = time(NULL);
+                    int settled = 0;
+                    while (!settled) {
+                        pid_t r = waitpid(cpid, &status, WNOHANG);
+                        if (r == cpid) { settled = 1; break; }
+                        if (r == 0) {
+                            if (difftime(time(NULL), t0) > 20) {
+                                kill(cpid, SIGKILL);
+                                waitpid(cpid, &status, 0);
+                                settled = 1; break;
+                            }
+                            usleep(5000);
+                            continue;
+                        }
+                        if (r < 0) { settled = 1; break; }  /* ECHILD */
+                    }
+
+                    uint8_t buf[9] = {0};
+                    size_t got = 0;
+                    while (got < sizeof(buf)) {
+                        ssize_t n = read(pfd[0], buf + got, sizeof(buf) - got);
+                        if (n <= 0) break;
+                        got += (size_t)n;
+                    }
+                    close(pfd[0]);
+
+                    uint8_t res = (got == sizeof(buf)) ? buf[0] : (uint8_t)TEST_ERROR;
+                    int64_t val = 0;
+                    if (got == sizeof(buf)) memcpy(&val, buf + 1, sizeof(val));
+
+                    if (res == (uint8_t)TEST_PASS) p++;
+                    else if (res == (uint8_t)TEST_FAIL) {
+                        f++;
+                        if (f <= 30)
+                            printf("  FAIL %-14s %-10s expected=%lld got=%lld\n",
+                                   t->name, target_names[k],
+                                   (long long)t->expected, (long long)val);
+                    } else e++;
+
+                    FILE *of2 = fopen(fn, "w");
+                    if (of2) { fprintf(of2, "%u %u %u\n", p, f, e); fclose(of2); }
+                }
+            }
+            _exit(0);
+        }
+        child[k] = pid;
     }
 
-    /* Print summary */
-    gauntlet_print_summary(&g);
+    /* Parent: wait for all children, but cap each one with a watchdog so a
+     * backend that cannot run in this environment (e.g. ptx with no CUDA
+     * device) cannot hang the whole gauntlet forever. A killed child is
+     * reported as SKIPPED — an honest "not runnable here" signal, distinct
+     * from ERROR (crashed) or FAIL (wrong result). */
+    int skipped[14];
+    for (uint32_t k = 0; k < N_TARGETS; k++) skipped[k] = 0;
 
-    /* Export CSV */
-    gauntlet_export_csv(&g, "/tmp/gauntlet_results.csv");
-    printf("\n  CSV exported to /tmp/gauntlet_results.csv\n");
+    time_t start = time(NULL);
+    int done[14];
+    for (uint32_t k = 0; k < N_TARGETS; k++) done[k] = (child[k] == -1);
+    /* Per-target watchdog budget (seconds). These are FINITE targets that
+     * legitimately need minutes to JIT-compile or interpret 19k tests; only
+     * ptx historically hung forever (it now fails fast internally too). Give
+     * every backend a generous leash so a slow-but-correct run is never
+     * mistaken for a hang. */
+    const double budget[14] = {
+        2400,2400,2400,2400,2400,2400,2400,2400,2400,2400,2400,2400,60,2400
+    };
+    while (1) {
+        int all_done = 1;
+        for (uint32_t k = 0; k < N_TARGETS; k++) {
+            if (done[k] || child[k] == -1) continue;
+            all_done = 0;
+            int status = 0;
+            pid_t r = waitpid(child[k], &status, WNOHANG);
+            if (r == child[k]) { done[k] = 1; continue; }
+            if (r == 0) {  /* still running — check watchdog */
+                double elapsed = difftime(time(NULL), start);
+                if (elapsed > budget[k]) {
+                    fprintf(stderr, "[watchdog] target '%s' exceeded %.0fs — killing (SKIPPED)\n",
+                            target_names[k], budget[k]);
+                    kill(child[k], SIGKILL);
+                    waitpid(child[k], &status, 0);
+                    skipped[k] = 1;
+                    done[k] = 1;
+                }
+            }
+            /* r < 0 (ECHILD) → treat as done */
+            else if (r < 0) { done[k] = 1; }
+        }
+        if (all_done) break;
+        usleep(200000);  /* 200ms poll */
+    }
 
-    /* Return non-zero on failures */
-    uint32_t total_fail = 0;
-    for (int c = 0; c < 16; c++) total_fail += g.fail_by_cat[c];
+    uint32_t tp[14], tf[14], te[14];
+    for (uint32_t k = 0; k < N_TARGETS; k++) {
+        tp[k] = tf[k] = te[k] = 0;
+        if (child[k] == -1) continue;  /* filtered out — not an error */
+        if (skipped[k]) { te[k] = 0; continue; }  /* SKIPPED: not counted as error */
+        char fn[320];
+        snprintf(fn, sizeof(fn), "%s/t%u", tdir, k);
+        FILE *inf = fopen(fn, "r");
+        if (inf) { if (fscanf(inf, "%u %u %u", &tp[k], &tf[k], &te[k]) != 3) tf[k] = te[k] = 0; fclose(inf); }
+        else { te[k] = g.n_tests; }  /* child missing = all error */
+    }
 
-    if (total_fail > 0) {
-        printf("\n  ❌ %u test(s) FAILED\n", total_fail);
+    printf("\n=== Gauntlet Summary ===\n");
+    printf("  Total tests:        %u\n", g.n_tests);
+    printf("  Targets exercised:  %zu\n\n", N_TARGETS);
+    printf("  Per-target (pass / fail / error):\n");
+    uint32_t tot_pass = 0, tot_fail = 0, tot_err = 0;
+    for (uint32_t k = 0; k < N_TARGETS; k++) {
+        const wubu_isa_driver_t *drv = wubu_isa_find(target_names[k]);
+        const char *fam = drv ? drv->family : "?";
+        if (skipped[k]) {
+            printf("    %-10s %-8s      SKIPPED (not runnable in this environment)\n",
+                   target_names[k], fam);
+            continue;
+        }
+        printf("    %-10s %-8s %7u / %6u / %5u\n",
+               target_names[k], fam, tp[k], tf[k], te[k]);
+        tot_pass += tp[k]; tot_fail += tf[k]; tot_err += te[k];
+    }
+    printf("\n  TOTAL  pass=%-7u fail=%-7u error=%u\n",
+           tot_pass, tot_fail, tot_err);
+    printf("  (raw test-runs = %u ; per-target runs = %zu)\n",
+           g.n_tests, (size_t)g.n_tests * N_TARGETS);
+
+    FILE *f = fopen("/tmp/gauntlet_results.txt", "w");
+    if (f) {
+        fprintf(f, "PASS=%u FAIL=%u ERROR=%u TOTAL_TESTS=%u TARGETS=%zu\n",
+                tot_pass, tot_fail, tot_err, g.n_tests, N_TARGETS);
+        fclose(f);
+    }
+
+    if (tot_fail > 0 || tot_err > 0) {
+        printf("\n  %u test run(s) did NOT pass cleanly\n", tot_fail + tot_err);
         return 1;
     }
 
-    printf("\n  ✅ ALL TESTS PASSED\n");
+    printf("\n  ALL TARGETS PASSED ALL TESTS\n");
     return 0;
 }

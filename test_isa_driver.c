@@ -310,7 +310,7 @@ static void test_registry(void)
                    d->exec == WUBU_ISA_NATIVE ? "native" : "interpreted");
         }
     }
-    CHECK(found == 7, "all 7 drivers found");
+    CHECK(found == 13, "all 13 drivers found");
 }
 
 /* Test 12: driver describe */

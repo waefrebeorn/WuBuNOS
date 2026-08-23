@@ -146,6 +146,19 @@ HDType *expr_static_type(HDGen *gen, const HDASTNode *node)
             if (bt && bt->kind == HD_TYPE_PTR && bt->base) return bt->base;
             return NULL;
         }
+        case HD_AST_ADD:
+        case HD_AST_SUB: {
+            /* Pointer arithmetic keeps the pointee type: *(x+1) on int x[]
+             * must load 4 bytes, not 8. If either operand is a pointer or
+             * an array (decayed), the result type is that pointer. */
+            HDType *l = expr_static_type(gen, node->left);
+            HDType *r = expr_static_type(gen, node->right);
+            if (l && (l->kind == HD_TYPE_PTR || l->kind == HD_TYPE_ARRAY) && l->base)
+                return l;
+            if (r && (r->kind == HD_TYPE_PTR || r->kind == HD_TYPE_ARRAY) && r->base)
+                return r;
+            return NULL;
+        }
         case HD_AST_FUNC_CALL: {
             /* Static type of a call = the callee's declared return type.
              * Look up the named function in the function table. This is what
@@ -632,23 +645,30 @@ int gen_expr(HDGen *gen, const HDASTNode *node) {
                     emit_global_load_rax(gen, go);   /* rax = *x */
                     /* Pointer ++ scales by element size; scalar adds 1. */
                     HDType *pt = resolve_var_type(gen, node->child->ident);
-                    if (pt && pt->kind == HD_TYPE_PTR && pt->base)
+                    bool is_ptr3 = (pt && pt->kind == HD_TYPE_PTR && pt->base);
+                    if (is_ptr3)
                         emit_incdec_rax(gen, (int)hd_type_size(pt->base), 1);
-                    else emit_byte(gen, 0x48), emit_byte(gen, 0xFF), emit_byte(gen, 0xC0); /* inc rax */
-                    /* 32-bit overflow truncation */
-                    emit_byte(gen, 0x48); emit_byte(gen, 0x63); emit_byte(gen, 0xC0);
+                    else { emit_byte(gen, 0x48), emit_byte(gen, 0xFF), emit_byte(gen, 0xC0); } /* inc rax */
+                    /* 32-bit overflow truncation -- ints only; a pointer's
+                     * high bits must survive (cdqe would zero-extend eax and
+                     * destroy the address). */
+                    if (!is_ptr3) {
+                            emit_byte(gen, 0x48), emit_byte(gen, 0x63), emit_byte(gen, 0xC0);
+                        }
                     emit_global_store_rax(gen, go);  /* *x = rax */
                 } else {        /* stack local */
                     /* mov rax, [rbp - off] */
                     emit_byte(gen, 0x48); emit_byte(gen, 0x8B); emit_byte(gen, 0x85);
                     emit_dword(gen, (uint32_t)(-(int32_t)off & 0xFFFFFFFF));
                     /* Pointer ++ scales by element size; scalar adds 1. */
-                    HDType *pt = resolve_var_type(gen, node->child->ident);
-                    if (pt && pt->kind == HD_TYPE_PTR && pt->base)
-                        emit_incdec_rax(gen, (int)hd_type_size(pt->base), 1);
-                    else emit_byte(gen, 0x48), emit_byte(gen, 0xFF), emit_byte(gen, 0xC0); /* inc rax */
-                    /* 32-bit overflow truncation */
-                    emit_byte(gen, 0x48); emit_byte(gen, 0x63); emit_byte(gen, 0xC0);
+                    HDType *pt2 = resolve_var_type(gen, node->child->ident);
+                    bool is_ptr4 = (pt2 && pt2->kind == HD_TYPE_PTR && pt2->base);
+                    if (is_ptr4)
+                        emit_incdec_rax(gen, (int)hd_type_size(pt2->base), 1);
+                    else { emit_byte(gen, 0x48), emit_byte(gen, 0xFF), emit_byte(gen, 0xC0); } /* inc rax */
+                    if (!is_ptr4) {
+                            emit_byte(gen, 0x48), emit_byte(gen, 0x63), emit_byte(gen, 0xC0);
+                        }
                     /* mov [rbp - off], rax */
                     emit_byte(gen, 0x48); emit_byte(gen, 0x89); emit_byte(gen, 0x85);
                     emit_dword(gen, (uint32_t)(-(int32_t)off & 0xFFFFFFFF));
@@ -680,23 +700,27 @@ int gen_expr(HDGen *gen, const HDASTNode *node) {
                     emit_global_load_rax(gen, go);   /* rax = *x */
                     /* Pointer -- scales by element size; scalar subtracts 1. */
                     HDType *pt = resolve_var_type(gen, node->child->ident);
-                    if (pt && pt->kind == HD_TYPE_PTR && pt->base)
+                    bool is_ptrd = (pt && pt->kind == HD_TYPE_PTR && pt->base);
+                    if (is_ptrd)
                         emit_incdec_rax(gen, (int)hd_type_size(pt->base), 0);
-                    else emit_byte(gen, 0x48), emit_byte(gen, 0xFF), emit_byte(gen, 0xC8); /* dec rax */
-                    /* 32-bit overflow truncation */
-                    emit_byte(gen, 0x48); emit_byte(gen, 0x63); emit_byte(gen, 0xC0);
+                    else { emit_byte(gen, 0x48), emit_byte(gen, 0xFF), emit_byte(gen, 0xC8); } /* dec rax */
+                    if (!is_ptrd) {
+                        emit_byte(gen, 0x48), emit_byte(gen, 0x63), emit_byte(gen, 0xC0);
+                    }
                     emit_global_store_rax(gen, go);  /* *x = rax */
                 } else {        /* stack local */
                     /* mov rax, [rbp - off] */
                     emit_byte(gen, 0x48); emit_byte(gen, 0x8B); emit_byte(gen, 0x85);
                     emit_dword(gen, (uint32_t)(-(int32_t)off & 0xFFFFFFFF));
                     /* Pointer -- scales by element size; scalar subtracts 1. */
-                    HDType *pt = resolve_var_type(gen, node->child->ident);
-                    if (pt && pt->kind == HD_TYPE_PTR && pt->base)
-                        emit_incdec_rax(gen, (int)hd_type_size(pt->base), 0);
-                    else emit_byte(gen, 0x48), emit_byte(gen, 0xFF), emit_byte(gen, 0xC8); /* dec rax */
-                    /* 32-bit overflow truncation */
-                    emit_byte(gen, 0x48); emit_byte(gen, 0x63); emit_byte(gen, 0xC0);
+                    HDType *pt2 = resolve_var_type(gen, node->child->ident);
+                    bool is_ptrd2 = (pt2 && pt2->kind == HD_TYPE_PTR && pt2->base);
+                    if (is_ptrd2)
+                        emit_incdec_rax(gen, (int)hd_type_size(pt2->base), 0);
+                    else { emit_byte(gen, 0x48), emit_byte(gen, 0xFF), emit_byte(gen, 0xC8); } /* dec rax */
+                    if (!is_ptrd2) {
+                        emit_byte(gen, 0x48), emit_byte(gen, 0x63), emit_byte(gen, 0xC0);
+                    }
                     /* mov [rbp - off], rax */
                     emit_byte(gen, 0x48); emit_byte(gen, 0x89); emit_byte(gen, 0x85);
                     emit_dword(gen, (uint32_t)(-(int32_t)off & 0xFFFFFFFF));
@@ -728,21 +752,27 @@ int gen_expr(HDGen *gen, const HDASTNode *node) {
                     emit_global_load_rax(gen, go);     /* rax = old */
                     emit_mov_rdi_rax(gen);             /* rdi = old */
                     HDType *pt = resolve_var_type(gen, node->child->ident);
-                    if (pt && pt->kind == HD_TYPE_PTR && pt->base)
+                    bool is_ptr = (pt && pt->kind == HD_TYPE_PTR && pt->base);
+                    if (is_ptr)
                         emit_incdec_rax(gen, (int)hd_type_size(pt->base), 1);
-                    else emit_byte(gen, 0x48), emit_byte(gen, 0xFF), emit_byte(gen, 0xC0); /* inc rax */
-                    emit_byte(gen, 0x48); emit_byte(gen, 0x63); emit_byte(gen, 0xC0); /* cdqe */
+                    else { emit_byte(gen, 0x48), emit_byte(gen, 0xFF), emit_byte(gen, 0xC0); } /* inc rax */
+                    if (!is_ptr) {
+                            emit_byte(gen, 0x48); emit_byte(gen, 0x63); emit_byte(gen, 0xC0);
+                        } /* cdqe: int result only */
                     emit_global_store_rax(gen, go);    /* *x = rax (new) */
                     emit_byte(gen, 0x48); emit_byte(gen, 0x89); emit_byte(gen, 0xF8); /* rax = rdi (old) */
                 } else {        /* stack local */
                     emit_byte(gen, 0x48); emit_byte(gen, 0x8B); emit_byte(gen, 0x85);
                     emit_dword(gen, (uint32_t)(-(int32_t)off & 0xFFFFFFFF));
                     emit_mov_rdi_rax(gen);
-                    HDType *pt = resolve_var_type(gen, node->child->ident);
-                    if (pt && pt->kind == HD_TYPE_PTR && pt->base)
-                        emit_incdec_rax(gen, (int)hd_type_size(pt->base), 1);
-                    else emit_byte(gen, 0x48), emit_byte(gen, 0xFF), emit_byte(gen, 0xC0); /* inc rax */
-                    emit_byte(gen, 0x48); emit_byte(gen, 0x63); emit_byte(gen, 0xC0); /* cdqe */
+                    HDType *pt2 = resolve_var_type(gen, node->child->ident);
+                    bool is_ptr2 = (pt2 && pt2->kind == HD_TYPE_PTR && pt2->base);
+                    if (is_ptr2)
+                        emit_incdec_rax(gen, (int)hd_type_size(pt2->base), 1);
+                    else { emit_byte(gen, 0x48), emit_byte(gen, 0xFF), emit_byte(gen, 0xC0); } /* inc rax */
+                    if (!is_ptr2) {
+                        emit_byte(gen, 0x48); emit_byte(gen, 0x63); emit_byte(gen, 0xC0);
+                    } /* cdqe: int result only */
                     emit_byte(gen, 0x48); emit_byte(gen, 0x89); emit_byte(gen, 0x85);
                     emit_dword(gen, (uint32_t)(-(int32_t)off & 0xFFFFFFFF));
                     emit_byte(gen, 0x48); emit_byte(gen, 0x89); emit_byte(gen, 0xF8);
@@ -763,7 +793,9 @@ int gen_expr(HDGen *gen, const HDASTNode *node) {
                 }
                 emit_byte(gen, 0x48); emit_byte(gen, 0x89); emit_byte(gen, 0xC6); /* rsi = rax (old) */
                 emit_byte(gen, 0x48); emit_byte(gen, 0xFF); emit_byte(gen, 0xC0); /* inc rax */
-                emit_byte(gen, 0x48); emit_byte(gen, 0x63); emit_byte(gen, 0xC0); /* cdqe */
+                if (elsz <= 4) {
+                        emit_byte(gen, 0x48), emit_byte(gen, 0x63), emit_byte(gen, 0xC0); /* cdqe: int only */
+                    }
                 if (elsz <= 4) {
                     emit_byte(gen, 0x89); emit_byte(gen, 0x07); /* mov [rdi], eax */
                 } else {
@@ -796,11 +828,15 @@ int gen_expr(HDGen *gen, const HDASTNode *node) {
                     emit_mov_rdi_rax(gen);             /* rdi = old */
                     /* Pointer -- scales by element size; scalar subtracts 1. */
                     HDType *pt = resolve_var_type(gen, node->child->ident);
-                    if (pt && pt->kind == HD_TYPE_PTR && pt->base)
+                    bool is_ptr5 = (pt && pt->kind == HD_TYPE_PTR && pt->base);
+                    if (is_ptr5)
                         emit_incdec_rax(gen, (int)hd_type_size(pt->base), 0);
-                    else emit_byte(gen, 0x48), emit_byte(gen, 0xFF), emit_byte(gen, 0xC8); /* dec rax */
-                    /* 32-bit overflow truncation */
-                    emit_byte(gen, 0x48); emit_byte(gen, 0x63); emit_byte(gen, 0xC0);
+                    else { emit_byte(gen, 0x48), emit_byte(gen, 0xFF), emit_byte(gen, 0xC8); } /* dec rax */
+                    /* 32-bit overflow truncation -- ints only; cdqe would
+                     * destroy a pointer's high bits. */
+                    if (!is_ptr5) {
+                        emit_byte(gen, 0x48); emit_byte(gen, 0x63); emit_byte(gen, 0xC0);
+                    }
                     emit_global_store_rax(gen, go);    /* *x = rax (new) */
                     emit_byte(gen, 0x48); emit_byte(gen, 0x89); emit_byte(gen, 0xF8); /* rax = rdi (old) */
                 } else {        /* stack local */
@@ -810,12 +846,14 @@ int gen_expr(HDGen *gen, const HDASTNode *node) {
                     /* mov rdi, rax (save old value) */
                     emit_mov_rdi_rax(gen);
                     /* Pointer -- scales by element size; scalar subtracts 1. */
-                    HDType *pt = resolve_var_type(gen, node->child->ident);
-                    if (pt && pt->kind == HD_TYPE_PTR && pt->base)
-                        emit_incdec_rax(gen, (int)hd_type_size(pt->base), 0);
-                    else emit_byte(gen, 0x48), emit_byte(gen, 0xFF), emit_byte(gen, 0xC8); /* dec rax */
-                    /* 32-bit overflow truncation */
-                    emit_byte(gen, 0x48); emit_byte(gen, 0x63); emit_byte(gen, 0xC0);
+                    HDType *pt2 = resolve_var_type(gen, node->child->ident);
+                    bool is_ptr6 = (pt2 && pt2->kind == HD_TYPE_PTR && pt2->base);
+                    if (is_ptr6)
+                        emit_incdec_rax(gen, (int)hd_type_size(pt2->base), 0);
+                    else { emit_byte(gen, 0x48), emit_byte(gen, 0xFF), emit_byte(gen, 0xC8); } /* dec rax */
+                    if (!is_ptr6) {
+                        emit_byte(gen, 0x48); emit_byte(gen, 0x63); emit_byte(gen, 0xC0);
+                    }
                     /* mov [rbp - off], rax (store new value) */
                     emit_byte(gen, 0x48); emit_byte(gen, 0x89); emit_byte(gen, 0x85);
                     emit_dword(gen, (uint32_t)(-(int32_t)off & 0xFFFFFFFF));
@@ -836,7 +874,9 @@ int gen_expr(HDGen *gen, const HDASTNode *node) {
                 }
                 emit_byte(gen, 0x48); emit_byte(gen, 0x89); emit_byte(gen, 0xC6); /* rsi = rax (old) */
                 emit_byte(gen, 0x48); emit_byte(gen, 0xFF); emit_byte(gen, 0xC8); /* dec rax */
-                emit_byte(gen, 0x48); emit_byte(gen, 0x63); emit_byte(gen, 0xC0); /* cdqe */
+                if (elsz <= 4) {
+                        emit_byte(gen, 0x48), emit_byte(gen, 0x63), emit_byte(gen, 0xC0); /* cdqe: int only */
+                    }
                 if (elsz <= 4) {
                     emit_byte(gen, 0x89); emit_byte(gen, 0x07);
                 } else {
@@ -855,7 +895,10 @@ int gen_expr(HDGen *gen, const HDASTNode *node) {
              * expr_static_type(DEREF) returns the pointee type. A byte-sized
              * load uses movzx so the upper bits are zero (movzx rax,byte). */
             HDType *pt_ = expr_static_type(gen, node->child);
-            size_t elsz = (pt_ && pt_->kind == HD_TYPE_PTR && pt_->base)
+            /* Pointee size: for a pointer OR an array-decayed expression,
+             * load sized by the base element type. */
+            size_t elsz = (pt_ && (pt_->kind == HD_TYPE_PTR ||
+                                   pt_->kind == HD_TYPE_ARRAY) && pt_->base)
                               ? hd_type_size(pt_->base) : 8;
             if (gen->hedge_loads)
                 emit_prefetch_rax(gen);

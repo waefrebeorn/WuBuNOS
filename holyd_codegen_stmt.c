@@ -278,7 +278,7 @@ int gen_stmt(HDGen *gen, const HDASTNode *node) {
              * evals). Inside a function body it's a stack-local. Note emit_prologue()
              * runs before gen_stmt for module evals, so has_prologue is unreliable
              * here — use in_function to tell them apart. */
-            bool is_module_level = !gen->in_function;
+            bool is_module_level = !gen->in_function || gen->module_scope;
            
             if (is_module_level) {
                 /* Top-level variable: store in data section as global. Always
@@ -433,7 +433,6 @@ int gen_stmt(HDGen *gen, const HDASTNode *node) {
                          * loads get fixed up against the shared data base). */
                         {
                             HDSymTab keep = gen->symbols;
-                            for (int i = 0; i < keep.n_locals; i++)
                             memset(&gen->symbols, 0, sizeof(HDSymTab));
                             for (int i = 0; i < keep.n_locals; i++)
                                 if (keep.locals[i].stack_offset < 0 &&
@@ -445,6 +444,7 @@ int gen_stmt(HDGen *gen, const HDASTNode *node) {
                         strncpy(gen->current_function, node->ident, HD_MAX_IDENT_LEN - 1);
                         gen->current_function[HD_MAX_IDENT_LEN - 1] = '\0';
                         gen->n_self_call_patches = 0;
+                        gen->module_scope = false;  /* body vars are locals again */
            
                         emit_prologue(gen);
            

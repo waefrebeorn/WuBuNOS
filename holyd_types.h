@@ -385,6 +385,9 @@ struct HDGen {
     char error[256];
     bool has_prologue;   /* set once emit_prologue() has built a stack frame */
     bool in_function;    /* true while emitting a function body (vs module-level) */
+    bool module_scope;   /* true when top-level eval block: VAR_DECLs are globals
+                          * (data section), so functions declared later can
+                          * reference them and survive the FUNC_DECL keep-filter. */
     /* Tailslayer DRAM-refresh hedge: when true, every memory load the JIT
      * emits is preceded by a software prefetch (`prefetchnta`) so the DRAM
      * read is primed ahead of the actual load, hiding the periodic tREFI
