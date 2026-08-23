@@ -80,7 +80,20 @@ typedef enum {
     MIR_FEQ,           /* dst = (f32(a) == f32(b)) */
     MIR_FNE,           /* dst = (f32(a) != f32(b)) */
     MIR_FLT,           /* dst = (f32(a) <  f32(b)) */
-    MIR_FLE            /* dst = (f32(a) <= f32(b)) */
+    MIR_FLE,           /* dst = (f32(a) <= f32(b)) */
+    /* f64 (double): bits travel in the full int64 register file */
+    MIR_DADD,          /* dst = f64(a) + f64(b) */
+    MIR_DSUB,          /* dst = f64(a) - f64(b) */
+    MIR_DMUL,          /* dst = f64(a) * f64(b) */
+    MIR_DDIV,          /* dst = f64(a) / f64(b) */
+    MIR_DNEG,          /* dst = -f64(a) */
+    MIR_DITOF,         /* dst = (f64)a */
+    MIR_DTOI,          /* dst = (int)f64(a) */
+    MIR_F32_TO_F64,    /* dst = (f64)f32(a)  (exact) */
+    MIR_F64_TO_F32,    /* dst = (f32)f64(a)  (RNE) */
+    /* bfloat16: the AGI tensor dtype. bf16 travels as uint16 in low bits. */
+    MIR_BF16_TO_F32,   /* dst = widen_bf16(a)   (exact) */
+    MIR_F32_TO_BF16    /* dst = narrow_f32(a)   (RNE) */
 } wubu_mir_op_t;
 
 #define MIR_MAX_FUNCTIONS 256

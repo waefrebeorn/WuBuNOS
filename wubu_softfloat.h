@@ -68,4 +68,9 @@ static inline double wubu_sf_f64_to_host(uint64_t u) {
     union { double d; uint64_t u; } c; c.u = u; return c.d;
 }
 
+/* bfloat16: the tensor-core dtype, the top 16 bits of f32. Conversion is
+ * round-to-nearest-even on the low 16 bits (NaN stays NaN). */
+uint32_t wubu_sf_bf16_to_f32(uint16_t h);
+uint16_t wubu_sf_f32_to_bf16(uint32_t a);
+
 #endif /* WUBU_SOFTFLOAT_H */

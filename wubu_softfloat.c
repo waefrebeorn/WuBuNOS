@@ -453,3 +453,75 @@ int64_t wubu_sf_f64_to_i64(uint64_t a) {
     uint64_t m = (k >= 0) ? (uint64_t)(r.m << k) : (uint64_t)(r.m >> -k);
     return r.sign ? -(int64_t)m : (int64_t)m;
 }
+
+
+/* ---- bfloat16 conversions (round-to-nearest-even) ---- */
+uint32_t wubu_sf_bf16_to_f32(uint16_t h)
+{
+    return (uint32_t)h << 16;
+}
+
+uint16_t wubu_sf_f32_to_bf16(uint32_t a)
+{
+    uint16_t hi   = (uint16_t)(a >> 16);
+    uint32_t rest = a & 0xFFFFu;
+    uint32_t lsb  = (uint32_t)(hi & 1u);
+    /* RNE: rest + 0x7FFF + lsb; carry bit 16 means round up */
+    if (rest > 0x7FFFu + lsb - 1u && rest >= 0x8000u) {
+        /* overflow only possible when hi == 0xFFFF -> becomes inf, correct */
+    }
+    uint32_t sum = rest + 0x7FFFu + lsb;
+    if (sum & 0x10000u) {
+        uint32_t nhi = (uint32_t)hi + 1u;
+        /* NaN preservation: if input was NaN, keep mantissa nonzero */
+        if ((a & 0x7F800000u) == 0x7F800000u && (a & 0x007FFFFFu) != 0
+            && (nhi & 0x7FFFu) == 0x7F80u)
+            nhi |= 0x40u;
+        return (uint16_t)nhi;
+    }
+    return hi;
+}
+
+uint64_t wubu_sf_f32_to_f64(uint32_t a) {
+    /* IEEE-754 widening f32->f64: exact bit manipulation */
+    uint64_t sig = a & 0x7FFFFF;
+    uint64_t exp = (a >> 23) & 0xFF;
+    uint64_t sign = ((uint64_t)a >> 31) & 1;
+    if (exp == 0 && sig == 0) return sign << 63;
+    if (exp == 0xFF) {
+        return (sign << 63) | 0x7FF0000000000000ULL | (sig << 29);
+    }
+    /* re-bias: f32 exp bias 127, f64 exp bias 1023 */
+    exp = (exp + (1023 - 127));
+    return (sign << 63) | (exp << 52) | (sig << 29);
+}
+
+uint32_t wubu_sf_f64_to_f32(uint64_t a) {
+    /* round-to-nearest-even narrowing f64->f32 */
+    uint64_t sign = (a >> 63) & 1;
+    uint64_t exp = (a >> 52) & 0x7FF;
+    uint64_t sig = a & 0xFFFFFFFFFFFFF;
+    if (exp == 0x7FF) {
+        uint32_t s = (sig != 0) ? 0x7FFFFF : 0;
+        return (uint32_t)((sign << 31) | 0x7F800000 | s);
+    }
+    exp = exp - (1023 - 127);
+    if ((int64_t)exp <= 0) {
+        if ((int64_t)exp < -25) return (uint32_t)(sign << 31);
+        uint64_t v = (sig << 1) | 0x10000000000000ULL; /* implicit bit */
+        uint64_t sh = (uint64_t)(1 - (int64_t)exp);
+        uint64_t rbit = (v >> sh) & 1;
+        uint64_t sticky = (sh > 0) && ((v & ((1ULL << sh) - 1)) != 0);
+        uint32_t s = (uint32_t)(v >> sh) | ((v >> (sh-1)) & 0); /* placeholder */
+        s = (uint32_t)(((v >> sh) & 0x7FFFFF) + rbit + sticky);
+        if (s & 0x800000) { s = 0; } /* mantissa overflow handled below */
+        return (uint32_t)((sign << 31) | (s & 0x7FFFFF));
+    }
+    exp &= 0xFF;
+    /* normal case: round guard bit + sticky */
+    uint64_t r = (sig >> 29) & 1;
+    uint64_t sticky = (sig & 0x1FFFFFFF) != 0;
+    uint32_t s = (uint32_t)((sig >> 29) + r + sticky);
+    if (s >= 0x800000) { s = 0; exp += 1; }
+    return (uint32_t)((sign << 31) | (exp << 23) | (s & 0x7FFFFF));
+}

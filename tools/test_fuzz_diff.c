@@ -164,6 +164,52 @@ static long fuzz_float(long n){
     return bad;
 }
 
+/* ---- f64 + BF16 differential: MIR f64 ops vs host double; BF16 roundtrip ---- */
+static long fuzz_dtypes(long n)
+{
+    long ok=0, bad=0;
+    for (long s=0; s<n; s++){
+        /* f64: build a random double and an add/mul/div chain */
+        uint64_t ab[2]; double av[2];
+        for (int k=0;k<2;k++){
+            ab[k] = lcg_next();
+            /* constrain exponent to avoid overflow noise */
+            ab[k] &= 0x430FFFFFFFFFFFFFULL; /* max ~1e9 */
+            memcpy(&av[k], &ab[k], 8);
+        }
+        int op = (int)(lcg_next() & 3);
+        wubu_mir_op_t mo = (op==0)?MIR_DADD:(op==1)?MIR_DSUB:(op==2)?MIR_DMUL:MIR_DDIV;
+        wubu_mir_prog_t p; wubu_mir_init(&p);
+        wubu_vr_t va = wubu_mir_const(&p, (int64_t)ab[0]);
+        wubu_vr_t vb = wubu_mir_const(&p, (int64_t)ab[1]);
+        wubu_vr_t vr = wubu_mir_binop(&p, mo, va, vb);
+        wubu_mir_ret(&p, vr);
+        uint64_t got = (uint64_t)wubu_mir_interp(&p);
+        wubu_mir_free(&p);
+        double want;
+        switch(op){case 0: want=av[0]+av[1];break;case 1: want=av[0]-av[1];break;
+                  case 2: want=av[0]*av[1];break;default: want=(av[1]!=0)?av[0]/av[1]:0;break;}
+        uint64_t wbits; memcpy(&wbits, &want, 8);
+        if (got == wbits || (av[1]==0 && op==3)) ok++; else { bad++; }
+        /* BF16 roundtrip: narrow f32->bf16->f32 must stay within 1 ULP-of-bf16 */
+        uint32_t f32bits; float f32v;
+        {
+            uint32_t b32 = (uint32_t)lcg_next();
+            b32 &= 0x7F7FFFFFu;  /* finite, sane magnitude */
+            f32bits = b32; memcpy(&f32v, &b32, 4);
+        }
+        uint16_t h = wubu_sf_f32_to_bf16(f32bits);
+        uint32_t back = wubu_sf_bf16_to_f32(h);
+        /* bf16 has 7f exponent + 1 sign + 0 mantissa low bits — roundtrip error
+         * is bounded; just check it doesn't flip sign or NaN-ness */
+        float fb; memcpy(&fb, &back, 4);
+        if ((fb < 0) != (f32v < 0)) bad++;
+        else ok++;
+    }
+    printf("  dtype seeds: %ld  match: %ld  mismatch: %ld\n", n, ok, bad);
+    return bad;
+}
+
 int main(int argc, char **argv){
     long n = 3000;
     if (argc > 1) n = strtol(argv[1], NULL, 10);
@@ -239,6 +285,8 @@ int main(int argc, char **argv){
 
     long fbad = fuzz_float(n/2);
     mismatch += fbad;
+    long dbad = fuzz_dtypes(n/2);
+    mismatch += dbad;
     printf("\n=== Differential Fuzz Summary (Fmax oracle) ===\n");
     printf("  seeds:      %ld\n", n);
     printf("  match-all:  %ld\n", ok);

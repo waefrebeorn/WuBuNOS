@@ -230,6 +230,17 @@ static const char *op_name(wubu_mir_op_t op)
     case MIR_ULE:   return "ule";
     case MIR_UGT:   return "ugt";
     case MIR_UGE:   return "uge";
+    case MIR_DADD:  return "dadd";
+    case MIR_DSUB:  return "dsub";
+    case MIR_DMUL:  return "dmul";
+    case MIR_DDIV:  return "ddiv";
+    case MIR_DNEG:  return "dneg";
+    case MIR_DITOF: return "ditof";
+    case MIR_DTOI:  return "dtoi";
+    case MIR_F32_TO_F64: return "f32to64";
+    case MIR_F64_TO_F32: return "f64to32";
+    case MIR_BF16_TO_F32: return "bf16to32";
+    case MIR_F32_TO_BF16: return "32tobf16";
     default:        return "?";
     }
 }
