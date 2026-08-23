@@ -14,15 +14,15 @@
  * Usage:  mir_driver_test   (runs the full battery on all drivers)
  *         mir_driver_test <expr> <expected>  (one expression)
  *
- * C11, self-contained. Links holyc (for the AST), wubu_mir, and all
+ * C11, self-contained. Links holyd (for the AST), wubu_mir, and all
  * drivers + interpreters.
  */
-#include "holyc.h"
+#include "holyd.h"
 #include "wubu_mir.h"
 #include "wubu_mir_lower.h"
 #include "wubu_isa_driver.h"
-#include "holyc_lexer.h"
-#include "holyc_parser.h"
+#include "holyd_lexer.h"
+#include "holyd_parser.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -35,12 +35,12 @@ static int run_one(const char *expr, int64_t expected)
 {
     total++;
 
-    HCLexer lex;
-    hc_lex_init(&lex, expr);
+    HDLexer lex;
+    hd_lex_init(&lex, expr);
     if (lex.has_error) { printf("  FAIL parse: %s\n", expr); failures++; return 1; }
-    HCParser parse;
-    hc_parse_init(&parse, &lex);
-    HCASTNode *ast = hc_parse_expr(&parse);
+    HDParser parse;
+    hd_parse_init(&parse, &lex);
+    HDASTNode *ast = hd_parse_expr(&parse);
     if (!ast || parse.has_error) {
         printf("  FAIL parse: %s\n", expr);
         failures++;
@@ -99,7 +99,7 @@ static int run_one(const char *expr, int64_t expected)
     }
 
     wubu_mir_free(&prog);
-    hc_ast_free(ast);
+    hd_ast_free(ast);
     return ok ? 0 : 1;
 }
 

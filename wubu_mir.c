@@ -48,6 +48,17 @@ wubu_vr_t wubu_mir_const(wubu_mir_prog_t *p, int64_t imm)
     return i->dst;
 }
 
+/* Like wubu_mir_const but forces the destination vr to `dst` (call convention). */
+wubu_vr_t wubu_mir_const_to(wubu_mir_prog_t *p, wubu_vr_t dst, int64_t imm)
+{
+    wubu_mir_instr_t *i = emit(p);
+    if (!i) return 0;
+    i->op = MIR_CONST;
+    i->dst = dst;
+    i->imm = imm;
+    return dst;
+}
+
 wubu_vr_t wubu_mir_binop(wubu_mir_prog_t *p, wubu_mir_op_t op,
                          wubu_vr_t a, wubu_vr_t b)
 {
@@ -160,6 +171,17 @@ void wubu_mir_store(wubu_mir_prog_t *p, wubu_vr_t addr, wubu_vr_t val)
 void wubu_mir_set_n_args(wubu_mir_prog_t *p, uint32_t n_args)
 {
     if (p) p->n_args = n_args;
+}
+
+/* Emit a MIR_CALL: transfer control to prog->funcs[func_id]. The caller must
+ * have placed the arguments in v1..vN beforehand. The callee's return value
+ * lands in vr0 (see hd_build_mir / mir_gen_stmt function epilogue). */
+void wubu_mir_call(wubu_mir_prog_t *p, uint32_t func_id)
+{
+    wubu_mir_instr_t *i = emit(p);
+    if (!i) return;
+    i->op = MIR_CALL;
+    i->func_id = func_id;
 }
 
 static const char *op_name(wubu_mir_op_t op)

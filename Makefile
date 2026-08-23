@@ -22,14 +22,14 @@ LDFLAGS = -lm
 
 # MIR mid-level IR + optimizer
 MIR     = wubu_mir.c wubu_mir_opt.c wubu_mir_lower.c wubu_mir_regalloc.c \
-          wubu_mir_interp.c x86_peephole.c
+          wubu_mir_interp.c x86_peephole.c wubu_softfloat.c
 
 # ISA drivers (10 interpreter-based + 2 JIT stubs)
 ISA     = wubu_isa_driver.c wubu_isa_jit_stubs.c \
           wubu_isa_mips.c wubu_isa_m68k.c wubu_isa_riscv.c \
           wubu_isa_8086.c wubu_isa_6502.c wubu_isa_z80.c \
           wubu_isa_8051.c wubu_isa_avr.c wubu_isa_pic.c \
-          wubu_isa_amdgpu.c wubu_isa_ptx.c
+          wubu_isa_amdgpu.c wubu_isa_ptx.c wubu_elf64_cubin.c
 
 # Interpreters (compiler repo)
 INTERP  = wubu_m68k_interp.c wubu_z80_interp.c wubu_8051_interp.c \
@@ -90,9 +90,31 @@ gauntlet: $(FRONT) $(MIR) $(ISA) $(INTERP) $(OS_INTERP) $(JIT_SRC) $(GAUN)
 
 # ---- Run targets ----
 
-test: test_isa_driver
+test: test_isa_driver test_softfloat test_peephole test_elf_cubin test_fuzz_diff
 	@echo "=== ISA Driver Test ==="
 	./test_isa_driver
+
+# Soft-float runtime test (pure C11 IEEE-754 software float)
+test_softfloat: wubu_softfloat.c wubu_softfloat.h tools/test_softfloat.c
+	$(CC) $(CFLAGS) -I. -o $@ tools/test_softfloat.c wubu_softfloat.c -lm
+	./$@
+
+# ELF64 cubin container writer
+test_elf_cubin: wubu_elf64_cubin.c wubu_elf64_cubin.h tools/test_elf_cubin.c
+	$(CC) $(CFLAGS) -I. -o $@ tools/test_elf_cubin.c wubu_elf64_cubin.c
+	./$@
+
+# x86 peephole self-tests (driven by the superoptimizer discovery loop)
+test_peephole: x86_peephole.c x86_peephole.h tools/test_x86_peephole.c
+	$(CC) $(CFLAGS) -I. -o $@ tools/test_x86_peephole.c x86_peephole.c
+	./$@
+
+# Differential fuzz oracle: random-MIR cross-check across backends
+# (x86-64 JIT, 8086, interpreter) — finds correctness bugs via differential
+# comparison, no per-case oracle needed.
+test_fuzz_diff: tools/test_fuzz_diff.c $(MIR) $(ISA) $(INTERP) $(OS_INTERP)
+	$(CC) $(CFLAGS) -I. -o $@ $^
+	./$@ 3000
 
 clean:
 	rm -f test_isa_driver test_mir_opt gauntlet_runner

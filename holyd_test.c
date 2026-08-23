@@ -1,8 +1,8 @@
 /*
- * holyc_test.c  --  WuBuNOS HolyC Compiler Test Suite
+ * holyd_test.c  --  WuBuNOS HolyD Compiler Test Suite
  */
 
-#include "holyc.h"
+#include "holyd.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,7 +11,7 @@
 static int g_run = 0, g_pass = 0;
 
 #define T(expr, expected) do { \
-    int64_t r = hc_eval(expr); \
+    int64_t r = hd_eval(expr); \
     g_run++; \
     if (r == (int64_t)(expected)) { g_pass++; printf("  ✅ eval %-30s = %lld\n", expr, (long long)r); } \
     else { printf("  ❌ eval %-30s = %lld (expected %lld)\n", expr, (long long)r, (long long)(int64_t)(expected)); } \
@@ -24,126 +24,126 @@ static int g_run = 0, g_pass = 0;
 } while(0)
 
 int main(void) {
-    printf("=== HolyC Compiler Test Suite ===\n\n");
+    printf("=== HolyD Compiler Test Suite ===\n\n");
 
     /* -- Lexer Tests -- */
     printf("[Lexer]\n");
     {
-        HCLexer lex;
-        hc_lex_init(&lex, "42");
-        L(HC_TOK_INT, lex.tok.type, "int literal");
+        HDLexer lex;
+        hd_lex_init(&lex, "42");
+        L(HD_TOK_INT, lex.tok.type, "int literal");
         L(42, (int)lex.tok.int_val, "int value 42");
     }
     {
-        HCLexer lex;
-        hc_lex_init(&lex, "0xFF");
-        L(HC_TOK_INT, lex.tok.type, "hex literal");
+        HDLexer lex;
+        hd_lex_init(&lex, "0xFF");
+        L(HD_TOK_INT, lex.tok.type, "hex literal");
         L(255, (int)lex.tok.int_val, "hex value 0xFF");
     }
     {
-        HCLexer lex;
-        hc_lex_init(&lex, "0b1010");
-        L(HC_TOK_INT, lex.tok.type, "binary literal");
+        HDLexer lex;
+        hd_lex_init(&lex, "0b1010");
+        L(HD_TOK_INT, lex.tok.type, "binary literal");
         L(10, (int)lex.tok.int_val, "binary value 0b1010");
     }
     {
-        HCLexer lex;
-        hc_lex_init(&lex, "3.14");
-        L(HC_TOK_FLOAT, lex.tok.type, "float literal");
+        HDLexer lex;
+        hd_lex_init(&lex, "3.14");
+        L(HD_TOK_FLOAT, lex.tok.type, "float literal");
     }
     {
-        HCLexer lex;
-        hc_lex_init(&lex, "\"hello\"");
-        L(HC_TOK_STRING, lex.tok.type, "string literal");
+        HDLexer lex;
+        hd_lex_init(&lex, "\"hello\"");
+        L(HD_TOK_STRING, lex.tok.type, "string literal");
     }
     {
-        HCLexer lex;
-        hc_lex_init(&lex, "myVar");
-        L(HC_TOK_IDENT, lex.tok.type, "identifier");
+        HDLexer lex;
+        hd_lex_init(&lex, "myVar");
+        L(HD_TOK_IDENT, lex.tok.type, "identifier");
     }
     {
-        HCLexer lex;
-        hc_lex_init(&lex, "I64");
-        L(HC_KW_I64, lex.tok.type, "keyword I64");
+        HDLexer lex;
+        hd_lex_init(&lex, "I64");
+        L(HD_KW_I64, lex.tok.type, "keyword I64");
     }
     {
-        HCLexer lex;
-        hc_lex_init(&lex, "U0");
-        L(HC_KW_U0, lex.tok.type, "keyword U0");
+        HDLexer lex;
+        hd_lex_init(&lex, "U0");
+        L(HD_KW_U0, lex.tok.type, "keyword U0");
     }
     {
-        HCLexer lex;
-        hc_lex_init(&lex, "==");
-        L(HC_TOK_EQ, lex.tok.type, "operator ==");
+        HDLexer lex;
+        hd_lex_init(&lex, "==");
+        L(HD_TOK_EQ, lex.tok.type, "operator ==");
     }
     {
-        HCLexer lex;
-        hc_lex_init(&lex, "->");
-        L(HC_TOK_ARROW, lex.tok.type, "operator ->");
+        HDLexer lex;
+        hd_lex_init(&lex, "->");
+        L(HD_TOK_ARROW, lex.tok.type, "operator ->");
     }
     {
-        HCLexer lex;
-        hc_lex_init(&lex, "++");
-        L(HC_TOK_PLUS_PLUS, lex.tok.type, "operator ++");
+        HDLexer lex;
+        hd_lex_init(&lex, "++");
+        L(HD_TOK_PLUS_PLUS, lex.tok.type, "operator ++");
     }
 
     /* -- Parser Tests -- */
     printf("\n[Parser]\n");
     {
-        HCLexer lex; hc_lex_init(&lex, "42");
-        HCParser p; hc_parse_init(&p, &lex);
-        HCASTNode *ast = hc_parse_expr(&p);
-        L(1, ast && ast->kind == HC_AST_INT_LIT && ast->int_val == 42, "parse int lit");
-        hc_ast_free(ast);
+        HDLexer lex; hd_lex_init(&lex, "42");
+        HDParser p; hd_parse_init(&p, &lex);
+        HDASTNode *ast = hd_parse_expr(&p);
+        L(1, ast && ast->kind == HD_AST_INT_LIT && ast->int_val == 42, "parse int lit");
+        hd_ast_free(ast);
     }
     {
-        HCLexer lex; hc_lex_init(&lex, "3 + 4");
-        HCParser p; hc_parse_init(&p, &lex);
-        HCASTNode *ast = hc_parse_expr(&p);
-        L(1, ast && ast->kind == HC_AST_ADD, "parse add");
-        hc_ast_free(ast);
+        HDLexer lex; hd_lex_init(&lex, "3 + 4");
+        HDParser p; hd_parse_init(&p, &lex);
+        HDASTNode *ast = hd_parse_expr(&p);
+        L(1, ast && ast->kind == HD_AST_ADD, "parse add");
+        hd_ast_free(ast);
     }
     {
-        HCLexer lex; hc_lex_init(&lex, "5 * 6");
-        HCParser p; hc_parse_init(&p, &lex);
-        HCASTNode *ast = hc_parse_expr(&p);
-        L(1, ast && ast->kind == HC_AST_MUL, "parse mul");
-        hc_ast_free(ast);
+        HDLexer lex; hd_lex_init(&lex, "5 * 6");
+        HDParser p; hd_parse_init(&p, &lex);
+        HDASTNode *ast = hd_parse_expr(&p);
+        L(1, ast && ast->kind == HD_AST_MUL, "parse mul");
+        hd_ast_free(ast);
     }
     {
-        HCLexer lex; hc_lex_init(&lex, "2 + 3 * 4");
-        HCParser p; hc_parse_init(&p, &lex);
-        HCASTNode *ast = hc_parse_expr(&p);
-        L(1, ast && ast->kind == HC_AST_ADD && ast->right && ast->right->kind == HC_AST_MUL, "precedence: 2+(3*4)");
-        hc_ast_free(ast);
+        HDLexer lex; hd_lex_init(&lex, "2 + 3 * 4");
+        HDParser p; hd_parse_init(&p, &lex);
+        HDASTNode *ast = hd_parse_expr(&p);
+        L(1, ast && ast->kind == HD_AST_ADD && ast->right && ast->right->kind == HD_AST_MUL, "precedence: 2+(3*4)");
+        hd_ast_free(ast);
     }
     {
-        HCLexer lex; hc_lex_init(&lex, "-5");
-        HCParser p; hc_parse_init(&p, &lex);
-        HCASTNode *ast = hc_parse_expr(&p);
-        L(1, ast && ast->kind == HC_AST_NEG, "parse neg");
-        hc_ast_free(ast);
+        HDLexer lex; hd_lex_init(&lex, "-5");
+        HDParser p; hd_parse_init(&p, &lex);
+        HDASTNode *ast = hd_parse_expr(&p);
+        L(1, ast && ast->kind == HD_AST_NEG, "parse neg");
+        hd_ast_free(ast);
     }
     {
-        HCLexer lex; hc_lex_init(&lex, "3 < 5");
-        HCParser p; hc_parse_init(&p, &lex);
-        HCASTNode *ast = hc_parse_expr(&p);
-        L(1, ast && ast->kind == HC_AST_LT, "parse lt");
-        hc_ast_free(ast);
+        HDLexer lex; hd_lex_init(&lex, "3 < 5");
+        HDParser p; hd_parse_init(&p, &lex);
+        HDASTNode *ast = hd_parse_expr(&p);
+        L(1, ast && ast->kind == HD_AST_LT, "parse lt");
+        hd_ast_free(ast);
     }
     {
-        HCLexer lex; hc_lex_init(&lex, "(2 + 3) * 4");
-        HCParser p; hc_parse_init(&p, &lex);
-        HCASTNode *ast = hc_parse_expr(&p);
-        L(1, ast && ast->kind == HC_AST_MUL && ast->left && ast->left->kind == HC_AST_ADD, "parens precedence");
-        hc_ast_free(ast);
+        HDLexer lex; hd_lex_init(&lex, "(2 + 3) * 4");
+        HDParser p; hd_parse_init(&p, &lex);
+        HDASTNode *ast = hd_parse_expr(&p);
+        L(1, ast && ast->kind == HD_AST_MUL && ast->left && ast->left->kind == HD_AST_ADD, "parens precedence");
+        hd_ast_free(ast);
     }
     {
-        HCLexer lex; hc_lex_init(&lex, "I64 add(I64 a, I64 b) { return a + b; }");
-        HCParser p; hc_parse_init(&p, &lex);
-        HCASTNode *ast = hc_parse_decl(&p);
-        L(1, ast && ast->kind == HC_AST_FUNC_DECL && ast->n_params == 2, "parse func decl");
-        hc_ast_free(ast);
+        HDLexer lex; hd_lex_init(&lex, "I64 add(I64 a, I64 b) { return a + b; }");
+        HDParser p; hd_parse_init(&p, &lex);
+        HDASTNode *ast = hd_parse_decl(&p);
+        L(1, ast && ast->kind == HD_AST_FUNC_DECL && ast->n_params == 2, "parse func decl");
+        hd_ast_free(ast);
     }
 
     /* -- Eval Tests (basic arithmetic + comparison) -- */

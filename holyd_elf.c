@@ -1,5 +1,5 @@
 /*
- * holyc_elf.c  --  ELF64 executable emitter for WuBuNOS HolyC compiler.
+ * holyd_elf.c  --  ELF64 executable emitter for WuBuNOS HolyD compiler.
  *
  * Research-backed approach (Nathan Otterness "Tiny ELF", tchajed/minimal-elf):
  *   - Single PT_LOAD segment covering the ENTIRE file from offset 0
@@ -93,7 +93,7 @@ static const uint8_t trampoline_template[12] = {
 };
 #define TRAMPOLINE_SIZE 12
 
-int hc_write_elf(const char *filename,
+int hd_write_elf(const char *filename,
                  const uint8_t *code, size_t code_size,
                  const uint8_t *data, size_t data_size,
                  const size_t *patch_offsets,

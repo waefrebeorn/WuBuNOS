@@ -36,7 +36,8 @@ extern size_t x86_peephole_optimize(uint8_t *code, size_t n);
 typedef struct {
     uint8_t *code;
     size_t n, cap;
-    size_t frame;                /* stack frame bytes */
+    size_t frame;                /* stack frame bytes (spills + var mem) */
+    int32_t mem_off;             /* byte offset from rbp to mem[0] (var memory) */
     size_t *label_offsets;       /* label id -> byte offset */
     size_t n_labels;
 } x86_emitter_t;
@@ -140,18 +141,29 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
     wubu_reg_assign_t *assign = wubu_mir_alloc_regs(p, 10, &assign_count);
     if (!assign) return -1;
 
-    /* Count spilled vrs to size the frame */
+    /* Count spilled vrs to size the frame.
+     * NOTE: the regalloc stores the spill slot byte-offset in
+     * assign[v].stack (a negative value: -(slot+1)*8) and sets
+     * assign[v].reg = -1. Derive the slot number from .stack. */
     size_t n_spilled = 0;
     for (size_t i = 0; i < assign_count; i++) {
         if (assign[i].reg < 0) {
-            int slot = -assign[i].reg - 1;
-            if ((size_t)slot >= n_spilled) n_spilled = slot + 1;
+            int slot = (-assign[i].stack / 8) - 1;
+            if (slot < 0) slot = 0;
+            if ((size_t)slot >= n_spilled) n_spilled = (size_t)slot + 1;
         }
     }
 
+    /* Variable memory model: MIR programs address a flat int64[] array
+     * (cell 0 reserved as null). Reserve space for it on the stack so
+     * MIR_LOAD/MIR_STORE can mirror the interpreter exactly. */
+    size_t n_mem_cells = (p->total_mem > 0) ? (size_t)(p->total_mem + 1) : 1;
+    size_t mem_bytes = n_mem_cells * 8;
+
     x86_emitter_t e;
     memset(&e, 0, sizeof(e));
-    e.frame = n_spilled * 8;
+    e.frame = n_spilled * 8 + mem_bytes;          /* spills + var mem */
+    e.mem_off = (int32_t)(n_spilled * 8 + mem_bytes); /* offset to mem[0] */
     e.n_labels = p->n_labels;
     e.label_offsets = calloc(e.n_labels, sizeof(size_t));
     for (size_t i = 0; i < e.n_labels; i++) e.label_offsets[i] = (size_t)-1;
@@ -169,7 +181,9 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
 
     /* Helper: get x86 encoding for vr (returns -1 if spilled) */
     #define VR_ENC(vr) ((vr) < (wubu_vr_t)assign_count && assign[(vr)].reg >= 0 ? reg_x86[assign[(vr)].reg] : -1)
-    #define VR_SPILL(vr) ((vr) < (wubu_vr_t)assign_count && assign[(vr)].reg < 0 ? spill_offset(-assign[(vr)].reg - 1) : 0)
+    /* The regalloc stores the spill slot byte-offset in assign[v].stack
+     * (already a negative value: -(slot+1)*8). Use it directly. */
+    #define VR_SPILL(vr) ((vr) < (wubu_vr_t)assign_count && assign[(vr)].reg < 0 ? assign[(vr)].stack : 0)
     /* Lookahead: is the next instruction a RET that reads this vr? */
     #define NEXT_IS_RET(vr) (i + 1 < p->n && p->ins[i+1].op == MIR_RET && p->ins[i+1].a == (wubu_vr_t)(vr))
 
@@ -185,26 +199,14 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             int64_t imm = in->imm;
             int dst_enc = VR_ENC(in->dst);
             if (dst_enc >= 0) {
-                /* mov reg, imm — use 32-bit encoding when possible */
-                if (imm >= -2147483648LL && imm <= 2147483647LL) {
-                    uint32_t imm32 = (uint32_t)((int32_t)imm);
-                    if (dst_enc >= 8) { e8(&e, 0x41); e8(&e, (uint8_t)(0xB8 + (dst_enc & 7))); }
-                    else { e8(&e, (uint8_t)(0xB8 + dst_enc)); }
-                    e32(&e, imm32);
-                } else {
-                    /* Full 64-bit immediate */
-                    if (dst_enc >= 8) rex(&e,1,0,0,reg_needs_rex(dst_enc)); else rex(&e,1,0,0,0);
-                    e8(&e, (uint8_t)(0xB8 + (dst_enc & 7)));
-                    e64(&e, (uint64_t)imm);
-                }
+                /* mov reg, imm — on x86-64 REX.W + B8+rd is ALWAYS movabs
+                 * (imm64); there is no mov r64, imm32 form. So emit imm64. */
+                if (dst_enc >= 8) { e8(&e, 0x49); e8(&e, (uint8_t)(0xB8 + (dst_enc & 7))); }
+                else { e8(&e, 0x48); e8(&e, (uint8_t)(0xB8 + dst_enc)); }
+                e64(&e, (uint64_t)imm);
             } else {
-                /* spilled: mov rax, imm; mov [rbp+off], rax */
-                if (imm >= -2147483648LL && imm <= 2147483647LL) {
-                    uint32_t imm32 = (uint32_t)((int32_t)imm);
-                    e8(&e, 0xB8); e32(&e, imm32);
-                } else {
-                    rex(&e,1,0,0,0); e8(&e, 0xB8); e64(&e, (uint64_t)imm);
-                }
+                /* spilled: mov rax, imm; mov [rbp+off], rax. Uses movabs too. */
+                e8(&e, 0x48); e8(&e, 0xB8); e64(&e, (uint64_t)imm);
                 emit_store_rbp(&e, VR_SPILL(in->dst), 0);
             }
             break;
@@ -367,6 +369,16 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             e32(&e, 0);
             break;
         }
+        case MIR_JNZ: {
+            int sa = VR_ENC(in->a);
+            if (sa >= 0) emit_mov_reg(&e, 0, sa);
+            else emit_load_rbp(&e, 0, VR_SPILL(in->a));
+            rex(&e,1,0,0,0); e8(&e, 0x85); e8(&e, 0xC0);  /* test rax,rax */
+            e8(&e, 0x0F); e8(&e, 0x85);                     /* jnz rel32 */
+            PATCH_PUSH(e.n, in->label);
+            e32(&e, 0);
+            break;
+        }
         case MIR_RET: {
             /* If result is already in rax (lookahead skip), don't reload */
             if (!result_in_rax) {
@@ -377,6 +389,43 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             result_in_rax = 0;
             e8(&e, 0xC9);  /* leave */
             e8(&e, 0xC3);  /* ret */
+            break;
+        }
+        case MIR_ALLOC:
+            break;  /* home base already emitted as a CONST vr */
+        case MIR_LOAD: {
+            /* dst = mem[addr]; addr is a vr holding the cell index.
+             * Mirror the interpreter's flat int64[] array on the stack. */
+            int sa = VR_ENC(in->a);
+            if (sa >= 0) emit_mov_reg(&e, 0, sa);          /* rax = addr */
+            else emit_load_rbp(&e, 0, VR_SPILL(in->a));
+            rex(&e,1,0,0,0); e8(&e, 0xC1); e8(&e, 0xE0); e8(&e, 0x03); /* shl rax,3 */
+            rex(&e,1,0,0,0); e8(&e, 0x8D); e8(&e, 0xB5);   /* lea rsi,[rbp-mem_off] */
+            e32(&e, (uint32_t)(-(int32_t)e.mem_off));
+            rex(&e,1,0,0,0); e8(&e, 0x01); e8(&e, 0xC6);   /* add rsi, rax */
+            int sd = VR_ENC(in->dst);
+            if (sd >= 0) {
+                rex(&e,1,reg_needs_rex(sd),0,0); e8(&e, 0x8B);
+                e8(&e, (uint8_t)(0x06 | ((sd & 7) << 3))); /* mov dstreg,[rsi] */
+            } else {
+                rex(&e,1,0,0,0); e8(&e, 0x8B); e8(&e, 0x06); /* mov rax,[rsi] */
+                emit_store_rbp(&e, VR_SPILL(in->dst), 0);
+            }
+            break;
+        }
+        case MIR_STORE: {
+            /* mem[addr] = val */
+            int sa = VR_ENC(in->a);
+            if (sa >= 0) emit_mov_reg(&e, 0, sa);          /* rax = addr */
+            else emit_load_rbp(&e, 0, VR_SPILL(in->a));
+            int sb = VR_ENC(in->b);
+            if (sb >= 0) emit_mov_reg(&e, 7, sb);          /* rdi = val */
+            else emit_load_rbp(&e, 7, VR_SPILL(in->b));
+            rex(&e,1,0,0,0); e8(&e, 0xC1); e8(&e, 0xE0); e8(&e, 0x03); /* shl rax,3 */
+            rex(&e,1,0,0,0); e8(&e, 0x8D); e8(&e, 0xB5);   /* lea rsi,[rbp-mem_off] */
+            e32(&e, (uint32_t)(-(int32_t)e.mem_off));
+            rex(&e,1,0,0,0); e8(&e, 0x01); e8(&e, 0xC6);   /* add rsi, rax */
+            rex(&e,1,0,0,0); e8(&e, 0x89); e8(&e, 0x3E);   /* mov [rsi], rdi */
             break;
         }
         }
@@ -400,8 +449,8 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
     free(e.label_offsets);
     wubu_mir_free_alloc(assign);
 
-    /* Peephole: disabled — integrated into emitter instead */
-    (void)x86_peephole_optimize;
+    /* Peephole: wire up the real optimizer (x86_peephole.c). */
+    e.n = x86_peephole_optimize(e.code, e.n);
 
     *out = e.code;
     *out_size = e.n;

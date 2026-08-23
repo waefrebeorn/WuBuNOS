@@ -56,8 +56,8 @@ static void e16(z80_emitter_t *e, uint16_t w)
     e8(e, (uint8_t)((w >> 8) & 0xFF));
 }
 
-/* memory slot for a virtual register: 2 bytes little-endian (16-bit) */
-static uint16_t slot_addr(wubu_vr_t vr) { return (uint16_t)(vr * 2); }
+#include "wubu_retro_regs.h"   /* shared imaginary register file layout */
+/* z80_slot_addr() provided by the shared retro-regs header. */
 
 /* ---- Z80 opcodes (VERIFIED against GNU objdump z80) ---- */
 /* LD r, n      : 00rrr110 n            (A=111, B=000, C=001, D=010, E=011, H=100, L=101)
@@ -379,7 +379,7 @@ static int z80_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
 
     z80_emitter_t e;
     memset(&e, 0, sizeof(e));
-    e.frame = (max_vr + 1) * 2;
+    e.frame = z80_frame_size(max_vr);
     e.n_labels = p->n_labels;
     e.label_offsets = calloc(e.n_labels, sizeof(size_t));
     for (size_t i = 0; i < e.n_labels; i++) e.label_offsets[i] = (size_t)-1;
@@ -393,9 +393,9 @@ static int z80_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             note_label(&e, in->label, e.n);
             continue;
         }
-        uint16_t va = slot_addr(in->a);
-        uint16_t vb = slot_addr(in->b);
-        uint16_t vd = slot_addr(in->dst);
+        uint16_t va = z80_slot_addr(in->a);
+        uint16_t vb = z80_slot_addr(in->b);
+        uint16_t vd = z80_slot_addr(in->dst);
 
         switch (in->op) {
         case MIR_CONST:

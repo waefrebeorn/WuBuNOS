@@ -1,4 +1,4 @@
-#include "holyc.h"
+#include "holyd.h"
 #include "wubu_mir.h"
 #include "wubu_mir_lower.h"
 #include "wubu_isa_driver.h"
@@ -8,12 +8,12 @@
 
 static int run_one(const char *expr, int64_t expected)
 {
-    HCLexer lex;
-    hc_lex_init(&lex, expr);
+    HDLexer lex;
+    hd_lex_init(&lex, expr);
     if (lex.has_error) { printf("  FAIL parse: %s\n", expr); return 1; }
-    HCParser parse;
-    hc_parse_init(&parse, &lex);
-    HCASTNode *ast = hc_parse_expr(&parse);
+    HDParser parse;
+    hd_parse_init(&parse, &lex);
+    HDASTNode *ast = hd_parse_expr(&parse);
     if (!ast || parse.has_error) { printf("  FAIL parse: %s\n", expr); return 1; }
 
     wubu_mir_prog_t prog;
@@ -31,7 +31,7 @@ static int run_one(const char *expr, int64_t expected)
     if (d->compile(&prog, &code, csize) != 0 || !code) {
         printf("  6502 compile failed\n");
         wubu_mir_free(&prog);
-        hc_ast_free(ast);
+        hd_ast_free(ast);
         return 1;
     }
     printf("  6502 compiled %zu bytes\n", csize);
@@ -42,7 +42,7 @@ static int run_one(const char *expr, int64_t expected)
 
     free(code);
     wubu_mir_free(&prog);
-    hc_ast_free(ast);
+    hd_ast_free(ast);
     return r == expected ? 0 : 1;
 }
 

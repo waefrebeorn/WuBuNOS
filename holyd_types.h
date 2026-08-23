@@ -1,5 +1,5 @@
 /*
- * holyc_types.h  --  HolyC Compiler Core Types
+ * holyd_types.h  --  HolyD Compiler Core Types
  * Opaque struct forward declarations and shared type definitions.
  * C11, no external dependencies.
  */
@@ -12,287 +12,287 @@
 
 /* -- Limits ------------------------------------------------------- */
 
-#define HC_MAX_TOKEN_LEN    256
-#define HC_MAX_IDENT_LEN    64
-#define HC_MAX_AST_DEPTH    128
-#define HC_MAX_LOCALS       64
-#define HC_MAX_PARAMS       16
-#define HC_MAX_STRING_LEN   4096
-#define HC_MAX_ERRORS       32
-#define HC_MAX_FUNCTIONS    64
+#define HD_MAX_TOKEN_LEN    256
+#define HD_MAX_IDENT_LEN    64
+#define HD_MAX_AST_DEPTH    128
+#define HD_MAX_LOCALS       64
+#define HD_MAX_PARAMS       16
+#define HD_MAX_STRING_LEN   4096
+#define HD_MAX_ERRORS       32
+#define HD_MAX_FUNCTIONS    64
 
 /* -- Token Types -------------------------------------------------- */
 
 typedef enum {
-    HC_TOK_EOF = 0,
+    HD_TOK_EOF = 0,
 
     /* Literals */
-    HC_TOK_INT,
-    HC_TOK_FLOAT,
-    HC_TOK_CHAR,
-    HC_TOK_STRING,
+    HD_TOK_INT,
+    HD_TOK_FLOAT,
+    HD_TOK_CHAR,
+    HD_TOK_STRING,
 
-    HC_TOK_IDENT,
+    HD_TOK_IDENT,
 
     /* Keywords */
-    HC_KW_IF,
-    HC_KW_ELSE,
-    HC_KW_WHILE,
-    HC_KW_FOR,
-    HC_KW_DO,
-    HC_KW_SWITCH,
-    HC_KW_CASE,
-    HC_KW_DEFAULT,
-    HC_KW_BREAK,
-    HC_KW_CONTINUE,
-    HC_KW_RETURN,
-    HC_KW_GOTO,
+    HD_KW_IF,
+    HD_KW_ELSE,
+    HD_KW_WHILE,
+    HD_KW_FOR,
+    HD_KW_DO,
+    HD_KW_SWITCH,
+    HD_KW_CASE,
+    HD_KW_DEFAULT,
+    HD_KW_BREAK,
+    HD_KW_CONTINUE,
+    HD_KW_RETURN,
+    HD_KW_GOTO,
 
-    HC_KW_I0, HC_KW_I8, HC_KW_I16, HC_KW_I32, HC_KW_I64,
-    HC_KW_U0, HC_KW_U8, HC_KW_U16, HC_KW_U32, HC_KW_U64,
-    HC_KW_F64,
-    HC_KW_BOOL,
+    HD_KW_I0, HD_KW_I8, HD_KW_I16, HD_KW_I32, HD_KW_I64,
+    HD_KW_U0, HD_KW_U8, HD_KW_U16, HD_KW_U32, HD_KW_U64,
+    HD_KW_F64,
+    HD_KW_BOOL,
     /* Struct/class */
-    HC_KW_CLASS,
-    HC_KW_STRUCT,
-    HC_KW_UNION,
-    HC_KW_TYPEDEF,
-    HC_KW_ENUM,
-    HC_KW_STATIC,
-    HC_KW_EXTERN,
-    HC_KW_PUBLIC,
-    HC_KW_CONST,
-    HC_KW_VOLATILE,
-    HC_KW_INLINE,
-    HC_KW_SIZEOF,  /* dummy to keep enum open (was HC_KW_UNUSED) */
+    HD_KW_CLASS,
+    HD_KW_STRUCT,
+    HD_KW_UNION,
+    HD_KW_TYPEDEF,
+    HD_KW_ENUM,
+    HD_KW_STATIC,
+    HD_KW_EXTERN,
+    HD_KW_PUBLIC,
+    HD_KW_CONST,
+    HD_KW_VOLATILE,
+    HD_KW_INLINE,
+    HD_KW_SIZEOF,  /* dummy to keep enum open (was HD_KW_UNUSED) */
 
     /* Operators */
-    HC_TOK_PLUS,
-    HC_TOK_MINUS,
-    HC_TOK_STAR,
-    HC_TOK_SLASH,
-    HC_TOK_PERCENT,
-    HC_TOK_AMP,
-    HC_TOK_PIPE,
-    HC_TOK_CARET,
-    HC_TOK_TILDE,
-    HC_TOK_BANG,
-    HC_TOK_ASSIGN,
-    HC_TOK_LT,
-    HC_TOK_GT,
+    HD_TOK_PLUS,
+    HD_TOK_MINUS,
+    HD_TOK_STAR,
+    HD_TOK_SLASH,
+    HD_TOK_PERCENT,
+    HD_TOK_AMP,
+    HD_TOK_PIPE,
+    HD_TOK_CARET,
+    HD_TOK_TILDE,
+    HD_TOK_BANG,
+    HD_TOK_ASSIGN,
+    HD_TOK_LT,
+    HD_TOK_GT,
 
-    HC_TOK_LE,
-    HC_TOK_GE,
-    HC_TOK_EQ,
-    HC_TOK_NE,
-    HC_TOK_AND,
-    HC_TOK_OR,
-    HC_TOK_LSHIFT,
-    HC_TOK_RSHIFT,
-    HC_TOK_SHL,
-    HC_TOK_SHR,
-    HC_TOK_INC,
-    HC_TOK_DEC,
-    HC_TOK_ARROW,
-    HC_TOK_DOT,
-    HC_TOK_LPAREN,
-    HC_TOK_RPAREN,
-    HC_TOK_LBRACE,
-    HC_TOK_RBRACE,
-    HC_TOK_LBRACKET,
-    HC_TOK_RBRACKET,
-    HC_TOK_COMMA,
-    HC_TOK_SEMI,
-    HC_TOK_COLON,
-    HC_TOK_QUESTION,
-    HC_TOK_ARROW_RET,
-    HC_TOK_PLUS_PLUS,
-    HC_TOK_MINUS_MINUS,
+    HD_TOK_LE,
+    HD_TOK_GE,
+    HD_TOK_EQ,
+    HD_TOK_NE,
+    HD_TOK_AND,
+    HD_TOK_OR,
+    HD_TOK_LSHIFT,
+    HD_TOK_RSHIFT,
+    HD_TOK_SHL,
+    HD_TOK_SHR,
+    HD_TOK_INC,
+    HD_TOK_DEC,
+    HD_TOK_ARROW,
+    HD_TOK_DOT,
+    HD_TOK_LPAREN,
+    HD_TOK_RPAREN,
+    HD_TOK_LBRACE,
+    HD_TOK_RBRACE,
+    HD_TOK_LBRACKET,
+    HD_TOK_RBRACKET,
+    HD_TOK_COMMA,
+    HD_TOK_SEMI,
+    HD_TOK_COLON,
+    HD_TOK_QUESTION,
+    HD_TOK_ARROW_RET,
+    HD_TOK_PLUS_PLUS,
+    HD_TOK_MINUS_MINUS,
 
-    HC_TOK_PLUS_ASSIGN,
-    HC_TOK_MINUS_ASSIGN,
-    HC_TOK_STAR_ASSIGN,
-    HC_TOK_SLASH_ASSIGN,
-    HC_TOK_PERCENT_ASSIGN,
-    HC_TOK_AMP_ASSIGN,
-    HC_TOK_PIPE_ASSIGN,
-    HC_TOK_CARET_ASSIGN,
-    HC_TOK_LSHIFT_ASSIGN,
-    HC_TOK_RSHIFT_ASSIGN,
-    HC_TOK_SHL_ASSIGN,
-    HC_TOK_SHR_ASSIGN,
+    HD_TOK_PLUS_ASSIGN,
+    HD_TOK_MINUS_ASSIGN,
+    HD_TOK_STAR_ASSIGN,
+    HD_TOK_SLASH_ASSIGN,
+    HD_TOK_PERCENT_ASSIGN,
+    HD_TOK_AMP_ASSIGN,
+    HD_TOK_PIPE_ASSIGN,
+    HD_TOK_CARET_ASSIGN,
+    HD_TOK_LSHIFT_ASSIGN,
+    HD_TOK_RSHIFT_ASSIGN,
+    HD_TOK_SHL_ASSIGN,
+    HD_TOK_SHR_ASSIGN,
 
-    HC_TOK_ELLIPSIS,
-} HCTokenType;
+    HD_TOK_ELLIPSIS,
+} HDTokenType;
 
 /* -- Token -------------------------------------------------------- */
 
 typedef struct {
-    HCTokenType type;
-    char text[HC_MAX_TOKEN_LEN];
+    HDTokenType type;
+    char text[HD_MAX_TOKEN_LEN];
     int64_t int_val;
     double float_val;
-    char str_val[HC_MAX_STRING_LEN];
+    char str_val[HD_MAX_STRING_LEN];
     int line;
     int col;
-} HCToken;
+} HDToken;
 
 /* -- Type System -------------------------------------------------- */
 
 typedef enum {
-    HC_TYPE_VOID = 0,
-    HC_TYPE_I8,
-    HC_TYPE_I16,
-    HC_TYPE_I32,
-    HC_TYPE_I64,
-    HC_TYPE_U8,
-    HC_TYPE_U16,
-    HC_TYPE_U32,
-    HC_TYPE_U64,
-    HC_TYPE_F64,
-    HC_TYPE_BOOL,
-    HC_TYPE_PTR,
-    HC_TYPE_ARRAY,
-    HC_TYPE_STRUCT,
-    HC_TYPE_UNION,
-    HC_TYPE_ENUM,
-    HC_TYPE_FUNC,
-} HCTypeKind;
+    HD_TYPE_VOID = 0,
+    HD_TYPE_I8,
+    HD_TYPE_I16,
+    HD_TYPE_I32,
+    HD_TYPE_I64,
+    HD_TYPE_U8,
+    HD_TYPE_U16,
+    HD_TYPE_U32,
+    HD_TYPE_U64,
+    HD_TYPE_F64,
+    HD_TYPE_BOOL,
+    HD_TYPE_PTR,
+    HD_TYPE_ARRAY,
+    HD_TYPE_STRUCT,
+    HD_TYPE_UNION,
+    HD_TYPE_ENUM,
+    HD_TYPE_FUNC,
+} HDTypeKind;
 
-typedef struct HCType HCType;
+typedef struct HDType HDType;
 
-struct HCType {
-    HCTypeKind kind;
-    HCType *base;              /* for pointers/arrays */
+struct HDType {
+    HDTypeKind kind;
+    HDType *base;              /* for pointers/arrays */
     int64_t size;              /* size in bytes */
     int64_t align;             /* alignment requirement */
     int n_members;             /* for structs/unions */
-    char name[HC_MAX_IDENT_LEN]; /* for struct/enum/typedef name */
+    char name[HD_MAX_IDENT_LEN]; /* for struct/enum/typedef name */
     struct {
-        char name[HC_MAX_IDENT_LEN];
-        HCType *type;
+        char name[HD_MAX_IDENT_LEN];
+        HDType *type;
         int64_t offset;
     } members[32];
     int array_size;            /* for arrays */
     /* for function types */
-    HCType *ret_type;
-    HCType **param_types;
+    HDType *ret_type;
+    HDType **param_types;
     int n_params;
 };
 
 /* -- AST Node Kinds ----------------------------------------------- */
 
 typedef enum {
-    HC_AST_NONE = 0,
-    HC_AST_INT_LIT,
-    HC_AST_FLOAT_LIT,
-    HC_AST_CHAR_LIT,
-    HC_AST_STRING_LIT,
-    HC_AST_BOOL_LIT,
-    HC_AST_IDENT,
-    HC_AST_ADD,
-    HC_AST_SUB,
-    HC_AST_MUL,
-    HC_AST_DIV,
-    HC_AST_MOD,
-    HC_AST_AND,
-    HC_AST_OR,
-    HC_AST_BITAND,
-    HC_AST_BITOR,
-    HC_AST_BITXOR,
-    HC_AST_SHL,
-    HC_AST_SHR,
-    HC_AST_EQ,
-    HC_AST_NE,
-    HC_AST_LT,
-    HC_AST_LE,
-    HC_AST_GT,
-    HC_AST_GE,
-    HC_AST_UNARY,
-    HC_AST_CAST,
-    HC_AST_SIZEOF,   /* sizeof(type) / sizeof expr — emits the type size as a literal */
-    HC_AST_CALL,
-    HC_AST_FUNC_CALL,
-    HC_AST_INDEX,
-    HC_AST_DOT,
-    HC_AST_MEMBER,
-    HC_AST_ARROW,
-    HC_AST_TERNARY,
-    HC_AST_ASSIGN,
-    HC_AST_COMPOUND_ASSIGN,
-    HC_AST_PRE_INC,
-    HC_AST_PRE_DEC,
-    HC_AST_POST_INC,
-    HC_AST_POST_DEC,
-    HC_AST_EXPR_STMT,
-    HC_AST_RETURN,
-    HC_AST_IF,
-    HC_AST_WHILE,
-    HC_AST_FOR,
-    HC_AST_DO_WHILE,
-    HC_AST_SWITCH,     /* switch(expr){case..} — cond=expr, body=block of CASE */
-    HC_AST_CASE,       /* case VAL: — cond=value expr (NULL=default), body=stmts */
-    HC_AST_GOTO,       /* goto label; — child=NULL, ident=label name */
-    HC_AST_LABEL,      /* label: — ident=label name, emits a marker at current pos */
-    HC_AST_BLOCK,
-    HC_AST_VAR_DECL,
-    HC_AST_FUNC_DECL,
-    HC_AST_EXTERN_DECL,
-    HC_AST_STRUCT_DECL,
-    HC_AST_BREAK,
-    HC_AST_CONTINUE,
-    HC_AST_NEG,
-    HC_AST_NOT,
-    HC_AST_BITNOT,
-    HC_AST_DEREF,
-    HC_AST_ADDR,
-    HC_AST_MOD_ASSIGN,
-    HC_AST_SHL_ASSIGN,
-    HC_AST_SHR_ASSIGN,
-    HC_AST_AMP_ASSIGN,
-    HC_AST_PIPE_ASSIGN,
-    HC_AST_CARET_ASSIGN,
-    HC_AST_ADD_ASSIGN,
-    HC_AST_SUB_ASSIGN,
-    HC_AST_MUL_ASSIGN,
-    HC_AST_DIV_ASSIGN,
-    HC_AST_BRACE_INIT,
-} HCASTKind;
+    HD_AST_NONE = 0,
+    HD_AST_INT_LIT,
+    HD_AST_FLOAT_LIT,
+    HD_AST_CHAR_LIT,
+    HD_AST_STRING_LIT,
+    HD_AST_BOOL_LIT,
+    HD_AST_IDENT,
+    HD_AST_ADD,
+    HD_AST_SUB,
+    HD_AST_MUL,
+    HD_AST_DIV,
+    HD_AST_MOD,
+    HD_AST_AND,
+    HD_AST_OR,
+    HD_AST_BITAND,
+    HD_AST_BITOR,
+    HD_AST_BITXOR,
+    HD_AST_SHL,
+    HD_AST_SHR,
+    HD_AST_EQ,
+    HD_AST_NE,
+    HD_AST_LT,
+    HD_AST_LE,
+    HD_AST_GT,
+    HD_AST_GE,
+    HD_AST_UNARY,
+    HD_AST_CAST,
+    HD_AST_SIZEOF,   /* sizeof(type) / sizeof expr — emits the type size as a literal */
+    HD_AST_CALL,
+    HD_AST_FUNC_CALL,
+    HD_AST_INDEX,
+    HD_AST_DOT,
+    HD_AST_MEMBER,
+    HD_AST_ARROW,
+    HD_AST_TERNARY,
+    HD_AST_ASSIGN,
+    HD_AST_COMPOUND_ASSIGN,
+    HD_AST_PRE_INC,
+    HD_AST_PRE_DEC,
+    HD_AST_POST_INC,
+    HD_AST_POST_DEC,
+    HD_AST_EXPR_STMT,
+    HD_AST_RETURN,
+    HD_AST_IF,
+    HD_AST_WHILE,
+    HD_AST_FOR,
+    HD_AST_DO_WHILE,
+    HD_AST_SWITCH,     /* switch(expr){case..} — cond=expr, body=block of CASE */
+    HD_AST_CASE,       /* case VAL: — cond=value expr (NULL=default), body=stmts */
+    HD_AST_GOTO,       /* goto label; — child=NULL, ident=label name */
+    HD_AST_LABEL,      /* label: — ident=label name, emits a marker at current pos */
+    HD_AST_BLOCK,
+    HD_AST_VAR_DECL,
+    HD_AST_FUNC_DECL,
+    HD_AST_EXTERN_DECL,
+    HD_AST_STRUCT_DECL,
+    HD_AST_BREAK,
+    HD_AST_CONTINUE,
+    HD_AST_NEG,
+    HD_AST_NOT,
+    HD_AST_BITNOT,
+    HD_AST_DEREF,
+    HD_AST_ADDR,
+    HD_AST_MOD_ASSIGN,
+    HD_AST_SHL_ASSIGN,
+    HD_AST_SHR_ASSIGN,
+    HD_AST_AMP_ASSIGN,
+    HD_AST_PIPE_ASSIGN,
+    HD_AST_CARET_ASSIGN,
+    HD_AST_ADD_ASSIGN,
+    HD_AST_SUB_ASSIGN,
+    HD_AST_MUL_ASSIGN,
+    HD_AST_DIV_ASSIGN,
+    HD_AST_BRACE_INIT,
+} HDASTKind;
 
 /* -- Forward declarations for opaque structs ---------------------------------- */
 
-typedef struct HCLexer HCLexer;
-typedef struct HCParser HCParser;
-typedef struct HCGen HCGen;
-typedef struct HCCompiler HCCompiler;
-typedef struct HCASTNode HCASTNode;
-typedef struct HCSymbol HCSymbol;
-typedef struct HCSymTab HCSymTab;
-typedef struct HCFunction HCFunction;
+typedef struct HDLexer HDLexer;
+typedef struct HDParser HDParser;
+typedef struct HDGen HDGen;
+typedef struct HDCompiler HDCompiler;
+typedef struct HDASTNode HDASTNode;
+typedef struct HDSymbol HDSymbol;
+typedef struct HDSymTab HDSymTab;
+typedef struct HDFunction HDFunction;
 
 /* -- Symbol Table ------------------------------------------------------------- */
 
-struct HCSymbol {
-    char name[HC_MAX_IDENT_LEN];
-    HCType *type;
+struct HDSymbol {
+    char name[HD_MAX_IDENT_LEN];
+    HDType *type;
     int stack_offset;
     bool is_global;
     bool is_param;
 };
 
-struct HCSymTab {
-    HCSymbol locals[HC_MAX_LOCALS];
+struct HDSymTab {
+    HDSymbol locals[HD_MAX_LOCALS];
     int n_locals;
     int stack_size;
 };
 
 /* -- Function Table ----------------------------------------------------------- */
 
-struct HCFunction {
-    char name[HC_MAX_IDENT_LEN];
+struct HDFunction {
+    char name[HD_MAX_IDENT_LEN];
     void *func_ptr;
     int n_params;
-    HCType *ret_type;   /* declared return type (struct → sret-capable) */
+    HDType *ret_type;   /* declared return type (struct → sret-capable) */
     size_t code_size;   /* size of function body code (for ELF emission) */
     /* Global RIP-relative fixups emitted INSIDE this function's body. Each
      * function is copied to its OWN exec buffer (separate from the main
@@ -300,60 +300,60 @@ struct HCFunction {
      * that references a module-level global must be patched against the
      * FINAL data-section address — which is only known after the main exec
      * is allocated. Record (patch_pos within this body, global_offset) so
-     * hc_eval can fix the exec copy up. */
+     * hd_eval can fix the exec copy up. */
     struct { size_t code_patch_pos; size_t global_offset; } global_patches[128];
     int n_global_patches;
 };
 
 /* -- Lexer struct (full definition needed by lexer.c) ------------------------ */
 
-struct HCLexer {
+struct HDLexer {
     const char *src;
     int pos;
     int line;
     int col;
-    HCToken tok;
+    HDToken tok;
     bool has_error;
     char error[256];
 };
 
 /* -- Parser struct (full definition needed by parser.c) ---------------------- */
 
-struct HCParser {
-    HCLexer *lex;
-    HCASTNode *ast;
+struct HDParser {
+    HDLexer *lex;
+    HDASTNode *ast;
     bool has_error;
-    char errors[HC_MAX_ERRORS][256];
+    char errors[HD_MAX_ERRORS][256];
     int n_errors;
     /* named-type registry: struct/union/enum tags defined with a body are
      * stored by name so a later `struct S x;` reference reuses the SAME
      * member layout (previously it built a fresh empty struct with no
      * members, so s.a resolved no offset and reads returned 0). */
-    HCType *named_types[64];
-    char named_type_names[64][HC_MAX_IDENT_LEN];
+    HDType *named_types[64];
+    char named_type_names[64][HD_MAX_IDENT_LEN];
     int n_named_types;
     /* typedef registry: `typedef int MyInt;` makes MyInt a type name the
      * parser recognizes in later declarations. */
-    HCType *typedef_types[64];
-    char typedef_names[64][HC_MAX_IDENT_LEN];
+    HDType *typedef_types[64];
+    char typedef_names[64][HD_MAX_IDENT_LEN];
     int n_typedefs;
     /* enum constants: `enum { RED, GREEN, BLUE }` gives GREEN value 1.
      * Recorded so `int c = GREEN;` resolves GREEN as a constant ident. */
-    char enum_const_names[64][HC_MAX_IDENT_LEN];
+    char enum_const_names[64][HD_MAX_IDENT_LEN];
     int64_t enum_const_vals[64];
     int n_enum_consts;
 };
 
 /* -- Code Generator struct (full definition needed by codegen.c) ------------- */
 
-struct HCGen {
+struct HDGen {
     uint8_t *code;
     size_t code_size;
     size_t code_cap;
     uint8_t *data;
     size_t data_size;
     size_t data_cap;
-    HCSymTab symbols;
+    HDSymTab symbols;
     int label_count;
     int loop_depth;
     int break_label;
@@ -365,14 +365,14 @@ struct HCGen {
     /* goto labels: a function-local registry of label names -> byte offset
      * in the emitted code. Forward gotos record a jump patch that is
      * resolved when the label is finally placed (or at function end). */
-    struct { char name[HC_MAX_IDENT_LEN]; int offset; } labels[128];
+    struct { char name[HD_MAX_IDENT_LEN]; int offset; } labels[128];
     int n_labels;
     struct { size_t patch_pos; int label_idx; } label_patches[512];
     int n_label_patches;
-    HCFunction functions[HC_MAX_FUNCTIONS];
+    HDFunction functions[HD_MAX_FUNCTIONS];
     int n_functions;
     struct {
-        char c_name[HC_MAX_IDENT_LEN];
+        char c_name[HD_MAX_IDENT_LEN];
         void *func_addr;
     } extern_funcs[32];
     int n_extern_funcs;
@@ -397,7 +397,7 @@ struct HCGen {
      * is patched to the final exec address after the body is copied. Without
      * this, fib(n-1) inside fib() traps as unresolved (fib isn't registered
      * in gen->functions until the body is finished). */
-    char current_function[HC_MAX_IDENT_LEN];
+    char current_function[HD_MAX_IDENT_LEN];
     size_t self_call_patches[32];
     int n_self_call_patches;
     /* Function call patches: when top-level code calls a JIT'd function,
@@ -409,11 +409,11 @@ struct HCGen {
 
 /* -- Compiler struct (full definition) --------------------------------------- */
 
-struct HCCompiler {
-    HCLexer lex;
-    HCParser parse;
-    HCGen gen;
-    HCASTNode *ast;
+struct HDCompiler {
+    HDLexer lex;
+    HDParser parse;
+    HDGen gen;
+    HDASTNode *ast;
     bool has_error;
     char error[256];
 };

@@ -2,8 +2,8 @@
  * wubu_lang_router.h — Language routing and policy enforcement.
  *
  * WuBuOS accepts:
- *   - HolyC (native, all 14 ISAs, full optimization)
- *   - C18 (HolyC's C subset — C11 + bugfix patches, no higher)
+ *   - HolyD (native, all 14 ISAs, full optimization)
+ *   - C18 (HolyD's C subset — C11 + bugfix patches, no higher)
  *   - Brainfuck (the meme, compiled for real)
  *
  * Everything else is "foreign" — routed to containerized compilers
@@ -93,14 +93,14 @@ int lang_compile(const char *filename, const char *source, size_t len,
 
 /* ---- Built-in descriptions */
 
-#define HOLYC_DESC      "HolyC — the sacred tongue. Full native support on all targets."
+#define HOLYC_DESC      "HolyD — the sacred tongue. Full native support on all targets."
 #define BRAINFUCK_DESC  "Brainfuck — the meme. Compiled for real because we can."
-#define C_DESC          "C (foreign) — routed to containerized GCC. We prefer HolyC."
-#define CPP_DESC        "C++ (foreign) — routed to containerized Clang++. We prefer HolyC."
-#define RUST_DESC       "Rust (foreign) — routed to containerized rustc. We prefer HolyC."
+#define C_DESC          "C (foreign) — routed to containerized GCC. We prefer HolyD."
+#define CPP_DESC        "C++ (foreign) — routed to containerized Clang++. We prefer HolyD."
+#define RUST_DESC       "Rust (foreign) — routed to containerized rustc. We prefer HolyD."
 #define PYTHON_DESC     "Python — JIT template available. Compiles to WASM or native."
 #define JS_DESC         "JavaScript — JIT template available. Compiles to WASM or native."
 #define FOREIGN_DESC    "Foreign language — routed to containerized compiler."
-#define UNKNOWN_DESC    "Unknown language — rejected. Use HolyC or Brainfuck."
+#define UNKNOWN_DESC    "Unknown language — rejected. Use HolyD or Brainfuck."
 
 #endif /* WUBU_LANG_ROUTER_H */

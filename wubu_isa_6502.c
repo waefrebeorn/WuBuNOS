@@ -48,8 +48,8 @@ static void e16(cpu6502_emitter_t *e, uint16_t w)
     e8(e, (uint8_t)((w >> 8) & 0xFF));
 }
 
-/* zero-page slot: zp[vr+1] (slot 0 reserved for scratch) */
-static uint8_t zp_slot(wubu_vr_t vr) { return (uint8_t)(vr + 1); }
+#include "wubu_retro_regs.h"   /* shared imaginary register file layout */
+/* zp_slot() provided by the shared retro-regs header. */
 
 /* ---- 6502 opcodes (VERIFIED against GNU objdump) ---- */
 #define LDA_IMM 0xA9

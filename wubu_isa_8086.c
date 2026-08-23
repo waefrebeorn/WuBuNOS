@@ -58,8 +58,8 @@ static void e16(i8086_emitter_t *e, uint16_t w)
     e8(e, (uint8_t)(w >> 8));
 }
 
-/* slot displacement below BP: vr N at [bp - (N+1)*2] */
-static int16_t slot_disp(wubu_vr_t vr) { return (int16_t)(-((int64_t)(vr + 1) * 2)); }
+#include "wubu_retro_regs.h"   /* shared imaginary register file layout */
+/* slot_disp() / i8086_frame_size() provided by the shared retro-regs header. */
 
 /* ---- VERIFIED encodings (objdump -m i8086; see tools/verify_isa.sh) ----
  *
@@ -169,7 +169,7 @@ static int i8086_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
 
     i8086_emitter_t e;
     memset(&e, 0, sizeof(e));
-    size_t frame = (max_vr + 1) * 2 + 32;
+    size_t frame = i8086_frame_size(max_vr);
     e.n_labels = p->n_labels;
     e.label_offsets = calloc(e.n_labels, sizeof(size_t));
     for (size_t i = 0; i < e.n_labels; i++) e.label_offsets[i] = (size_t)-1;

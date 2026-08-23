@@ -7,11 +7,11 @@
 
 int main() {
     const char *expr = "1+2";
-    HCLexer lex;
-    hc_lex_init(&lex, expr);
-    HCParser parse;
-    hc_parse_init(&parse, &lex);
-    HCASTNode *ast = hc_parse_expr(&parse);
+    HDLexer lex;
+    hd_lex_init(&lex, expr);
+    HDParser parse;
+    hd_parse_init(&parse, &lex);
+    HDASTNode *ast = hd_parse_expr(&parse);
     
     wubu_mir_prog_t prog;
     wubu_mir_init(&prog);
@@ -70,6 +70,6 @@ int main() {
     
     free(code);
     wubu_mir_free(&prog);
-    hc_ast_free(ast);
+    hd_ast_free(ast);
     return 0;
 }

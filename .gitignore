@@ -8,3 +8,13 @@ mir_driver_test
 test_isa_driver
 cleveland_browns_album_test
 hedge_verify
+*.o
+*.d
+/test_isa_driver
+/test_mir_opt
+/gauntlet_runner
+/test_softfloat
+/test_peephole
+/test_elf_cubin
+/test_fuzz_diff
+/peephole_superopt_bin

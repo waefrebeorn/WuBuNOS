@@ -1,20 +1,20 @@
 /*
- * holyc_codegen_stmt.c  --  HolyC Code Generator: Statement Generation
- * Generates x86-64 machine code for HolyC AST statements.
+ * holyd_codegen_stmt.c  --  HolyD Code Generator: Statement Generation
+ * Generates x86-64 machine code for HolyD AST statements.
  */
 
-#include "holyc_codegen_internal.h"
+#include "holyd_codegen_internal.h"
 
 /* ====================================================================
  * CODE GEN INIT
  * ==================================================================== */
 
-void hc_gen_init(HCGen *gen) {
+void hd_gen_init(HDGen *gen) {
     /* Preserve symbol table, function table, and data section across evaluations for REPL persistence */
-    HCSymTab saved_symbols = gen->symbols;
-    HCFunction saved_functions[HC_MAX_FUNCTIONS];
+    HDSymTab saved_symbols = gen->symbols;
+    HDFunction saved_functions[HD_MAX_FUNCTIONS];
     int saved_n_functions = gen->n_functions;
-    memcpy(saved_functions, gen->functions, sizeof(HCFunction) * HC_MAX_FUNCTIONS);
+    memcpy(saved_functions, gen->functions, sizeof(HDFunction) * HD_MAX_FUNCTIONS);
     
     /* Preserve data section (globals) */
     uint8_t *saved_data = gen->data;
@@ -28,7 +28,7 @@ void hc_gen_init(HCGen *gen) {
     /* Restore symbol table, function table, and data section */
     gen->symbols = saved_symbols;
     gen->n_functions = saved_n_functions;
-    memcpy(gen->functions, saved_functions, sizeof(HCFunction) * HC_MAX_FUNCTIONS);
+    memcpy(gen->functions, saved_functions, sizeof(HDFunction) * HD_MAX_FUNCTIONS);
     
     gen->data = saved_data;
     gen->data_size = saved_data_size;
@@ -46,27 +46,27 @@ void hc_gen_init(HCGen *gen) {
  * STATEMENT GENERATION
  * ==================================================================== */
 
-int gen_stmt(HCGen *gen, const HCASTNode *node) {
+int gen_stmt(HDGen *gen, const HDASTNode *node) {
     if (!node) return 0;
 
     switch (node->kind) {
-        case HC_AST_EXPR_STMT:
+        case HD_AST_EXPR_STMT:
             return gen_expr(gen, node->child);
 
-        case HC_AST_EXTERN_DECL:
+        case HD_AST_EXTERN_DECL:
             /* Extern declarations are no-ops at codegen time.
              * They register the function name and C name for the function call handler. */
             break;
 
-        case HC_AST_RETURN: {
-            HCType *ret_t = node->child ? expr_static_type(gen, node->child) : NULL;
-            int ret_sz = (ret_t && ret_t->kind == HC_TYPE_STRUCT) ? (int)hc_type_size(ret_t) : 0;
+        case HD_AST_RETURN: {
+            HDType *ret_t = node->child ? expr_static_type(gen, node->child) : NULL;
+            int ret_sz = (ret_t && ret_t->kind == HD_TYPE_STRUCT) ? (int)hd_type_size(ret_t) : 0;
             /* Struct-by-value return: memcpy the local struct into a
              * 16-byte-aligned .data slot, return rax=&slot. The caller does
              * the matching rep movsb on ASSIGN. Works for ANY struct size
              * now that local struct slots are sized correctly. */
             bool can_sret = ret_sz > 0 && node->child &&
-                            node->child->kind == HC_AST_IDENT &&
+                            node->child->kind == HD_AST_IDENT &&
                             gen->symbols.n_locals > 0;
             if (can_sret) {
                 /* Reserve a 16-byte-aligned slot in .data for the returned
@@ -100,7 +100,7 @@ int gen_stmt(HCGen *gen, const HCASTNode *node) {
             break;
         }
 
-        case HC_AST_BLOCK:
+        case HD_AST_BLOCK:
             for (int i = 0; i < node->n_stmts; i++)
                 gen_stmt(gen, node->stmts[i]);
             break;
@@ -115,7 +115,7 @@ int gen_stmt(HCGen *gen, const HCASTNode *node) {
          *   gen else_branch           [if exists]
          * end_label:
          */
-        case HC_AST_IF: {
+        case HD_AST_IF: {
             gen_expr(gen, node->cond);
             emit_test_rax_rax(gen);
             size_t jz_patch = emit_jcc_placeholder(gen, CC_E); /* jz else */
@@ -143,7 +143,7 @@ int gen_stmt(HCGen *gen, const HCASTNode *node) {
          *   jmp loop_top              (5 bytes, back jump)
          * loop_end:
          */
-        case HC_AST_WHILE: {
+        case HD_AST_WHILE: {
             size_t loop_top = gen->code_size;
             int depth = gen->loop_depth;
             gen_expr(gen, node->cond);
@@ -180,7 +180,7 @@ int gen_stmt(HCGen *gen, const HCASTNode *node) {
          *   jnz loop_top              (5 bytes, back jump)
          * loop_end:                   (break target)
          */
-        case HC_AST_DO_WHILE: {
+        case HD_AST_DO_WHILE: {
             size_t loop_top = gen->code_size;
             int depth = gen->loop_depth;
             gen->loop_depth++;
@@ -218,12 +218,12 @@ int gen_stmt(HCGen *gen, const HCASTNode *node) {
          *   jmp loop_top              (5 bytes, back jump)
          * loop_end:
          */
-        case HC_AST_FOR: {
+        case HD_AST_FOR: {
             int depth = gen->loop_depth;
             /* init — can be an expression OR a var-declaration statement
              * (`for(int i=0; ...)`). Dispatch on kind. */
             if (node->init_expr) {
-                if (node->init_expr->kind == HC_AST_VAR_DECL)
+                if (node->init_expr->kind == HD_AST_VAR_DECL)
                     gen_stmt(gen, node->init_expr);
                 else
                     gen_expr(gen, node->init_expr);
@@ -273,7 +273,7 @@ int gen_stmt(HCGen *gen, const HCASTNode *node) {
             break;
         }
 
-        case HC_AST_VAR_DECL:
+        case HD_AST_VAR_DECL:
             /* Module-level var = global in the data section (persists across
              * evals). Inside a function body it's a stack-local. Note emit_prologue()
              * runs before gen_stmt for module evals, so has_prologue is unreliable
@@ -290,7 +290,7 @@ int gen_stmt(HCGen *gen, const HCASTNode *node) {
                 {
                     int size = 8;
                     if (node->type) {
-                        size_t tsz = hc_type_size(node->type);
+                        size_t tsz = hd_type_size(node->type);
                         if (tsz > 0) size = (int)tsz;
                     }
                     size_t global_offset = gen->data_size;
@@ -300,19 +300,19 @@ int gen_stmt(HCGen *gen, const HCASTNode *node) {
                     for (int q = 0; q < qwords; q++) emit_data_qword(gen, 0);
 
                     /* Record in symbol table (negative offset = global) */
-                    if (gen->symbols.n_locals < HC_MAX_LOCALS) {
+                    if (gen->symbols.n_locals < HD_MAX_LOCALS) {
                         strncpy(gen->symbols.locals[gen->symbols.n_locals].name,
-                                node->ident, HC_MAX_IDENT_LEN - 1);
+                                node->ident, HD_MAX_IDENT_LEN - 1);
                         gen->symbols.locals[gen->symbols.n_locals].stack_offset = -(int)(global_offset + 1);
                         gen->symbols.locals[gen->symbols.n_locals].type = node->type;
                         gen->symbols.n_locals++;
                     }
 
                     if (node->init) {
-                        HCType *decl_t = node->type;
-                        HCType *init_t = expr_static_type(gen, node->init);
-                        bool decay = decl_t && decl_t->kind == HC_TYPE_PTR &&
-                                     init_t && init_t->kind == HC_TYPE_ARRAY;
+                        HDType *decl_t = node->type;
+                        HDType *init_t = expr_static_type(gen, node->init);
+                        bool decay = decl_t && decl_t->kind == HD_TYPE_PTR &&
+                                     init_t && init_t->kind == HD_TYPE_ARRAY;
                         if (decay) emit_base_addr(gen, node->init);
                         else       gen_expr(gen, node->init);
                         /* mov [rip + disp32], rax (patched after code_size known) */
@@ -337,7 +337,7 @@ int gen_stmt(HCGen *gen, const HCASTNode *node) {
                      * pointed at garbage and crashed. */
                     int size = 8;
                     if (node->type) {
-                        size_t tsz = hc_type_size(node->type);
+                        size_t tsz = hd_type_size(node->type);
                         if (tsz > 0) size = (int)tsz;
                     }
                     /* A struct/array local must reserve its FULL size, not
@@ -351,9 +351,9 @@ int gen_stmt(HCGen *gen, const HCASTNode *node) {
                     int slot = (size < 8) ? 8 : ((size + 7) & ~7);
                     int offset = gen->symbols.stack_size + slot;
                     gen->symbols.stack_size += slot;
-                    if (gen->symbols.n_locals < HC_MAX_LOCALS) {
+                    if (gen->symbols.n_locals < HD_MAX_LOCALS) {
                         strncpy(gen->symbols.locals[gen->symbols.n_locals].name,
-                                node->ident, HC_MAX_IDENT_LEN - 1);
+                                node->ident, HD_MAX_IDENT_LEN - 1);
                         gen->symbols.locals[gen->symbols.n_locals].stack_offset = offset;
                         gen->symbols.locals[gen->symbols.n_locals].type = node->type;
                         gen->symbols.n_locals++;
@@ -362,10 +362,10 @@ int gen_stmt(HCGen *gen, const HCASTNode *node) {
                         /* Handle braced initializer {e0, e1, ...} for arrays/structs.
                          * Each element is evaluated and stored at consecutive offsets
                          * from the array's stack address. */
-                        if (node->init->kind == HC_AST_BRACE_INIT) {
+                        if (node->init->kind == HD_AST_BRACE_INIT) {
                             int elem_size = 8;
                             if (node->type && node->type->base)
-                                elem_size = (int)hc_type_size(node->type->base);
+                                elem_size = (int)hd_type_size(node->type->base);
                             /* lea rax, [rbp - offset] (array base address) */
                             emit_byte(gen, 0x48); emit_byte(gen, 0x8D); emit_byte(gen, 0x85);
                             emit_dword(gen, (uint32_t)(-(int32_t)offset & 0xFFFFFFFF));
@@ -390,10 +390,10 @@ int gen_stmt(HCGen *gen, const HCASTNode *node) {
                              * gen_expr would load the value — detect the case
                              * (declared type is PTR, init static type is ARRAY)
                              * and emit the base address instead. */
-                            HCType *decl_t = node->type;
-                            HCType *init_t = expr_static_type(gen, node->init);
-                            bool decay = decl_t && decl_t->kind == HC_TYPE_PTR &&
-                                         init_t && init_t->kind == HC_TYPE_ARRAY;
+                            HDType *decl_t = node->type;
+                            HDType *init_t = expr_static_type(gen, node->init);
+                            bool decay = decl_t && decl_t->kind == HD_TYPE_PTR &&
+                                         init_t && init_t->kind == HD_TYPE_ARRAY;
                             if (decay) emit_base_addr(gen, node->init);
                             else       gen_expr(gen, node->init);
                             /* mov [rbp - offset], rax: 48 89 85 disp32 */
@@ -407,17 +407,17 @@ int gen_stmt(HCGen *gen, const HCASTNode *node) {
             }
             break;
 
-        case HC_AST_FUNC_DECL:
+        case HD_AST_FUNC_DECL:
                         /* Generate function body and save function pointer */
                         /* Save current code state */
                         uint8_t *saved_code = gen->code;
                         size_t saved_code_size = gen->code_size;
                         size_t saved_code_cap = gen->code_cap;
-                        HCSymTab saved_symbols = gen->symbols;
+                        HDSymTab saved_symbols = gen->symbols;
                         int saved_n_functions = gen->n_functions;
                         int saved_n_global_patches = gen->n_global_patches;
-                        HCFunction saved_functions[HC_MAX_FUNCTIONS];
-                        memcpy(saved_functions, gen->functions, sizeof(HCFunction) * HC_MAX_FUNCTIONS);
+                        HDFunction saved_functions[HD_MAX_FUNCTIONS];
+                        memcpy(saved_functions, gen->functions, sizeof(HDFunction) * HD_MAX_FUNCTIONS);
           
                         gen->code = NULL;
                         gen->code_size = 0;
@@ -432,19 +432,18 @@ int gen_stmt(HCGen *gen, const HCASTNode *node) {
                          * function can reference them (their RIP-relative
                          * loads get fixed up against the shared data base). */
                         {
-                            HCSymTab keep = gen->symbols;
+                            HDSymTab keep = gen->symbols;
                             for (int i = 0; i < keep.n_locals; i++)
-                                fprintf(stderr, "  keep[%d] = %s off=%d\n", i, keep.locals[i].name, keep.locals[i].stack_offset);
-                            memset(&gen->symbols, 0, sizeof(HCSymTab));
+                            memset(&gen->symbols, 0, sizeof(HDSymTab));
                             for (int i = 0; i < keep.n_locals; i++)
                                 if (keep.locals[i].stack_offset < 0 &&
-                                    gen->symbols.n_locals < HC_MAX_LOCALS)
+                                    gen->symbols.n_locals < HD_MAX_LOCALS)
                                     gen->symbols.locals[gen->symbols.n_locals++] = keep.locals[i];
                         }
                         /* Record this function's own name so recursive calls
                          * can emit a rel32 placeholder patched after copy. */
-                        strncpy(gen->current_function, node->ident, HC_MAX_IDENT_LEN - 1);
-                        gen->current_function[HC_MAX_IDENT_LEN - 1] = '\0';
+                        strncpy(gen->current_function, node->ident, HD_MAX_IDENT_LEN - 1);
+                        gen->current_function[HD_MAX_IDENT_LEN - 1] = '\0';
                         gen->n_self_call_patches = 0;
            
                         emit_prologue(gen);
@@ -456,14 +455,14 @@ int gen_stmt(HCGen *gen, const HCASTNode *node) {
                  * keep the 8-byte slot. */
                 size_t psz = 8;
                 if (node->param_types && node->param_types[i]) {
-                    size_t ts = hc_type_size(node->param_types[i]);
+                    size_t ts = hd_type_size(node->param_types[i]);
                     if (ts > 8) psz = (ts + 7) & ~(size_t)7;
                 }
                 int offset = gen->symbols.stack_size + (int)psz;
                 gen->symbols.stack_size += (int)psz;
-                if (gen->symbols.n_locals < HC_MAX_LOCALS) {
+                if (gen->symbols.n_locals < HD_MAX_LOCALS) {
                     strncpy(gen->symbols.locals[gen->symbols.n_locals].name,
-                            node->param_names[i], HC_MAX_IDENT_LEN - 1);
+                            node->param_names[i], HD_MAX_IDENT_LEN - 1);
                     gen->symbols.locals[gen->symbols.n_locals].stack_offset = offset;
                     gen->symbols.locals[gen->symbols.n_locals].type =
                         (node->param_types && node->param_types[i])
@@ -530,10 +529,10 @@ int gen_stmt(HCGen *gen, const HCASTNode *node) {
              * → [&slot] <- [incoming addr] (the address was stored at &slot). */
             for (int i = 0; i < node->n_params; i++) {
                 if (!(node->param_types && node->param_types[i])) continue;
-                HCType *pt = node->param_types[i];
-                if (pt && pt->kind == HC_TYPE_STRUCT && hc_type_size(pt) > 8) {
+                HDType *pt = node->param_types[i];
+                if (pt && pt->kind == HD_TYPE_STRUCT && hd_type_size(pt) > 8) {
                     int off = gen->symbols.locals[i].stack_offset;
-                    size_t psz = (hc_type_size(pt) + 7) & ~(size_t)7;
+                    size_t psz = (hd_type_size(pt) + 7) & ~(size_t)7;
                     /* lea rdi, [rbp - off] */
                     emit_byte(gen, 0x48); emit_byte(gen, 0x8D); emit_byte(gen, 0xBD);
                     emit_dword(gen, (uint32_t)(-(int32_t)off & 0xFFFFFFFF));
@@ -555,12 +554,12 @@ int gen_stmt(HCGen *gen, const HCASTNode *node) {
             /* A void-returning function leaves rax undefined; zero it so
              * `void f(){} f();` yields 0 (not a stale register/garbage
              * address). Matches gcc's zeroing of a void function's result. */
-            if (node->type && node->type->kind == HC_TYPE_VOID)
+            if (node->type && node->type->kind == HD_TYPE_VOID)
                 emit_byte(gen, 0x31); emit_byte(gen, 0xC0);   /* xor eax, eax */
             emit_epilogue(gen);
 
             /* Allocate executable memory for this function */
-            if (gen->code_size > 0 && gen->n_functions < HC_MAX_FUNCTIONS) {
+            if (gen->code_size > 0 && gen->n_functions < HD_MAX_FUNCTIONS) {
             void *exec = jit_alloc_exec(gen->code_size);
             if (exec) {
             memcpy(exec, gen->code, gen->code_size);
@@ -587,10 +586,10 @@ int gen_stmt(HCGen *gen, const HCASTNode *node) {
                     gen->code_cap = saved_code_cap;
                     gen->symbols = saved_symbols;
                     gen->n_functions = saved_n_functions;
-                    memcpy(gen->functions, saved_functions, sizeof(HCFunction) * HC_MAX_FUNCTIONS);
+                    memcpy(gen->functions, saved_functions, sizeof(HDFunction) * HD_MAX_FUNCTIONS);
                   
                     strncpy(gen->functions[gen->n_functions].name,
-                            node->ident, HC_MAX_IDENT_LEN - 1);
+                            node->ident, HD_MAX_IDENT_LEN - 1);
                     gen->functions[gen->n_functions].func_ptr = exec;
                     gen->functions[gen->n_functions].code_size = func_body_size;
                     gen->functions[gen->n_functions].n_params = node->n_params;
@@ -646,7 +645,7 @@ int gen_stmt(HCGen *gen, const HCASTNode *node) {
          *   end: add rsp, 8             ; pop switch value
          * Break inside a case jumps to end (via break_patches at this depth).
          */
-        case HC_AST_SWITCH: {
+        case HD_AST_SWITCH: {
             int depth = gen->loop_depth;
             gen->loop_depth++;
             gen->n_break_patches[depth] = 0;
@@ -655,7 +654,7 @@ int gen_stmt(HCGen *gen, const HCASTNode *node) {
             gen_expr(gen, node->cond);      /* rax = switch value */
             emit_push_rax(gen);             /* [rsp] = switch value */
 
-            HCASTNode *body = node->body;   /* block of CASE nodes */
+            HDASTNode *body = node->body;   /* block of CASE nodes */
             int n_cases = body ? body->n_stmts : 0;
             size_t je_patches[64];
             int n_je = 0;
@@ -666,8 +665,8 @@ int gen_stmt(HCGen *gen, const HCASTNode *node) {
              * The case value may be a full expression (clobbers rax), so we
              * move it to rdi BEFORE reloading the switch value into rax. */
             for (int i = 0; i < n_cases; i++) {
-                HCASTNode *c = body->stmts[i];
-                if (c->kind == HC_AST_CASE && c->cond) {
+                HDASTNode *c = body->stmts[i];
+                if (c->kind == HD_AST_CASE && c->cond) {
                     gen_expr(gen, c->cond);     /* rax = case value */
                     emit_mov_rdi_rax(gen);      /* rdi = case value */
                     emit_mov_rax_mem_rsp(gen);  /* rax = switch value */
@@ -680,7 +679,7 @@ int gen_stmt(HCGen *gen, const HCASTNode *node) {
             /* no match: default or end */
             int default_idx = -1;
             for (int i = 0; i < n_cases; i++)
-                if (body->stmts[i]->kind == HC_AST_CASE && !body->stmts[i]->cond)
+                if (body->stmts[i]->kind == HD_AST_CASE && !body->stmts[i]->cond)
                     default_idx = i;
             size_t default_jmp = emit_jmp_placeholder(gen);  /* jmp default/end */
 
@@ -689,7 +688,7 @@ int gen_stmt(HCGen *gen, const HCASTNode *node) {
             size_t body_start[64];
             for (int i = 0; i < n_cases; i++) {
                 body_start[i] = gen->code_size;
-                HCASTNode *c = body->stmts[i];
+                HDASTNode *c = body->stmts[i];
                 if (c->body)
                     for (int s = 0; s < c->body->n_stmts; s++)
                         gen_stmt(gen, c->body->stmts[s]);
@@ -703,7 +702,7 @@ int gen_stmt(HCGen *gen, const HCASTNode *node) {
             /* patch je targets */
             int j = 0;
             for (int i = 0; i < n_cases; i++)
-                if (body->stmts[i]->kind == HC_AST_CASE && body->stmts[i]->cond) {
+                if (body->stmts[i]->kind == HD_AST_CASE && body->stmts[i]->cond) {
                     if (j < n_je) patch_rel32(gen, je_patches[j], body_start[i]);
                     j++;
                 }
@@ -717,12 +716,12 @@ int gen_stmt(HCGen *gen, const HCASTNode *node) {
             break;
         }
 
-        case HC_AST_CASE:
+        case HD_AST_CASE:
             /* CASE nodes are only handled inside SWITCH; a stray one emits
              * nothing (its body is emitted by the switch pass). */
             break;
 
-        case HC_AST_GOTO:
+        case HD_AST_GOTO:
             /* goto label; — emit a jmp placeholder. If the label was ALREADY
              * placed (backward goto) patch it now; else record it for the
              * forward patch when the label is placed. */
@@ -732,7 +731,7 @@ int gen_stmt(HCGen *gen, const HCASTNode *node) {
                     if (strcmp(gen->labels[i].name, node->ident) == 0) { idx = i; break; }
                 if (idx < 0) {
                     idx = gen->n_labels++;
-                    strncpy(gen->labels[idx].name, node->ident, HC_MAX_IDENT_LEN - 1);
+                    strncpy(gen->labels[idx].name, node->ident, HD_MAX_IDENT_LEN - 1);
                     gen->labels[idx].offset = -1;   /* unknown yet */
                 }
                 size_t patch = emit_jmp_placeholder(gen);
@@ -746,7 +745,7 @@ int gen_stmt(HCGen *gen, const HCASTNode *node) {
             }
             break;
 
-        case HC_AST_LABEL:
+        case HD_AST_LABEL:
             /* label: — record current code position; patch any pending
              * forward gotos that target this label. */
             if (gen->n_labels < 128) {
@@ -755,7 +754,7 @@ int gen_stmt(HCGen *gen, const HCASTNode *node) {
                     if (strcmp(gen->labels[i].name, node->ident) == 0) { idx = i; break; }
                 if (idx < 0) {
                     idx = gen->n_labels++;
-                    strncpy(gen->labels[idx].name, node->ident, HC_MAX_IDENT_LEN - 1);
+                    strncpy(gen->labels[idx].name, node->ident, HD_MAX_IDENT_LEN - 1);
                 }
                 gen->labels[idx].offset = (int)gen->code_size;
                 /* patch any pending forward gotos */
@@ -766,7 +765,7 @@ int gen_stmt(HCGen *gen, const HCASTNode *node) {
             }
             break;
 
-        case HC_AST_BREAK:
+        case HD_AST_BREAK:
             /* Emit jump to loop end - will be patched when loop ends */
             if (gen->loop_depth > 0 && gen->loop_depth <= 10) {
                 int depth = gen->loop_depth - 1;
@@ -777,7 +776,7 @@ int gen_stmt(HCGen *gen, const HCASTNode *node) {
             }
             break;
 
-        case HC_AST_CONTINUE:
+        case HD_AST_CONTINUE:
             /* Emit jump to loop continue/condition - will be patched when loop ends */
             if (gen->loop_depth > 0 && gen->loop_depth <= 10) {
                 int depth = gen->loop_depth - 1;

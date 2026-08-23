@@ -5,20 +5,20 @@
  * bugs by finding all of the bug bugs on the Internet that allows us
  * to know where we are by knowing where we aren't."
  *
- * This harness compiles the SAME program with OUR compiler (hc_eval)
+ * This harness compiles the SAME program with OUR compiler (hd_eval)
  * AND with gcc (via a generated C file + subprocess), runs both, and
  * compares. Every divergence is a FINDING: either our compiler is
  * wrong (fix ours) or gcc is wrong (we learn their bug, avoid it).
  * The Csmith doctrine applied to ourselves.
  *
  * Usage:
- *   compiler_diff <holyc-expr> [expected]
+ *   compiler_diff <holyd-expr> [expected]
  *   compiler_diff --file <src.hc>
  *
- * C11, self-contained. Links the HolyC compiler objects.
+ * C11, self-contained. Links the HolyD compiler objects.
  */
-#include "holyc.h"
-#include "holyc_codegen.h"
+#include "holyd.h"
+#include "holyd_codegen.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -47,15 +47,15 @@ static int run_gcc(const char *c_src, const char *prog, int64_t *out_rc)
     return 0;
 }
 
-/* translate a HolyC expression to a C expression (the subset that
- * differs: U0/U8/I64 etc. -> the C equivalents; HolyC ";" statement
+/* translate a HolyD expression to a C expression (the subset that
+ * differs: U0/U8/I64 etc. -> the C equivalents; HolyD ";" statement
  * separators in expressions are not C — the harness uses pure
  * expressions for the differential). */
 static void translate(const char *hc, char *out, size_t cap)
 {
     size_t o = 0;
     for (size_t i = 0; hc[i] && o + 4 < cap; i++) {
-        /* HolyC integer suffixes: U8/U16/U32/U64/I64 are TYPES, but in
+        /* HolyD integer suffixes: U8/U16/U32/U64/I64 are TYPES, but in
          * an expression context they don't appear — keep the rest */
         if (!strncmp(hc + i, "True", 4) || !strncmp(hc + i, "TRUE", 4)) {
             memcpy(out + o, "1", 1); o += 1; i += 3; continue;
@@ -71,7 +71,7 @@ static void translate(const char *hc, char *out, size_t cap)
 int main(int argc, char **argv)
 {
     if (argc < 2) {
-        fprintf(stderr, "usage: %s <holyc-expr> [expected]\n", argv[0]);
+        fprintf(stderr, "usage: %s <holyd-expr> [expected]\n", argv[0]);
         return 2;
     }
     const char *expr = argv[1];
@@ -82,7 +82,7 @@ int main(int argc, char **argv)
     printf("=== differential: %s ===\n", expr);
 
     /* 1. OUR compiler */
-    int64_t ours = hc_eval(expr);
+    int64_t ours = hd_eval(expr);
     printf("  ours : %lld\n", (long long)ours);
 
     /* 2. gcc */

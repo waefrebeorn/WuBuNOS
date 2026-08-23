@@ -1,13 +1,13 @@
 /*
- * holyc_codegen_internal.h  --  Internal header for HolyC codegen modules
+ * holyd_codegen_internal.h  --  Internal header for HolyD codegen modules
  * Shared declarations for codegen submodules (NOT static - they're implemented in .c files).
  */
 
 #ifndef HOLYC_CODEGEN_INTERNAL_H
 #define HOLYC_CODEGEN_INTERNAL_H
 
-#include "holyc.h"
-#include "holyc_parser.h"
+#include "holyd.h"
+#include "holyd_parser.h"
 #include "../jit/jit.h"
 
 #include <stdlib.h>
@@ -25,81 +25,81 @@
 
 /* -- Code Emission Helpers ---------------------------------------- */
 
-void emit_rep_movsb(HCGen *gen);
-int resolve_var(HCGen *gen, const char *name, int *off, int *is_global);
-void emit_byte(HCGen *gen, uint8_t b);
-void emit_data_byte(HCGen *gen, uint8_t b);
-void emit_word(HCGen *gen, uint16_t w);
-void emit_dword(HCGen *gen, uint32_t d);
-void emit_data_dword(HCGen *gen, uint32_t d);
-void emit_data_qword(HCGen *gen, uint64_t q);
-void emit_qword(HCGen *gen, uint64_t q);
-void emit_cdqe(HCGen *gen);  /* sign-extend 32→64 after int ADD/SUB (cdqe) */
+void emit_rep_movsb(HDGen *gen);
+int resolve_var(HDGen *gen, const char *name, int *off, int *is_global);
+void emit_byte(HDGen *gen, uint8_t b);
+void emit_data_byte(HDGen *gen, uint8_t b);
+void emit_word(HDGen *gen, uint16_t w);
+void emit_dword(HDGen *gen, uint32_t d);
+void emit_data_dword(HDGen *gen, uint32_t d);
+void emit_data_qword(HDGen *gen, uint64_t q);
+void emit_qword(HDGen *gen, uint64_t q);
+void emit_cdqe(HDGen *gen);  /* sign-extend 32→64 after int ADD/SUB (cdqe) */
 
 /* -- Patch Helpers ------------------------------------------------- */
 
-void patch_rel32(HCGen *gen, size_t patch_pos, size_t target_pos);
+void patch_rel32(HDGen *gen, size_t patch_pos, size_t target_pos);
 
 /* -- x86-64 Instruction Patterns ---------------------------------- */
 
-void emit_mov_rax_imm64(HCGen *gen, int64_t val);
+void emit_mov_rax_imm64(HDGen *gen, int64_t val);
 
 /* -- Global (data-section) variable access ----------------------- */
 /* Emits a RIP-relative mov rax, [rip+disp32] load of a data-section global
- * at `global_offset` and records a patch so the caller (hc_eval /
+ * at `global_offset` and records a patch so the caller (hd_eval /
  * wubu_holyd_eval) can fix up disp32 to point at exec+code_size+offset. */
-void emit_global_load_rax(HCGen *gen, size_t global_offset);
+void emit_global_load_rax(HDGen *gen, size_t global_offset);
 /* Emits a RIP-relative mov [rip+disp32], rax store of a data-section global. */
-void emit_global_store_rax(HCGen *gen, size_t global_offset);
-void emit_mov_rdi_imm64(HCGen *gen, int64_t val);
-void emit_cvt_f64_to_i64(HCGen *gen);
-void emit_cvt_i64_to_f64(HCGen *gen);
-void emit_add_rax_rdi(HCGen *gen);
-void emit_sub_rax_rdi(HCGen *gen);
-void emit_mul_rax_rdi(HCGen *gen);
-void emit_div_rax_rdi(HCGen *gen);
-void emit_udiv_rax_rdi(HCGen *gen);
-void emit_mod_rax_rdi(HCGen *gen);
-void emit_shl_rax_rdi(HCGen *gen);
-void emit_shr_rax_rdi(HCGen *gen);
-void emit_and_rax_rdi(HCGen *gen);
-void emit_or_rax_rdi(HCGen *gen);
-void emit_xor_rax_rdi(HCGen *gen);
-void emit_xchg_rax_rdi(HCGen *gen);
-void emit_neg_rax(HCGen *gen);
-void emit_not_rax(HCGen *gen);
-void emit_cmp_rax_rdi(HCGen *gen);
-void emit_test_rax_rax(HCGen *gen);
-void emit_mov_rdi_rax(HCGen *gen);
-void emit_xor_rax_rax(HCGen *gen);
-void emit_mov_rax_1(HCGen *gen);
-void emit_ret(HCGen *gen);
-void emit_prologue(HCGen *gen);
+void emit_global_store_rax(HDGen *gen, size_t global_offset);
+void emit_mov_rdi_imm64(HDGen *gen, int64_t val);
+void emit_cvt_f64_to_i64(HDGen *gen);
+void emit_cvt_i64_to_f64(HDGen *gen);
+void emit_add_rax_rdi(HDGen *gen);
+void emit_sub_rax_rdi(HDGen *gen);
+void emit_mul_rax_rdi(HDGen *gen);
+void emit_div_rax_rdi(HDGen *gen);
+void emit_udiv_rax_rdi(HDGen *gen);
+void emit_mod_rax_rdi(HDGen *gen);
+void emit_shl_rax_rdi(HDGen *gen);
+void emit_shr_rax_rdi(HDGen *gen);
+void emit_and_rax_rdi(HDGen *gen);
+void emit_or_rax_rdi(HDGen *gen);
+void emit_xor_rax_rdi(HDGen *gen);
+void emit_xchg_rax_rdi(HDGen *gen);
+void emit_neg_rax(HDGen *gen);
+void emit_not_rax(HDGen *gen);
+void emit_cmp_rax_rdi(HDGen *gen);
+void emit_test_rax_rax(HDGen *gen);
+void emit_mov_rdi_rax(HDGen *gen);
+void emit_xor_rax_rax(HDGen *gen);
+void emit_mov_rax_1(HDGen *gen);
+void emit_ret(HDGen *gen);
+void emit_prologue(HDGen *gen);
 
 /* prefetchnta [rdi] — array-element loads (INDEX path holds base in rdi) */
-void emit_prefetch_rdi(HCGen *gen);
+void emit_prefetch_rdi(HDGen *gen);
 /* prefetchnta [rax] — plain pointer dereference loads */
-void emit_prefetch_rax(HCGen *gen);
-void emit_prefetch_rax_off(HCGen *gen, int32_t off);   /* [rax+disp32] */
-void emit_prefetch_rbp(HCGen *gen, int32_t off);       /* [rbp - off]  */
-void emit_prefetch_rip(HCGen *gen, size_t global_offset); /* [rip+disp32] */
-void emit_epilogue(HCGen *gen);
+void emit_prefetch_rax(HDGen *gen);
+void emit_prefetch_rax_off(HDGen *gen, int32_t off);   /* [rax+disp32] */
+void emit_prefetch_rbp(HDGen *gen, int32_t off);       /* [rbp - off]  */
+void emit_prefetch_rip(HDGen *gen, size_t global_offset); /* [rip+disp32] */
+void emit_epilogue(HDGen *gen);
 
 /* -- Conditional Set Patterns ------------------------------------- */
 
-void emit_setcc(HCGen *gen, uint8_t set_op);
+void emit_setcc(HDGen *gen, uint8_t set_op);
 
 /* -- Jump Emission (5-byte, always patchable) --------------------- */
 
-size_t emit_jmp_placeholder(HCGen *gen);
-size_t emit_jcc_placeholder(HCGen *gen, uint8_t cc);
+size_t emit_jmp_placeholder(HDGen *gen);
+size_t emit_jcc_placeholder(HDGen *gen, uint8_t cc);
 
 /* switch dispatch helpers */
-void emit_push_rax(HCGen *gen);
-void emit_pop_rax(HCGen *gen);
-void emit_cmp_rax_mem_rsp(HCGen *gen);
-void emit_mov_rax_mem_rsp(HCGen *gen);
-void emit_add_rsp_8(HCGen *gen);
+void emit_push_rax(HDGen *gen);
+void emit_pop_rax(HDGen *gen);
+void emit_cmp_rax_mem_rsp(HDGen *gen);
+void emit_mov_rax_mem_rsp(HDGen *gen);
+void emit_add_rsp_8(HDGen *gen);
 
 /* Condition codes for Jcc */
 #define CC_O  0
@@ -119,32 +119,32 @@ void emit_add_rsp_8(HCGen *gen);
 
 /* -- Code Gen Init ------------------------------------------------ */
 
-void hc_gen_init(HCGen *gen);
+void hd_gen_init(HDGen *gen);
 
 /* -- Expression Generation ---------------------------------------- */
 
-int gen_expr(HCGen *gen, const HCASTNode *node);
+int gen_expr(HDGen *gen, const HDASTNode *node);
 /* static type of an expression (IDENT→symbol, INDEX→element, MEMBER→member
  * type, etc.) — used across expr/stmt for decay + sizeof. */
-HCType *expr_static_type(HCGen *gen, const HCASTNode *node);
+HDType *expr_static_type(HDGen *gen, const HDASTNode *node);
 /* lvalue address of an expression (rax = &expr); arrays decay to their
  * address so `int* p = a[0]` stores the row address. */
-void emit_base_addr(HCGen *gen, const HCASTNode *node);
+void emit_base_addr(HDGen *gen, const HDASTNode *node);
 
 /* -- Statement Generation ----------------------------------------- */
 
-int gen_stmt(HCGen *gen, const HCASTNode *node);
+int gen_stmt(HDGen *gen, const HDASTNode *node);
 
 /* -- Global patch info for runtime fixup of global variable access */
 typedef struct {
     size_t code_patch_pos;
     size_t global_offset;
-} HCGenGlobalPatch;
+} HDGenGlobalPatch;
 
 /* -- External function table for extern C functions */
 typedef struct {
     char c_name[64];
     void *func_addr;
-} HCGenExternFunc;
+} HDGenExternFunc;
 
 #endif /* HOLYC_CODEGEN_INTERNAL_H */

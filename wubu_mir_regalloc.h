@@ -10,7 +10,11 @@
  *   v0       -> physical reg 0 (return register)
  *   v1..n_args -> physical reg 0..min(n_args-1, n_phys_regs-1) (arg registers)
  *
- * Spill convention: reg = -1 means spilled; stack = byte offset from frame base.
+ * Spill convention: reg = -1 means spilled (always reloaded from stack). If
+* reg >= 0 with spill_after > 0, the in-register copy is valid only for
+* instruction indices < spill_after; past that the value is reloaded from
+* stack. split_until bounds the fragment when an interval is split more
+* than once.
  *
  * C11, self-contained.
  */
@@ -24,6 +28,14 @@
 typedef struct {
     int32_t reg;      /* physical register index, or -1 if spilled to stack */
     int32_t stack;    /* stack offset (bytes) if spilled, else 0 */
+    /* ---- interval splitting (LLVM Greedy-style) ----
+     * If reg >= 0 and spill_after > 0: hold `reg` only for instruction
+     * indices < spill_after, then the value must be re-loaded from
+     * `stack` (a fresh spill slot) past that point. split_until marks
+     * where the original live range is expected to resume if it's split
+     * multiple times (== end+1 when unsplit). */
+    int32_t spill_after;  /* instruction index after which reg no longer holds value */
+    int32_t split_until;  /* instruction index to which the split-off fragment lives */
 } wubu_reg_assign_t;
 
 /* Allocate registers for a MIR program.

@@ -12,7 +12,7 @@
  *   x86-64   -> wubu_isa_x86_64.c   (native JIT, this machine)  [DONE]
  *   m68k     -> wubu_isa_m68k.c     (Motorola 68,000, interp)   [DONE]
  *   riscv    -> (RV64I, executed by the interp)  (next wave)
- *   ptx      -> holyc_ptx.c         (NVIDIA GPU, the existing backend)
+ *   ptx      -> holyd_ptx.c         (NVIDIA GPU, the existing backend)
  *   arm64    -> (next wave)
  *   gpu      -> Vulkan/WebGPU front (RDNA/Xe/Apple G13 covered by
  *              ONE portable front — llama.cpp's 15-backend table is

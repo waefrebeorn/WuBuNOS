@@ -18,7 +18,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-/* MIR integer semantics are 32-bit (the canonical HolyC `int` width the
+/* MIR integer semantics are 32-bit (the canonical HolyD `int` width the
  * x86-64 JIT golden and the portable interpreter agree on). Folding must
  * wrap to 32 bits to match runtime execution, or it will disagree with the
  * golden reference. */
@@ -232,8 +232,15 @@ static void dce_pass(wubu_mir_prog_t *p)
             if (in->b < nvr) used[in->b] = 1;
             continue;
         }
-        /* MIR_ALLOC / MIR_LOAD carry memory side effects and must survive. */
-        if (in->op == MIR_ALLOC || in->op == MIR_LOAD) continue;
+        /* MIR_ALLOC has no inputs (it is a base-address source); it must
+         * survive (handled by the deletion guard) but marks nothing.
+         * MIR_LOAD reads its address operand `a` — that address computation
+         * must be kept alive, or DCE deletes the instruction feeding it. */
+        if (in->op == MIR_ALLOC) continue;
+        if (in->op == MIR_LOAD) {
+            if (in->a < nvr) used[in->a] = 1;
+            continue;
+        }
         /* All other ops read a (and possibly b) */
         if (in->a < nvr) used[in->a] = 1;
         if (in->b < nvr) used[in->b] = 1;
@@ -244,7 +251,9 @@ static void dce_pass(wubu_mir_prog_t *p)
     for (size_t i = 0; i < p->n; i++) {
         wubu_mir_instr_t *in = &p->ins[i];
         if (in->op == MIR_LABEL || in->op == MIR_JMP ||
-            in->op == MIR_JZ || in->op == MIR_RET ||
+            in->op == MIR_JZ || in->op == MIR_JNZ ||
+            in->op == MIR_BREAK || in->op == MIR_CONTINUE ||
+            in->op == MIR_RET ||
             in->op == MIR_CONST || in->op == MIR_ALLOC ||
             in->op == MIR_LOAD || in->op == MIR_STORE)
             continue;
@@ -272,7 +281,22 @@ static void fold_dce_pass(wubu_mir_prog_t *p)
         uint32_t nvr = mir_max_vr(p);
         int64_t *const_val = (int64_t *)calloc(nvr ? nvr : 1, sizeof(int64_t));
         int *is_const = (int *)calloc(nvr ? nvr : 1, sizeof(int));
-        if (!const_val || !is_const) { free(const_val); free(is_const); return; }
+        int *def_count = (int *)calloc(nvr ? nvr : 1, sizeof(int));
+        if (!const_val || !is_const || !def_count) {
+            free(const_val); free(is_const); free(def_count); return;
+        }
+
+        /* Count definitions per vr. A vr defined more than once (e.g. a
+         * phi-merge written from two branches) is NOT a single constant and
+         * must never be folded, or we pick one (wrong) arm's value. */
+        for (size_t i = 0; i < p->n; i++) {
+            wubu_mir_instr_t *in = &p->ins[i];
+            if (in->op == MIR_LABEL || in->op == MIR_JMP || in->op == MIR_RET ||
+                in->op == MIR_JZ || in->op == MIR_JNZ || in->op == MIR_BREAK ||
+                in->op == MIR_CONTINUE)
+                continue;
+            if (in->dst < nvr) def_count[in->dst]++;
+        }
 
         for (size_t i = 0; i < p->n; i++) {
             wubu_mir_instr_t *in = &p->ins[i];
@@ -281,7 +305,9 @@ static void fold_dce_pass(wubu_mir_prog_t *p)
                 is_const[in->dst] = 1;
             } else if (in->op != MIR_LABEL && in->op != MIR_RET &&
                        in->op != MIR_JMP && in->op != MIR_JZ &&
-                       in->dst < nvr) {
+                       in->op != MIR_JNZ && in->op != MIR_BREAK &&
+                       in->op != MIR_CONTINUE && in->dst < nvr) {
+                /* A multi-defined vr (phi) can never be treated as a constant. */
                 is_const[in->dst] = 0;
             }
         }
@@ -290,12 +316,17 @@ static void fold_dce_pass(wubu_mir_prog_t *p)
         for (size_t i = 0; i < p->n; i++) {
             wubu_mir_instr_t *in = &p->ins[i];
             if (in->op == MIR_LABEL || in->op == MIR_JMP ||
-                in->op == MIR_JZ || in->op == MIR_RET ||
+                in->op == MIR_JZ || in->op == MIR_JNZ || in->op == MIR_BREAK ||
+                in->op == MIR_CONTINUE || in->op == MIR_RET ||
                 in->op == MIR_CONST)
                 continue;
 
+            /* Never fold an instruction whose destination vr is multiply
+             * defined (phi merge): doing so would overwrite the other arm. */
+            if (in->dst < nvr && def_count[in->dst] > 1) continue;
+
             if (in->op == MIR_NEG || in->op == MIR_NOT || in->op == MIR_MOV) {
-                if (in->a < nvr && is_const[in->a]) {
+                if (in->a < nvr && is_const[in->a] && def_count[in->a] <= 1) {
                     int64_t result;
                     switch (in->op) {
                     case MIR_NEG: result = -const_val[in->a]; break;
@@ -314,7 +345,8 @@ static void fold_dce_pass(wubu_mir_prog_t *p)
             }
 
             if (in->a < nvr && in->b < nvr &&
-                is_const[in->a] && is_const[in->b]) {
+                is_const[in->a] && is_const[in->b] &&
+                def_count[in->a] <= 1 && def_count[in->b] <= 1) {
                 int64_t a = const_val[in->a];
                 int64_t b = const_val[in->b];
                 int64_t result = 0;
@@ -351,6 +383,7 @@ static void fold_dce_pass(wubu_mir_prog_t *p)
         }
         free(const_val);
         free(is_const);
+        free(def_count);
     }
 }
 

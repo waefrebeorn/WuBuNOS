@@ -1,26 +1,26 @@
 /*
- * holyc_runtime.c  --  WuBuOS HolyC personality runtime (host effects)
+ * holyd_runtime.c  --  WuBuOS HolyD personality runtime (host effects)
  *
- * Implements the small set of HolyC / TempleOS library functions the
- * era demo and the desktop HolyC terminal actually call:
+ * Implements the small set of HolyD / TempleOS library functions the
+ * era demo and the desktop HolyD terminal actually call:
  *   - Print(const char *)        -> host stdout
  *   - FpWriteFile(name, contents) -> host file create+write
  *
  * These are REAL host operations, not stubs. They are registered as extern
- * C functions with the HolyC JIT (see holyc_codegen_api.c) so a compiled
+ * C functions with the HolyD JIT (see holyd_codegen_api.c) so a compiled
  * `Print("...")` / `FpWriteFile(...)` becomes a real host call instead of a
  * null-pointer `call 0` (the previous behaviour, which SIGSEGV'd).
  *
- * C11, self-contained; depends only on holyc_codegen.h for the registration
+ * C11, self-contained; depends only on holyd_codegen.h for the registration
  * API. ABI: System V AMD64 (args in rdi, rsi, ...; result in rax).
  */
 
-#include "holyc_codegen.h"
+#include "holyd_codegen.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-/* -- HolyC runtime host functions --------------------------------- */
+/* -- HolyD runtime host functions --------------------------------- */
 
 /* Print(const char *s) -- emit a NUL-terminated string to stdout. */
 int64_t wubu_print(const char *s) {
@@ -65,23 +65,23 @@ int64_t wubu_memcmp(const void *a, const void *b, size_t n) {
 
 /* -- Extern registration ------------------------------------------ */
 
-/* Register the HolyC personality runtime functions with a codegen context
+/* Register the HolyD personality runtime functions with a codegen context
  * so the JIT resolves `Print` / `FpWriteFile` to real host addresses. */
-void hc_register_holyc_runtime(HCGen *gen) {
+void hd_register_holyd_runtime(HDGen *gen) {
     if (!gen) return;
     if (gen->n_extern_funcs >= 32) return;
 
     gen->extern_funcs[gen->n_extern_funcs].c_name[0] = '\0';
     strncpy(gen->extern_funcs[gen->n_extern_funcs].c_name, "Print",
-            HC_MAX_IDENT_LEN - 1);
-    gen->extern_funcs[gen->n_extern_funcs].c_name[HC_MAX_IDENT_LEN - 1] = '\0';
+            HD_MAX_IDENT_LEN - 1);
+    gen->extern_funcs[gen->n_extern_funcs].c_name[HD_MAX_IDENT_LEN - 1] = '\0';
     gen->extern_funcs[gen->n_extern_funcs].func_addr = (void *)wubu_print;
     gen->n_extern_funcs++;
 
     if (gen->n_extern_funcs >= 32) return;
     strncpy(gen->extern_funcs[gen->n_extern_funcs].c_name, "FpWriteFile",
-            HC_MAX_IDENT_LEN - 1);
-    gen->extern_funcs[gen->n_extern_funcs].c_name[HC_MAX_IDENT_LEN - 1] = '\0';
+            HD_MAX_IDENT_LEN - 1);
+    gen->extern_funcs[gen->n_extern_funcs].c_name[HD_MAX_IDENT_LEN - 1] = '\0';
     gen->extern_funcs[gen->n_extern_funcs].func_addr = (void *)wubu_fp_write_file;
     gen->n_extern_funcs++;
 
@@ -90,15 +90,15 @@ void hc_register_holyc_runtime(HCGen *gen) {
      * a null-pointer SIGSEGV (we ballin). */
     if (gen->n_extern_funcs >= 32) return;
     strncpy(gen->extern_funcs[gen->n_extern_funcs].c_name, "print",
-            HC_MAX_IDENT_LEN - 1);
-    gen->extern_funcs[gen->n_extern_funcs].c_name[HC_MAX_IDENT_LEN - 1] = '\0';
+            HD_MAX_IDENT_LEN - 1);
+    gen->extern_funcs[gen->n_extern_funcs].c_name[HD_MAX_IDENT_LEN - 1] = '\0';
     gen->extern_funcs[gen->n_extern_funcs].func_addr = (void *)wubu_print;
     gen->n_extern_funcs++;
 
     if (gen->n_extern_funcs >= 32) return;
     strncpy(gen->extern_funcs[gen->n_extern_funcs].c_name, "puts",
-            HC_MAX_IDENT_LEN - 1);
-    gen->extern_funcs[gen->n_extern_funcs].c_name[HC_MAX_IDENT_LEN - 1] = '\0';
+            HD_MAX_IDENT_LEN - 1);
+    gen->extern_funcs[gen->n_extern_funcs].c_name[HD_MAX_IDENT_LEN - 1] = '\0';
     gen->extern_funcs[gen->n_extern_funcs].func_addr = (void *)wubu_print;
     gen->n_extern_funcs++;
 
@@ -114,8 +114,8 @@ void hc_register_holyc_runtime(HCGen *gen) {
     for (size_t i = 0; i < sizeof(libc) / sizeof(libc[0]); i++) {
         if (gen->n_extern_funcs >= 32) return;
         strncpy(gen->extern_funcs[gen->n_extern_funcs].c_name, libc[i].name,
-                HC_MAX_IDENT_LEN - 1);
-        gen->extern_funcs[gen->n_extern_funcs].c_name[HC_MAX_IDENT_LEN - 1] = '\0';
+                HD_MAX_IDENT_LEN - 1);
+        gen->extern_funcs[gen->n_extern_funcs].c_name[HD_MAX_IDENT_LEN - 1] = '\0';
         gen->extern_funcs[gen->n_extern_funcs].func_addr = libc[i].addr;
         gen->n_extern_funcs++;
     }

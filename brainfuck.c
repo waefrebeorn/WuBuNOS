@@ -99,7 +99,7 @@ static void op_in(bf_code_t *c) {
 }
 
 /* bf_run — compile `src` to x86-64 and execute it. Returns 0 on
- * success (the meme, fulfilled). Exposed for the holyc CLI's
+ * success (the meme, fulfilled). Exposed for the holyd CLI's
  * -brainfuck flag. */
 int bf_run(const char *src)
 {

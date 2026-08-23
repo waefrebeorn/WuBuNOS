@@ -1,5 +1,5 @@
 /*
- * holyc_pe.c  --  PE32+ executable emitter for WuBuNOS HolyC compiler.
+ * holyd_pe.c  --  PE32+ executable emitter for WuBuNOS HolyD compiler.
  *
  * Research: TinyPE-on-Win10 (ayaka14732), "PE Format" (Microsoft),
  * "Anatomy of the Portable Executable" (blog.deephacking.tech).
@@ -14,7 +14,7 @@
  * Pure C11, no compiler extensions. Byte-level serialization.
  */
 
-#include "holyc_codegen.h"
+#include "holyd_codegen.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
@@ -50,7 +50,7 @@ static uint32_t align_up(uint32_t val, uint32_t alignment) {
 #define OPT_HDR_SIZE 240
 #define SECT_HDR_SIZE 40
 
-int hc_write_pe(const char *filename,
+int hd_write_pe(const char *filename,
                 const uint8_t *code, size_t code_size,
                 const uint8_t *data, size_t data_size,
                 const size_t *patch_offsets,

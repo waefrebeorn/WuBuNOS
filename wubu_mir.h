@@ -24,6 +24,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "holyd_types.h"   /* for HD_MAX_IDENT_LEN (function-name buffers) */
 
 /* a virtual register index. 0 is reserved as the "value" register the
  * program returns (MIR_RET reads it). */
@@ -64,8 +65,31 @@ typedef enum {
     /* Memory model (arrays + pointers live in a flat int64 memory array) */
     MIR_ALLOC,         /* dst = base_addr; imm = n_elements (reserves memory) */
     MIR_LOAD,          /* dst = mem[a] */
-    MIR_STORE          /* mem[a] = b */
+    MIR_STORE,         /* mem[a] = b */
+    MIR_CALL,          /* call function func_id (args already in v1..vN) */
+    /* Soft-float ops: f32 values travel as IEEE-754 bit patterns inside the
+     * int64 register file (upper 32 bits zero). Executed via wubu_softfloat. */
+    MIR_FADD,          /* dst = f32(a) + f32(b) */
+    MIR_FSUB,          /* dst = f32(a) - f32(b) */
+    MIR_FMUL,          /* dst = f32(a) * f32(b) */
+    MIR_FDIV,          /* dst = f32(a) / f32(b) */
+    MIR_FNEG,          /* dst = -f32(a) */
+    MIR_ITOF,          /* dst = (f32)a */
+    MIR_FTOI,          /* dst = (int)f32(a) */
+    MIR_FEQ,           /* dst = (f32(a) == f32(b)) */
+    MIR_FNE,           /* dst = (f32(a) != f32(b)) */
+    MIR_FLT,           /* dst = (f32(a) <  f32(b)) */
+    MIR_FLE            /* dst = (f32(a) <= f32(b)) */
 } wubu_mir_op_t;
+
+#define MIR_MAX_FUNCTIONS 256
+#define MIR_MAX_CALL_ARGS 8
+#define MIR_MAX_CALL_DEPTH 256
+typedef struct {
+    char name[HD_MAX_IDENT_LEN];   /* function name ("" for anonymous) */
+    size_t start;                 /* first instruction index */
+    size_t end;                   /* one past last instruction */
+} wubu_mir_func_t;
 
 typedef struct {
     wubu_mir_op_t op;
@@ -74,6 +98,7 @@ typedef struct {
     wubu_vr_t b;
     int64_t imm;
     uint32_t label;              /* for JMP/JZ: the target label id */
+    uint32_t func_id;            /* for MIR_CALL: index into prog->funcs */
 } wubu_mir_instr_t;
 
 typedef struct {
@@ -82,6 +107,9 @@ typedef struct {
     uint32_t n_labels;           /* next label id */
     uint32_t n_args;             /* number of function arguments (v1..n_args) */
     int64_t total_mem;           /* number of int64 cells reserved via MIR_ALLOC */
+    wubu_vr_t next_vr_hi;        /* high-water mark of high-vr address slots (call convention) */
+    wubu_mir_func_t funcs[MIR_MAX_FUNCTIONS];
+    int n_funcs;
 } wubu_mir_prog_t;
 
 /* O1: init a program (zeroed = empty) */
@@ -90,6 +118,9 @@ void wubu_mir_free(wubu_mir_prog_t *p);
 
 /* O2: append instructions (returns the new vr for dst ops) */
 wubu_vr_t wubu_mir_const(wubu_mir_prog_t *p, int64_t imm);
+/* Like wubu_mir_const but forces the destination virtual register to `dst`
+ * (used for the call convention: arguments must live in v1..vN). */
+wubu_vr_t wubu_mir_const_to(wubu_mir_prog_t *p, wubu_vr_t dst, int64_t imm);
 wubu_vr_t wubu_mir_binop(wubu_mir_prog_t *p, wubu_mir_op_t op,
                          wubu_vr_t a, wubu_vr_t b);
 wubu_vr_t wubu_mir_unop(wubu_mir_prog_t *p, wubu_mir_op_t op, wubu_vr_t a);
@@ -107,6 +138,8 @@ wubu_vr_t wubu_mir_alloc(wubu_mir_prog_t *p, int64_t n_elements);
 wubu_vr_t wubu_mir_load(wubu_mir_prog_t *p, wubu_vr_t addr);
 void wubu_mir_store(wubu_mir_prog_t *p, wubu_vr_t addr, wubu_vr_t val);
 void wubu_mir_ret(wubu_mir_prog_t *p, wubu_vr_t v);
+/* Emit MIR_CALL to prog->funcs[func_id] (args must be in v1..vN already). */
+void wubu_mir_call(wubu_mir_prog_t *p, uint32_t func_id);
 
 /* Set the number of function arguments (v1..n_args get pre-assigned to arg regs) */
 void wubu_mir_set_n_args(wubu_mir_prog_t *p, uint32_t n_args);

@@ -15,7 +15,7 @@ static const lang_routing_t routing_table[] = {
         .language = LANG_HOLYC,
         .policy_flags = POLICY_ACCEPT,
         .description = HOLYC_DESC,
-        .action_message = "[holyc] compiling natively on all targets",
+        .action_message = "[holyd] compiling natively on all targets",
         .container_image = NULL,
         .template_name = NULL,
     },
@@ -31,7 +31,7 @@ static const lang_routing_t routing_table[] = {
         .language = LANG_C,
         .policy_flags = POLICY_ACCEPT,
         .description = "C18 (C11 + bugfix patch) — accepted natively. No C23, no C++, no GNU extensions.",
-        .action_message = "[c18] C18 accepted. HolyC C-subset mode. No higher than C18.",
+        .action_message = "[c18] C18 accepted. HolyD C-subset mode. No higher than C18.",
         .container_image = NULL,
         .template_name = NULL,
     },
@@ -221,18 +221,18 @@ int lang_compile(const char *filename, const char *source, size_t len,
     printf("%s\n", route->action_message);
 
     if (route->policy_flags & POLICY_ACCEPT) {
-        /* Compile natively via holyc */
-        return holyc_compile_native(filename, source, len, output, target_isa);
+        /* Compile natively via holyd */
+        return holyd_compile_native(filename, source, len, output, target_isa);
     }
 
     if (route->policy_flags & POLICY_TEMPLATE) {
         /* JIT template */
-        return holyc_compile_template(route->template_name, source, len, output);
+        return holyd_compile_template(route->template_name, source, len, output);
     }
 
     if (route->policy_flags & POLICY_CONTAINER) {
         /* Route to container */
-        return holyc_compile_container(route->container_image, source, len, output);
+        return holyd_compile_container(route->container_image, source, len, output);
     }
 
     if (route->policy_flags & POLICY_REJECT) {
@@ -246,27 +246,27 @@ int lang_compile(const char *filename, const char *source, size_t len,
 
 /* ---- Stub implementations (to be wired) */
 
-int holyc_compile_native(const char *filename, const char *source, size_t len,
+int holyd_compile_native(const char *filename, const char *source, size_t len,
                           const char *output, const char *target_isa);
-int holyc_compile_template(const char *template_name, const char *source, size_t len,
+int holyd_compile_template(const char *template_name, const char *source, size_t len,
                             const char *output);
-int holyc_compile_container(const char *image, const char *source, size_t len,
+int holyd_compile_container(const char *image, const char *source, size_t len,
                               const char *output);
 
-int holyc_compile_native(const char *filename, const char *source, size_t len,
+int holyd_compile_native(const char *filename, const char *source, size_t len,
                           const char *output, const char *target_isa) {
-    /* Existing holyc compilation path */
+    /* Existing holyd compilation path */
     (void)filename; (void)source; (void)len; (void)output; (void)target_isa;
     return 0;
 }
 
-int holyc_compile_template(const char *template_name, const char *source, size_t len,
+int holyd_compile_template(const char *template_name, const char *source, size_t len,
                             const char *output) {
     (void)template_name; (void)source; (void)len; (void)output;
     return 0;
 }
 
-int holyc_compile_container(const char *image, const char *source, size_t len,
+int holyd_compile_container(const char *image, const char *source, size_t len,
                               const char *output) {
     (void)image; (void)source; (void)len; (void)output;
     return 0;

@@ -1,12 +1,12 @@
 /* 
- * holyc_ptx.c  --  PTX Backend for HolyC Compiler
+ * holyd_ptx.c  --  PTX Backend for HolyD Compiler
  * 
  * Emits PTX assembly for NVIDIA GPU Tensor Cores.
  * Targets NVIDIA Volta/Ampere/Hopper via MMA instructions.
  */
 
-#include "holyc.h"
-#include "holyc_ptx.h"
+#include "holyd.h"
+#include "holyd_ptx.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -16,7 +16,7 @@
 /* Initialize PTX generator */
 void ptx_gen_init(PTXGen *gen) {
     memset(gen, 0, sizeof(*gen));
-    gen->target_arch = HC_TARGET_PTX;
+    gen->target_arch = HD_TARGET_PTX;
 }
 
 /* Emit PTX string */
@@ -77,7 +77,7 @@ void ptx_emit_mma_f16_m16n8k16(PTXGen *gen,
 }
 
 /* Emit FP16 matrix multiply kernel using Tensor Cores */
-void ptx_emit_holyc_gpu_matmul(PTXGen *gen) {
+void ptx_emit_holyd_gpu_matmul(PTXGen *gen) {
     ptx_emit_header(gen);
     ptx_emit_matmul_kernel_prologue(gen, "gpu_matmul");
     
@@ -117,12 +117,12 @@ void ptx_emit_holyc_gpu_matmul(PTXGen *gen) {
     ptx_emit_epilogue(gen);
 }
 
-/* Public API: Compile HolyC source to PTX for GPU execution */
-char *hc_compile_ptx(const char *source) {
+/* Public API: Compile HolyD source to PTX for GPU execution */
+char *hd_compile_ptx(const char *source) {
     if (!source) return NULL;
     PTXGen gen;
     ptx_gen_init(&gen);
-    ptx_emit_holyc_gpu_matmul(&gen);
+    ptx_emit_holyd_gpu_matmul(&gen);
     
     char *result = malloc(gen.code_size + 1);
     memcpy(result, gen.code, gen.code_size);
@@ -132,7 +132,7 @@ char *hc_compile_ptx(const char *source) {
 }
 
 /* PTX runtime execution via CUDA driver API */
-int hc_exec_ptx(const char *ptx_code, void **args, int num_args) {
+int hd_exec_ptx(const char *ptx_code, void **args, int num_args) {
     if (!ptx_code || !args || num_args <= 0) return -1;
 
 #ifdef HAS_CUDA
@@ -188,8 +188,8 @@ int hc_exec_ptx(const char *ptx_code, void **args, int num_args) {
 #endif
 }
 
-/* HolyC built-in: GpuMatMul(ptr A, ptr B, ptr C, I64 M, I64 N, I64 K) */
-int64_t hc_builtin_gpu_matmul(int64_t A, int64_t B, int64_t C, 
+/* HolyD built-in: GpuMatMul(ptr A, ptr B, ptr C, I64 M, I64 N, I64 K) */
+int64_t hd_builtin_gpu_matmul(int64_t A, int64_t B, int64_t C, 
                                int64_t M, int64_t N, int64_t K) {
     (void)A; (void)B; (void)C; (void)M; (void)N; (void)K;
     return 0;

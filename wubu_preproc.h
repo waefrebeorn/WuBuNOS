@@ -1,5 +1,5 @@
 /*
- * wubu_preproc.h -- minimal C preprocessor for the HolyC compiler.
+ * wubu_preproc.h -- minimal C preprocessor for the HolyD compiler.
  * Expands #define (object + function-like) macros and strips directives.
  */
 #ifndef WUBU_PREPROC_H

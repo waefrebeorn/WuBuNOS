@@ -24,6 +24,7 @@ typedef struct {
     int32_t d[8];             /* D0-D7 */
     int32_t a[8];             /* A0-A7 (A7 = stack pointer) */
     uint32_t pc;
+    uint64_t steps;           /* non-termination guard counter */
     uint8_t n, z, v, c, x;    /* condition codes */
     uint8_t mem[M68K_MEM];
 } m68k_cpu_t;
@@ -90,6 +91,7 @@ int64_t wubu_m68k_run(const uint8_t *code, size_t size, int64_t arg)
      * indices into mem[], and the LINK allocates downward from A7. */
 
     while (cpu.pc + 2 <= size) {
+        if (++cpu.steps > 50000000) { cpu.pc = size; break; }  /* non-termination guard */
         uint16_t w = fetch16(&cpu, code, size);
         uint8_t op = (uint8_t)(w >> 8);
         uint8_t lo = (uint8_t)(w & 0xFF);

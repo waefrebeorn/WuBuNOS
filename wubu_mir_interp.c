@@ -10,7 +10,7 @@
  * so the differential gauntlet can verify ALL backends agree with the
  * x86-64 native JIT (the golden reference) without needing native targets.
  *
- * It also exercises the real pipeline: HolyC -> MIR (lowering + regalloc
+ * It also exercises the real pipeline: HolyD -> MIR (lowering + regalloc
  * already ran during compile) -> interpret the canonical form. The per-ISA
  * encoders are still validated by their `compile()` not crashing and by the
  * tools/verify_isa.sh objdump oracle; this interpreter is the run oracle.
@@ -18,11 +18,13 @@
  * C11, self-contained.
  */
 #include "wubu_mir.h"
+#include "wubu_softfloat.h"
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 
-/* HolyC `int` is modeled as a 32-bit two's-complement value, matching the
+/* HolyD `int` is modeled as a 32-bit two's-complement value, matching the
  * x86-64 JIT golden reference (which emits 32-bit `l`-suffixed ops). The MIR
  * register file is 64-bit for convenience, but integer arithmetic wraps to
  * 32 bits so results agree with the canonical `int` semantics. */
@@ -65,19 +67,30 @@ int64_t wubu_mir_interp(const wubu_mir_prog_t *p)
             label_pc[p->ins[i].label] = i + 1;  /* next instr after the label */
     }
 
-    /* Memory model: a flat array of int64 cells (for arrays + pointers). */
-    int64_t mem_size = (p->total_mem < 1) ? 1 : (p->total_mem + 1);
+    /* Memory model: a flat array of int64 cells (for arrays + pointers).
+     * Size it to cover both MIR_ALLOC cells AND the high-vr address slots
+     * used by the call convention (param slots live at those addresses). */
+    int64_t mem_hi = p->total_mem;
+    if ((int64_t)(p->next_vr_hi) - 1 > mem_hi) mem_hi = (int64_t)(p->next_vr_hi) - 1;
+    int64_t mem_size = (mem_hi < 1) ? 1 : (mem_hi + 1);
     int64_t *mem = (int64_t *)calloc((size_t)mem_size, sizeof(int64_t));
     if (!mem) { free(vr); free(label_pc); return 0; }
 
     size_t pc = 0;
     int64_t result = 0;
     size_t guard = 0;
+    /* call stack: each frame saves the return pc plus a snapshot of the
+     * register file and memory so calls (incl. recursion) are reentrant —
+     * the canonical MIR uses absolute vrs shared across all invocations. */
+    typedef struct { size_t ret_pc; int64_t *vr_save; int64_t *mem_save; } call_frame_t;
+    call_frame_t call_stack[MIR_MAX_CALL_DEPTH];
+    int call_sp = 0;
 
     while (pc < p->n) {
         if (++guard > 50000000) { break; }  /* safety against malformed MIR loops */
         const wubu_mir_instr_t *in = &p->ins[pc];
 
+        /* debug: print arg/mem at function entry */
         switch (in->op) {
         case MIR_CONST:
             vr[in->dst] = in->imm;
@@ -150,20 +163,70 @@ int64_t wubu_mir_interp(const wubu_mir_prog_t *p)
                 pc++; /* unresolved: fall through (safe) */
             break;
         case MIR_STORE:
-            { int64_t addr = vr[in->a]; if (addr >= 0 && addr < mem_size) mem[addr] = vr[in->b]; }
+            { int64_t addr = vr[in->a]; if (addr >= 0 && addr < mem_size) mem[addr] = vr[in->b];
+            }
             pc++;
             break;
         case MIR_LOAD:
-            { int64_t addr = vr[in->a]; vr[in->dst] = (addr >= 0 && addr < mem_size) ? mem[addr] : 0; }
+            { int64_t addr = vr[in->a]; vr[in->dst] = (addr >= 0 && addr < mem_size) ? mem[addr] : 0;
+            }
             pc++;
             break;
         case MIR_ALLOC:
             /* addresses are now const vrs; nothing to do at runtime */
             pc++;
             break;
+        /* --- soft-float ops (f32 as IEEE bit patterns, upper 32 bits zero) --- */
+        case MIR_FADD: vr[in->dst] = wubu_sf_f32_add((uint32_t)vr[in->a], (uint32_t)vr[in->b]); pc++; break;
+        case MIR_FSUB: vr[in->dst] = wubu_sf_f32_sub((uint32_t)vr[in->a], (uint32_t)vr[in->b]); pc++; break;
+        case MIR_FMUL: vr[in->dst] = wubu_sf_f32_mul((uint32_t)vr[in->a], (uint32_t)vr[in->b]); pc++; break;
+        case MIR_FDIV: vr[in->dst] = wubu_sf_f32_div((uint32_t)vr[in->a], (uint32_t)vr[in->b]); pc++; break;
+        case MIR_FNEG: vr[in->dst] = wubu_sf_f32_neg((uint32_t)vr[in->a]); pc++; break;
+        case MIR_ITOF: vr[in->dst] = wubu_sf_i64_to_f32(vr[in->a]); pc++; break;
+        case MIR_FTOI: vr[in->dst] = WRAP32(wubu_sf_f32_to_i64((uint32_t)vr[in->a])); pc++; break;
+        case MIR_FEQ:  vr[in->dst] = (wubu_sf_f32_cmp((uint32_t)vr[in->a], (uint32_t)vr[in->b]) == 0); pc++; break;
+        case MIR_FNE:  vr[in->dst] = (wubu_sf_f32_cmp((uint32_t)vr[in->a], (uint32_t)vr[in->b]) != 2)
+                                     && (wubu_sf_f32_cmp((uint32_t)vr[in->a], (uint32_t)vr[in->b]) != 0); pc++; break;
+        case MIR_FLT:  vr[in->dst] = (wubu_sf_f32_cmp((uint32_t)vr[in->a], (uint32_t)vr[in->b]) == -1); pc++; break;
+        case MIR_FLE:  { int c = wubu_sf_f32_cmp((uint32_t)vr[in->a], (uint32_t)vr[in->b]);
+                         vr[in->dst] = (c == -1 || c == 0); } pc++; break;
         case MIR_RET:
+            if (call_sp > 0) {
+                /* returning from a called function: restore the caller's
+                 * register file + memory (the MIR shares absolute vrs across
+                 * invocations), preserving vr0 as the return value. */
+                call_frame_t *f = &call_stack[--call_sp];
+                int64_t retval = vr[in->a];
+                fprintf(stderr, "RET sp=%d retval=%lld\n", call_sp, (long long)retval);
+                memcpy(vr, f->vr_save, ((size_t)max_vr + 1) * sizeof(int64_t));
+                memcpy(mem, f->mem_save, (size_t)mem_size * sizeof(int64_t));
+                vr[0] = retval;
+                free(f->vr_save);
+                free(f->mem_save);
+                pc = f->ret_pc;
+                continue;
+            }
             result = vr[in->a];
             goto done;
+        case MIR_CALL: {
+            if (in->func_id < (uint32_t)p->n_funcs) {
+                if (call_sp < MIR_MAX_CALL_DEPTH) {
+                    /* snapshot caller state so the callee (which reuses the
+                     * same absolute vrs / memory) cannot clobber it. */
+                    call_frame_t *f = &call_stack[call_sp++];
+                    f->ret_pc = pc + 1;
+                    f->vr_save = (int64_t *)malloc(((size_t)max_vr + 1) * sizeof(int64_t));
+                    f->mem_save = (int64_t *)malloc((size_t)mem_size * sizeof(int64_t));
+                    if (f->vr_save) memcpy(f->vr_save, vr, ((size_t)max_vr + 1) * sizeof(int64_t));
+                    if (f->mem_save) memcpy(f->mem_save, mem, (size_t)mem_size * sizeof(int64_t));
+                    pc = p->funcs[in->func_id].start;
+                    continue;
+                }
+                /* call stack overflow: skip (safe) */
+            }
+            pc++;
+            break;
+        }
         default:
             /* unsupported op: skip (honest: lowering covers the battery) */
             pc++;

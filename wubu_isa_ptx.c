@@ -29,6 +29,15 @@
 #include <string.h>
 #include <stdarg.h>
 #include <unistd.h>
+#include <signal.h>
+#include <sys/wait.h>
+#include <time.h>
+#include <errno.h>
+
+/* If the CUDA host stub cannot reach a GPU (no device in this environment),
+ * it blocks forever. Cap each launch so a missing GPU fails fast instead of
+ * hanging the whole gauntlet. */
+#define PTX_RUN_TIMEOUT_SEC 8
 
 /* ---- PTX assembly emitter ---- */
 
@@ -209,6 +218,42 @@ static void emit_kernel_body(ptx_emitter_t *e, const wubu_mir_prog_t *p)
             break;
         }
 
+        case MIR_JNZ: {
+            /* if (vr != 0) jump */
+            uint32_t predicate = e->n_pred++;
+            ptx_emit(e, "    setp.ne.s64 p%u, %%r%d, 0;\n",
+                     predicate, (int)ptx_vr(e, ins->a));
+            ptx_emit(e, "    @p%u bra L_%u;\n", predicate, ins->label);
+            break;
+        }
+
+        case MIR_ALLOC:
+            /* base address already reserved via wubu_mir_alloc; the home
+             * address vr is a MIR_CONST holding the cell index. Nothing to
+             * emit — the const carries the address. */
+            break;
+
+        case MIR_LOAD: {
+            /* dst = mem[a]; a is the cell index (a MIR_CONST vr). */
+            rd = ptx_vr(e, ins->dst);
+            ptx_emit(e, "    cvt.u32.s64 %rc1, %r%d;\n", (int)ptx_vr(e, ins->a));
+            ptx_emit(e, "    mul.lo.u32 %rc1, %rc1, 8;\n");
+            ptx_emit(e, "    cvt.u64.u32 %ra1, %rc1;\n");
+            ptx_emit(e, "    add.u64 %ra1, %ra1, %ra0;\n");
+            ptx_emit(e, "    ld.global.s64 %r%d, [%ra1];\n", (int)rd);
+            break;
+        }
+
+        case MIR_STORE: {
+            /* mem[a] = b; a is the cell index, b is the value. */
+            ptx_emit(e, "    cvt.u32.s64 %rc1, %r%d;\n", (int)ptx_vr(e, ins->a));
+            ptx_emit(e, "    mul.lo.u32 %rc1, %rc1, 8;\n");
+            ptx_emit(e, "    cvt.u64.u32 %ra1, %rc1;\n");
+            ptx_emit(e, "    add.u64 %ra1, %ra1, %ra0;\n");
+            ptx_emit(e, "    st.global.s64 [%ra1], %r%d;\n", (int)ptx_vr(e, ins->b));
+            break;
+        }
+
         case MIR_RET: {
             /* Store the RET source vr to the result parameter */
             ptx_emit(e, "    ld.param.b64 %%rd_result, [result];\n");
@@ -246,7 +291,10 @@ static void count_regs(const wubu_mir_prog_t *p, uint32_t *out_vregs, uint32_t *
         case MIR_AND: case MIR_OR: case MIR_XOR:
         case MIR_SHL: case MIR_SHR:
         case MIR_NEG: case MIR_NOT:
+        case MIR_LOAD: case MIR_STORE:   /* LOAD/STORE: dst + a (+ b for STORE) */
             local_max = ins->dst + 1;
+            if (ins->a + 1 > local_max) local_max = ins->a + 1;
+            if (ins->b + 1 > local_max) local_max = ins->b + 1;
             break;
         case MIR_EQ: case MIR_NE: case MIR_LT: case MIR_LE: case MIR_GT: case MIR_GE:
             local_max = ins->dst + 1;
@@ -262,7 +310,7 @@ static void count_regs(const wubu_mir_prog_t *p, uint32_t *out_vregs, uint32_t *
         if (local_max > max_vr) max_vr = local_max;
     }
 
-    *out_vregs = max_vr + 1;  /* +1 for 0-based indexing safety */
+    *out_vregs = max_vr + 3;  /* +3: +1 zero-based safety, +2 scratch for mem[] addr math */
     *out_preds = n_preds + 2; /* small safety margin */
 }
 
@@ -286,13 +334,24 @@ static char *emit_ptx(const wubu_mir_prog_t *p)
     ptx_emit(&e, "    .param .b64 arg\n");
     ptx_emit(&e, ") {\n");
 
+    /* Variable memory model: MIR programs address a flat int64[] array
+     * (cell 0 reserved as null). Mirror the interpreter with a global
+     * mem[] so MIR_LOAD/MIR_STORE work on the GPU. */
+    size_t n_cells = (p->total_mem > 0) ? (size_t)(p->total_mem + 1) : 1;
+    ptx_emit(&e, "    .global .b64 mem[%zu];\n", n_cells);
+
     /* Declare registers: %r0..%r{n_vregs-1} plus rd_result */
-    ptx_emit(&e, "    .reg .b64 %%r<%u>;\n", n_vregs + 1);
-    ptx_emit(&e, "    .reg .b64 %%rd_result;\n");
-    ptx_emit(&e, "    .reg .pred p<%u>;\n\n", n_preds);
+    ptx_emit(&e, "    .reg .b64 %r<%u>;\n", n_vregs + 1);
+    ptx_emit(&e, "    .reg .b64 %rd_result;\n");
+    ptx_emit(&e, "    .reg .pred p<%u>;\n", n_preds);
+    ptx_emit(&e, "    .reg .u64 %ra<2>;\n");  /* address math for mem[] */
+    ptx_emit(&e, "    .reg .u32 %rc<2>;\n\n"); /* 32-bit temp for offset */
+
+    /* Base address of mem[] into %ra0 (a .u64 pointer register). */
+    ptx_emit(&e, "    cvta.global.u64 %ra0, mem;\n\n");
 
     /* Load the arg parameter into vr 0 (the "value" register) */
-    ptx_emit(&e, "    ld.param.b64 %%r0, [arg];\n\n");
+    ptx_emit(&e, "    ld.param.b64 %r0, [arg];\n\n");
 
     /* Emit the kernel body */
     emit_kernel_body(&e, p);
@@ -315,12 +374,17 @@ static int ensure_stub(void)
         return 0;
     }
 
-    /* Compile the stub. The source lives alongside this .cu file. */
+    /* Compile the stub. The source lives alongside this .cu file.
+     * On WSL2 the CUDA userspace (libcuda.so.1) is NOT in the default
+     * linker path — it lives in /usr/lib/wsl/lib (the /dev/dxg GPU
+     * route). Bare-metal Linux would have libcuda under the standard
+     * path, so include BOTH so the stub links in either environment. */
     const char *stub_src = "/home/wubu/wubuos/src/compiler/gpu_host_stub.cu";
     int rc = system("nvcc -arch=sm_89 -O2 -o /tmp/gpu_host_stub "
                     " -Xptxas -v "  /* show ptxas info */
                     " /home/wubu/wubuos/src/compiler/gpu_host_stub.cu "
-                    " -L/usr/lib/x86_64-linux-gnu -lcuda "
+                    " -L/usr/lib/wsl/lib -L/usr/lib/x86_64-linux-gnu "
+                    " -lcuda "
                     " 2>/tmp/gpu_stub_build.log");
     if (rc != 0) {
         fprintf(stderr, "[ptx] nvcc host stub compilation failed (rc=%d)\n", rc);
@@ -414,25 +478,75 @@ static int64_t ptx_run(const uint8_t *code, size_t size, int64_t arg)
     fwrite(code, 1, size, f);
     fclose(f);
 
-    /* Launch the host stub */
-    char cmd[512];
+    /* Launch the host stub. The stub links libcuda.so.1, which on WSL2
+     * lives in /usr/lib/wsl/lib; make sure that path is on LD_LIBRARY_PATH
+     * so the dynamic loader finds it (matches the /dev/dxg GPU route). */
+    char cmd[1024];
+    const char *wsl = "/usr/lib/wsl/lib";
+    char ldpath[1024];
+    snprintf(ldpath, sizeof(ldpath), "%s:%s",
+             wsl, getenv("LD_LIBRARY_PATH") ? getenv("LD_LIBRARY_PATH") : "");
     snprintf(cmd, sizeof(cmd),
-             "/tmp/gpu_host_stub %s %lld 2>/tmp/gpu_run.log",
-             cubin_path, (long long)arg);
+             "LD_LIBRARY_PATH='%s' /tmp/gpu_host_stub %s %lld 2>/tmp/gpu_run.log",
+             ldpath, cubin_path, (long long)arg);
 
+    /* Launch the host stub with a hard timeout. The stub blocks forever if
+     * no CUDA device is present, so the child arms SIGALRM; if it fires the
+     * child dies and the parent reports "no result" (0). To avoid paying the
+     * timeout on every one of the ~19k gauntlet tests, we probe ONCE: the
+     * first call that fails (timeout or crash) marks the GPU permanently
+     * unavailable and every later call returns 0 immediately. */
     char result_path[256];
     snprintf(result_path, sizeof(result_path), "/tmp/ptx_result_%d.txt", (int)getpid());
-    strncat(cmd, " > ", sizeof(cmd) - strlen(cmd) - 1);
-    strncat(cmd, result_path, sizeof(cmd) - strlen(cmd) - 1);
+    remove(result_path);  /* clean slate — no stale reads */
 
-    int rc = system(cmd);
-    if (rc != 0) {
-        fprintf(stderr, "[ptx] host stub execution failed (rc=%d)\n", rc);
+    static int ptx_gpu_unavailable = -1;  /* -1 = not yet probed */
+    if (ptx_gpu_unavailable == 1) return 0;  /* already known: no GPU */
+
+    pid_t child = fork();
+    if (child == 0) {
+        /* child: run the stub; die if it stalls. Redirect stdout to the
+         * result file so the parent can read the int64 back. */
+        signal(SIGALRM, SIG_DFL);
+        alarm((unsigned)PTX_RUN_TIMEOUT_SEC);
+        FILE *rf = freopen(result_path, "w", stdout);
+        (void)rf;
+        int rc = system(cmd);
+        (void)rc;
+        _exit(0);
+    }
+
+    int64_t result = 0;
+    int status = 0;
+    time_t t0 = time(NULL);
+    for (;;) {
+        pid_t w = waitpid(child, &status, WNOHANG);
+        if (w == child) break;
+        if (w < 0 && errno != EINTR) break;
+        if (difftime(time(NULL), t0) > (double)(PTX_RUN_TIMEOUT_SEC + 5)) {
+            kill(child, SIGKILL);
+            waitpid(child, &status, 0);
+            ptx_gpu_unavailable = 1;
+            fprintf(stderr, "[ptx] host stub unresponsive (no GPU?) — "
+                            "disabling ptx for remaining tests\n");
+            remove(result_path);
+            return 0;
+        }
+        usleep(100000);  /* 100ms */
+    }
+
+    /* A child killed by signal (e.g. our SIGALRM) means the GPU is not
+     * reachable — disable ptx for the rest of this run. */
+    if (WIFSIGNALED(status)) {
+        ptx_gpu_unavailable = 1;
+        fprintf(stderr, "[ptx] host stub died (signal %d) — "
+                        "disabling ptx for remaining tests\n",
+                WTERMSIG(status));
         remove(result_path);
         return 0;
     }
 
-    int64_t result = 0;
+    ptx_gpu_unavailable = 0;  /* a launch completed cleanly → GPU reachable */
     FILE *rf = fopen(result_path, "r");
     if (rf) {
         if (fscanf(rf, "%lld", (long long *)&result) != 1)

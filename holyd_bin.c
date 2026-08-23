@@ -1,5 +1,5 @@
 /*
- * holyc_bin.c  --  Raw binary (flat binary) emitter for WuBuNOS HolyC compiler.
+ * holyd_bin.c  --  Raw binary (flat binary) emitter for WuBuNOS HolyD compiler.
  *
  * Writes a flat binary image with no headers — just raw machine code.
  * Used for:
@@ -12,7 +12,7 @@
  * For bootable images, pad to 512 bytes and add 0x55AA signature.
  */
 
-#include "holyc_codegen.h"
+#include "holyd_codegen.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
@@ -22,7 +22,7 @@
  * Write a flat binary image.
  * If bootable != 0, pad to 512 bytes and add 0x55AA boot signature.
  */
-int hc_write_bin(const char *filename,
+int hd_write_bin(const char *filename,
                  const uint8_t *code, size_t code_size,
                  int bootable)
 {

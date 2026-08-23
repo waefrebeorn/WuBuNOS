@@ -284,6 +284,13 @@ static int arm64_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
             patch_push(&patches, &np, &cp, e.enc.pos - 4, in->label);
             break;
         }
+        case MIR_JNZ: {
+            LOAD_VR(in->a, WREG_X0);
+            warm64_cmp_imm(&e.enc, WREG_X0, 0, 1);
+            warm64_b_cond(&e.enc, 0, W64CC_NE);
+            patch_push(&patches, &np, &cp, e.enc.pos - 4, in->label);
+            break;
+        }
         case MIR_RET:
             LOAD_VR(in->a, WREG_X0);
             warm64_mov_reg(&e.enc, WREG_SP, WREG_X29);

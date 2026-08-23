@@ -1,55 +1,55 @@
 /*
- * holyc_codegen_api.c  --  HolyC Code Generator: Public API
+ * holyd_codegen_api.c  --  HolyD Code Generator: Public API
  * Top-level compile/eval functions and public interface.
  */
 
-#include "holyc_codegen_internal.h"
+#include "holyd_codegen_internal.h"
 #include "wubu_preproc.h"
 
 /* ====================================================================
  * PUBLIC API
  * ==================================================================== */
 
-int hc_gen_node(HCGen *gen, const HCASTNode *node) {
+int hd_gen_node(HDGen *gen, const HDASTNode *node) {
     if (!node) return -1;
-    if (node->kind == HC_AST_BLOCK || node->kind == HC_AST_FUNC_DECL)
+    if (node->kind == HD_AST_BLOCK || node->kind == HD_AST_FUNC_DECL)
         return gen_stmt(gen, node);
     return gen_expr(gen, node);
 }
 
-int hc_gen_function(HCGen *gen, const HCASTNode *func) {
-    if (!func || func->kind != HC_AST_FUNC_DECL) return -1;
+int hd_gen_function(HDGen *gen, const HDASTNode *func) {
+    if (!func || func->kind != HD_AST_FUNC_DECL) return -1;
     return gen_stmt(gen, func);
 }
 
-const uint8_t *hc_gen_code(const HCGen *gen, size_t *out_size) {
+const uint8_t *hd_gen_code(const HDGen *gen, size_t *out_size) {
     if (out_size) *out_size = gen->code_size;
     return gen->code;
 }
 
 /* -- Top-Level Compile and Execute -------------------------------- */
 
-void *hc_compile(const char *source, size_t *out_size) {
-    HCLexer lex;
-    hc_lex_init(&lex, source);
+void *hd_compile(const char *source, size_t *out_size) {
+    HDLexer lex;
+    hd_lex_init(&lex, source);
 
     if (lex.has_error) return NULL;
 
-    HCParser parse;
-    hc_parse_init(&parse, &lex);
+    HDParser parse;
+    hd_parse_init(&parse, &lex);
 
-    HCASTNode *ast = hc_parse_expr(&parse);
+    HDASTNode *ast = hd_parse_expr(&parse);
     if (parse.has_error) {
-        hc_ast_free(ast);
+        hd_ast_free(ast);
         return NULL;
     }
 
-    HCGen gen;
-    hc_gen_init(&gen);
+    HDGen gen;
+    hd_gen_init(&gen);
     gen_expr(&gen, ast);
     emit_ret(&gen);
 
-    hc_ast_free(ast);
+    hd_ast_free(ast);
 
     if (gen.code_size == 0 || gen.has_error) {
         free(gen.code);
@@ -74,35 +74,35 @@ void *hc_compile(const char *source, size_t *out_size) {
 }
 
 /* Generate if/else as an expression: both branches produce a value in rax.
- * Used by hc_eval when an if-stmt is the result of a block or top-level. */
-static void gen_if_expr(HCGen *gen, HCASTNode *ast) {
+ * Used by hd_eval when an if-stmt is the result of a block or top-level. */
+static void gen_if_expr(HDGen *gen, HDASTNode *ast) {
     gen_expr(gen, ast->cond);
     emit_test_rax_rax(gen);
     size_t jz_patch = emit_jcc_placeholder(gen, CC_E);
     /* Then branch — generate last statement as expression */
-    HCASTNode *then = ast->then_branch;
-    if (then->kind == HC_AST_BLOCK && then->n_stmts > 0) {
+    HDASTNode *then = ast->then_branch;
+    if (then->kind == HD_AST_BLOCK && then->n_stmts > 0) {
         for (int i = 0; i < then->n_stmts - 1; i++) gen_stmt(gen, then->stmts[i]);
-        HCASTNode *tl = then->stmts[then->n_stmts - 1];
-        if (tl->kind == HC_AST_EXPR_STMT) gen_expr(gen, tl->child);
-        else if (tl->kind == HC_AST_IF) gen_if_expr(gen, tl);
+        HDASTNode *tl = then->stmts[then->n_stmts - 1];
+        if (tl->kind == HD_AST_EXPR_STMT) gen_expr(gen, tl->child);
+        else if (tl->kind == HD_AST_IF) gen_if_expr(gen, tl);
         else gen_expr(gen, tl);
-    } else if (then->kind == HC_AST_EXPR_STMT) { gen_expr(gen, then->child); }
-    else if (then->kind == HC_AST_IF) { gen_if_expr(gen, then); }
+    } else if (then->kind == HD_AST_EXPR_STMT) { gen_expr(gen, then->child); }
+    else if (then->kind == HD_AST_IF) { gen_if_expr(gen, then); }
     else { gen_expr(gen, then); }
     size_t jmp_patch = emit_jmp_placeholder(gen);
     size_t else_label = gen->code_size;
     /* Else branch */
-    HCASTNode *els = ast->else_branch;
+    HDASTNode *els = ast->else_branch;
     if (els) {
-        if (els->kind == HC_AST_BLOCK && els->n_stmts > 0) {
+        if (els->kind == HD_AST_BLOCK && els->n_stmts > 0) {
             for (int i = 0; i < els->n_stmts - 1; i++) gen_stmt(gen, els->stmts[i]);
-            HCASTNode *el = els->stmts[els->n_stmts - 1];
-            if (el->kind == HC_AST_EXPR_STMT) gen_expr(gen, el->child);
-            else if (el->kind == HC_AST_IF) gen_if_expr(gen, el);
+            HDASTNode *el = els->stmts[els->n_stmts - 1];
+            if (el->kind == HD_AST_EXPR_STMT) gen_expr(gen, el->child);
+            else if (el->kind == HD_AST_IF) gen_if_expr(gen, el);
             else gen_expr(gen, el);
-        } else if (els->kind == HC_AST_EXPR_STMT) { gen_expr(gen, els->child); }
-        else if (els->kind == HC_AST_IF) { gen_if_expr(gen, els); }
+        } else if (els->kind == HD_AST_EXPR_STMT) { gen_expr(gen, els->child); }
+        else if (els->kind == HD_AST_IF) { gen_if_expr(gen, els); }
         else { gen_expr(gen, els); }
     }
     size_t end_label = gen->code_size;
@@ -110,31 +110,31 @@ static void gen_if_expr(HCGen *gen, HCASTNode *ast) {
     patch_rel32(gen, jmp_patch, end_label);
 }
 
-int64_t hc_eval(const char *source) {
+int64_t hd_eval(const char *source) {
     /* Preprocess #define macros and strip directives before lexing —
      * real kernel source is full of them and the lexer has no '#' support. */
     char *pp = wubu_preprocess(source);
     const char *effective = pp ? pp : source;
 
-    HCLexer lex;
-    hc_lex_init(&lex, effective);
+    HDLexer lex;
+    hd_lex_init(&lex, effective);
 
     if (lex.has_error) return 0;
 
-    HCParser parse;
-    hc_parse_init(&parse, &lex);
+    HDParser parse;
+    hd_parse_init(&parse, &lex);
 
     /* Try parsing as expression first */
-    HCASTNode *ast = hc_parse_expr(&parse);
+    HDASTNode *ast = hd_parse_expr(&parse);
 
     /* If expression parsing failed or didn't consume all input, try block parsing */
-    if (parse.has_error || (hc_parse_peek(&parse) != HC_TOK_EOF && hc_parse_peek(&parse) != HC_TOK_SEMI)) {
-        hc_ast_free(ast);
+    if (parse.has_error || (hd_parse_peek(&parse) != HD_TOK_EOF && hd_parse_peek(&parse) != HD_TOK_SEMI)) {
+        hd_ast_free(ast);
         parse.has_error = false;
         parse.n_errors = 0;
         /* Re-lex from start */
-        hc_lex_init(&lex, effective);
-        hc_parse_init(&parse, &lex);
+        hd_lex_init(&lex, effective);
+        hd_parse_init(&parse, &lex);
         
         /* Check if source starts with a control keyword */
         const char *p = source;
@@ -165,27 +165,27 @@ int64_t hc_eval(const char *source) {
              * segfaults in the self-hosting battery). */
             char *wrapped = malloc(len + 5);
             sprintf(wrapped, "{ %s }", effective);
-            hc_lex_init(&lex, wrapped);
-            hc_parse_init(&parse, &lex);
-            /* hc_lex_init already primes the first token (which is `{`) */
-            ast = hc_parse_block(&parse);
+            hd_lex_init(&lex, wrapped);
+            hd_parse_init(&parse, &lex);
+            /* hd_lex_init already primes the first token (which is `{`) */
+            ast = hd_parse_block(&parse);
             free(wrapped);
         } else {
-            ast = hc_parse_stmt(&parse);
+            ast = hd_parse_stmt(&parse);
         }
     }
 
     if (parse.has_error || !ast) {
-        hc_ast_free(ast);
+        hd_ast_free(ast);
         free(pp);
         return 0;
     }
 
-    HCGen gen;
-    hc_gen_init(&gen);
-    /* hc_eval compiles a self-contained expression/block: each call is an
+    HDGen gen;
+    hd_gen_init(&gen);
+    /* hd_eval compiles a self-contained expression/block: each call is an
      * isolated scope, so do NOT inherit the REPL-persisted symbol/function
-     * tables or data section from a previous eval. (hc_gen_init preserves
+     * tables or data section from a previous eval. (hd_gen_init preserves
      * them for the interactive REPL; standalone eval must reset to avoid
      * stale stack offsets, cross-call symbol leakage, and a double-free of
      * the shared data buffer across successive evals.) */
@@ -196,32 +196,32 @@ int64_t hc_eval(const char *source) {
     gen.data = NULL;
     gen.data_size = 0;
     gen.data_cap = 0;
-    /* Register the HolyC personality runtime (Print / FpWriteFile) so calls
+    /* Register the HolyD personality runtime (Print / FpWriteFile) so calls
      * to those builtins resolve to real host functions instead of a null
      * pointer (previously the JIT emitted `call 0`, SIGSEGV at runtime). */
     /* Module-level code: in_function=false so VAR_DECL creates data-section
      * globals (writable via RWX mmap). Inside a function body, the FUNC_DECL
      * handler sets in_function=true for stack-local mode. */
     gen.in_function = false;
-    hc_register_holyc_runtime(&gen);
+    hd_register_holyd_runtime(&gen);
     emit_prologue(&gen);
 
-    if (ast->kind == HC_AST_BLOCK) {
-        for (int i = 0; i < ast->n_stmts; i++)
-            fprintf(stderr, "  stmt[%d] kind=%d\n", i, ast->stmts[i]->kind);
+    if (ast->kind == HD_AST_BLOCK) {
+        /* Block context: local variables go on the stack, not data section */
+        gen.in_function = true;
         /* For expression context: generate all statements except last as
          * statements, then generate the last one as an expression so its
          * value ends up in rax (the return value). */
         if (ast->n_stmts > 0) {
             for (int i = 0; i < ast->n_stmts - 1; i++)
                 gen_stmt(&gen, ast->stmts[i]);
-            HCASTNode *last = ast->stmts[ast->n_stmts - 1];
+            HDASTNode *last = ast->stmts[ast->n_stmts - 1];
             /* If the last statement is a function declaration, generate it
              * as a statement then call it to get the return value in rax. */
-            if (last->kind == HC_AST_FUNC_DECL) {
+            if (last->kind == HD_AST_FUNC_DECL) {
                 gen_stmt(&gen, last);
                 if (gen.n_functions > 0) {
-                    HCFunction *fn = &gen.functions[gen.n_functions - 1];
+                    HDFunction *fn = &gen.functions[gen.n_functions - 1];
                     if (fn->func_ptr && fn->n_params == 0) {
                         emit_byte(&gen, 0xE8); /* call rel32 */
                         size_t patch_pos = gen.code_size;
@@ -233,30 +233,30 @@ int64_t hc_eval(const char *source) {
                         }
                     }
                 }
-            } else if (last->kind == HC_AST_IF) {
+            } else if (last->kind == HD_AST_IF) {
                 gen_if_expr(&gen, last);
-            } else if (last->kind == HC_AST_EXPR_STMT) {
+            } else if (last->kind == HD_AST_EXPR_STMT) {
                 gen_expr(&gen, last->child);
-            } else if (last->kind == HC_AST_RETURN) {
+            } else if (last->kind == HD_AST_RETURN) {
                 gen_stmt(&gen, last);
             } else {
                 gen_expr(&gen, last);
             }
         }
-    } else if (ast->kind == HC_AST_IF) {
+    } else if (ast->kind == HD_AST_IF) {
         /* Top-level if (not wrapped in block) */
         gen_if_expr(&gen, ast);
-    } else if (ast->kind == HC_AST_EXPR_STMT || ast->kind == HC_AST_RETURN ||
-        ast->kind == HC_AST_IF || ast->kind == HC_AST_WHILE ||
-        ast->kind == HC_AST_FOR || ast->kind == HC_AST_DO_WHILE ||
-        ast->kind == HC_AST_VAR_DECL) {
+    } else if (ast->kind == HD_AST_EXPR_STMT || ast->kind == HD_AST_RETURN ||
+        ast->kind == HD_AST_IF || ast->kind == HD_AST_WHILE ||
+        ast->kind == HD_AST_FOR || ast->kind == HD_AST_DO_WHILE ||
+        ast->kind == HD_AST_VAR_DECL) {
         gen_stmt(&gen, ast);
     } else {
         gen_expr(&gen, ast);
     }
     emit_epilogue(&gen);
 
-    hc_ast_free(ast);
+    hd_ast_free(ast);
 
     if (gen.code_size == 0 || gen.has_error) {
         free(gen.code);
@@ -336,25 +336,25 @@ int64_t hc_eval(const char *source) {
     return result;
 }
 
-void *hc_compile_func(const char *source, const char *func_name) {
-    HCLexer lex;
-    hc_lex_init(&lex, source);
+void *hd_compile_func(const char *source, const char *func_name) {
+    HDLexer lex;
+    hd_lex_init(&lex, source);
     if (lex.has_error) return NULL;
 
-    HCParser parse;
-    hc_parse_init(&parse, &lex);
-    HCASTNode *ast = hc_parse_compilation_unit(&parse);
+    HDParser parse;
+    hd_parse_init(&parse, &lex);
+    HDASTNode *ast = hd_parse_compilation_unit(&parse);
     if (parse.has_error || !ast) {
-        hc_ast_free(ast);
+        hd_ast_free(ast);
         return NULL;
     }
 
     /* Collect all function declarations */
-    HCASTNode *funcs[HC_MAX_FUNCTIONS];
+    HDASTNode *funcs[HD_MAX_FUNCTIONS];
     int n_funcs = 0;
-    HCASTNode *target_func = NULL;
-    for (int i = 0; i < ast->n_stmts && n_funcs < HC_MAX_FUNCTIONS; i++) {
-        if (ast->stmts[i]->kind == HC_AST_FUNC_DECL) {
+    HDASTNode *target_func = NULL;
+    for (int i = 0; i < ast->n_stmts && n_funcs < HD_MAX_FUNCTIONS; i++) {
+        if (ast->stmts[i]->kind == HD_AST_FUNC_DECL) {
             funcs[n_funcs++] = ast->stmts[i];
             if (func_name && func_name[0] && ast->stmts[i]->ident) {
                 if (strcmp(ast->stmts[i]->ident, func_name) == 0) {
@@ -366,19 +366,19 @@ void *hc_compile_func(const char *source, const char *func_name) {
 
     /* If no functions found, treat as expression */
     if (n_funcs == 0) {
-        hc_ast_free(ast);
-        HCLexer lex2;
-        hc_lex_init(&lex2, source);
-        HCParser parse2;
-        hc_parse_init(&parse2, &lex2);
-        HCASTNode *expr = hc_parse_expr(&parse2);
+        hd_ast_free(ast);
+        HDLexer lex2;
+        hd_lex_init(&lex2, source);
+        HDParser parse2;
+        hd_parse_init(&parse2, &lex2);
+        HDASTNode *expr = hd_parse_expr(&parse2);
 
-        HCGen gen;
-        hc_gen_init(&gen);
+        HDGen gen;
+        hd_gen_init(&gen);
         emit_prologue(&gen);
         gen_expr(&gen, expr);
         emit_epilogue(&gen);
-        hc_ast_free(expr);
+        hd_ast_free(expr);
 
         if (gen.code_size == 0) { free(gen.code); return NULL; }
         void *exec = jit_alloc_exec(gen.code_size);
@@ -390,7 +390,7 @@ void *hc_compile_func(const char *source, const char *func_name) {
 
     /* If func_name specified but not found, fail */
     if (func_name && func_name[0] && !target_func) {
-        hc_ast_free(ast);
+        hd_ast_free(ast);
         return NULL;
     }
 
@@ -398,11 +398,11 @@ void *hc_compile_func(const char *source, const char *func_name) {
     if (!target_func) target_func = funcs[0];
 
     /* Generate all functions into a single code buffer so they can call each other */
-    HCGen gen;
-    hc_gen_init(&gen);
+    HDGen gen;
+    hd_gen_init(&gen);
     /* Register all function names in the gen's function table for cross-referencing */
     for (int i = 0; i < n_funcs; i++) {
-        if (funcs[i]->ident && gen.n_functions < HC_MAX_FUNCTIONS) {
+        if (funcs[i]->ident && gen.n_functions < HD_MAX_FUNCTIONS) {
             strncpy(gen.functions[gen.n_functions].name, funcs[i]->ident, 63);
             gen.functions[gen.n_functions].name[63] = '\0';
             /* func_ptr will be patched after code generation */
@@ -413,12 +413,12 @@ void *hc_compile_func(const char *source, const char *func_name) {
 
     /* Generate each function, recording its code offset */
     typedef struct { char name[64]; size_t code_offset; } func_offset_t;
-    func_offset_t foffsets[HC_MAX_FUNCTIONS];
+    func_offset_t foffsets[HD_MAX_FUNCTIONS];
     int n_foffsets = 0;
 
     for (int i = 0; i < n_funcs; i++) {
         size_t offset_before = gen.code_size;
-        hc_gen_function(&gen, funcs[i]);
+        hd_gen_function(&gen, funcs[i]);
         if (funcs[i]->ident) {
             strncpy(foffsets[n_foffsets].name, funcs[i]->ident, 63);
             foffsets[n_foffsets].name[63] = '\0';
@@ -427,7 +427,7 @@ void *hc_compile_func(const char *source, const char *func_name) {
         }
     }
 
-    hc_ast_free(ast);
+    hd_ast_free(ast);
 
     if (gen.code_size == 0) { free(gen.code); free(gen.data); return NULL; }
 

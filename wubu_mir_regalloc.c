@@ -39,6 +39,8 @@ static int op_has_dst(wubu_mir_op_t op)
     case MIR_NEG: case MIR_NOT:
     case MIR_EQ: case MIR_NE: case MIR_LT: case MIR_LE: case MIR_GT: case MIR_GE:
     case MIR_MOV:
+    case MIR_LOAD:    /* dst = mem[addr] */
+    case MIR_ALLOC:   /* dst = base address of a fresh cell */
         return 1;
     default:
         return 0;
@@ -51,14 +53,16 @@ static int op_num_srcs(wubu_mir_op_t op)
     case MIR_CONST:
     case MIR_LABEL:
     case MIR_JMP:
+    case MIR_ALLOC:
         return 0;
     case MIR_NEG: case MIR_NOT:
     case MIR_MOV:
+    case MIR_LOAD:    /* single source: the address vr */
     case MIR_JZ:
     case MIR_RET:
         return 1;
     default:
-        return 2; /* binops */
+        return 2; /* binops and MIR_STORE (addr, val) */
     }
 }
 
@@ -177,6 +181,8 @@ wubu_reg_assign_t *wubu_mir_alloc_regs(const wubu_mir_prog_t *p,
     for (size_t v = 0; v < n_vr; v++) {
         assign[v].reg   = -1;
         assign[v].stack = 0;
+        assign[v].spill_after = 0;
+        assign[v].split_until = 0;
     }
 
     /* ---- Step 4: pre-assign argument registers ----
@@ -290,20 +296,35 @@ wubu_reg_assign_t *wubu_mir_alloc_regs(const wubu_mir_prog_t *p,
             int32_t cur_end = intervals[i].end;
 
             if (victim_vr >= 0 && victim_end > cur_end) {
-                /* Spill the victim; give its register to current vr */
+                /* ---- Interval SPLITTING (LLVM Greedy-style) ----
+                 * The current interval is shorter than the victim's remaining
+                 * lifetime. Split the victim at the current position: its
+                 * register copy now covers only [victim_first_def, pos), past
+                 * `pos` the value is reloaded from a spill slot that lives
+                 * until the victim's true end. The current interval takes the
+                 * freed register for [pos, cur_end]. This avoids a memory
+                 * access for the current value across its whole definition. */
                 int32_t vreg = assign[victim_vr].reg;
-                assign[victim_vr].reg   = -1;
-                assign[victim_vr].stack = -(next_spill_slot + 1) * 8;
+                int32_t v_first_def = (first_def[victim_vr] >= 0) ? first_def[victim_vr] : 0;
+                /* victim keeps its stack slot for the tail fragment */
+                int32_t tail_slot = -(next_spill_slot + 1) * 8;
                 next_spill_slot++;
+                assign[victim_vr].stack = tail_slot;
+                assign[victim_vr].spill_after = pos;
+                assign[victim_vr].split_until = victim_end + 1;
 
                 assign[vr].reg   = vreg;
-                assign[vr].stack = 0;
-                reg_vr[vreg]     = (int32_t)vr;
-                active[victim_idx] = vr;  /* replace victim in active */
+                assign[vr].stack = tail_slot;   /* tail reload slot is its own */
+                assign[vr].spill_after = cur_end + 1;
+                assign[vr].split_until = 0;
+                reg_vr[vreg] = (int32_t)vr;
+                active[victim_idx] = vr;
             } else {
-                /* Spill current vr */
+                /* Spill current vr (shorter than all actives) */
                 assign[vr].reg   = -1;
                 assign[vr].stack = -(next_spill_slot + 1) * 8;
+                assign[vr].spill_after = 0;
+                assign[vr].split_until = 0;
                 next_spill_slot++;
             }
         }

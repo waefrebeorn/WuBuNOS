@@ -8,9 +8,9 @@
  * crash isolates without killing the run.
  *
  * For each construct we report:
- *   PASS   - hc_eval returned the expected value
- *   WRONG  - hc_eval ran but returned a different value (codegen bug)
- *   CRASH  - hc_eval segfaulted/aborted (hard bug, child exited nonzero)
+ *   PASS   - hd_eval returned the expected value
+ *   WRONG  - hd_eval ran but returned a different value (codegen bug)
+ *   CRASH  - hd_eval segfaulted/aborted (hard bug, child exited nonzero)
  *
  * The gcc column is the ground truth: we compile the SAME construct
  * with gcc and confirm our expected value, so a WRONG expected in the
@@ -25,19 +25,19 @@
 #include <unistd.h>
 #include <signal.h>
 #include <errno.h>
-#include "holyc.h"
-#include "holyc_codegen.h"
+#include "holyd.h"
+#include "holyd_codegen.h"
 
 typedef struct {
     const char *name;      /* what the construct proves */
-    const char *src;       /* the source, evaluated by hc_eval */
+    const char *src;       /* the source, evaluated by hd_eval */
     long long  expect;     /* ground-truth result */
     int        nonzero;    /* if 1, expect result != 0 (function addresses) */
 } Probe;
 
 /* Each entry: <what it proves>, <source>, <expected>. The source is a
- * self-contained block whose final expression is the result (hc_eval
- * returns the last value in RAX, matching HolyC semantics). */
+ * self-contained block whose final expression is the result (hd_eval
+ * returns the last value in RAX, matching HolyD semantics). */
 static const Probe PROBES[] = {
     /* ---- preprocessor ---- */
     {"#define object macro", "#define KVFS_SLOT_LIVE 1\nKVFS_SLOT_LIVE;", 1},
@@ -215,7 +215,7 @@ static const Probe PROBES[] = {
 
 #define NPROBES ((int)(sizeof(PROBES)/sizeof(PROBES[0])))
 
-/* run hc_eval in a FORKED child so a crash isolates cleanly.
+/* run hd_eval in a FORKED child so a crash isolates cleanly.
  * returns 0 if child returned expected, 1 wrong, 2 crash/abort */
 static int run_isolated(const Probe *probe)
 {
@@ -228,7 +228,7 @@ static int run_isolated(const Probe *probe)
     if (pid == 0) {
         /* child: run the eval, write result to pipe, exit 0 */
         close(pipefd[0]);
-        long long r = hc_eval(src);
+        long long r = hd_eval(src);
         (void)!write(pipefd[1], &r, sizeof(r));
         close(pipefd[1]);
         _exit(0);

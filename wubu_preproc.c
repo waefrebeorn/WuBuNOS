@@ -1,5 +1,5 @@
 /*
- * wubu_preproc.c -- minimal C preprocessor for the HolyC compiler.
+ * wubu_preproc.c -- minimal C preprocessor for the HolyD compiler.
  *
  * The self-hosting doctrine: real kernel source is full of #define
  * guards, object macros, and function-like macros. Without a preprocessor

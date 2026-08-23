@@ -158,6 +158,66 @@ static size_t eliminate_zero_sub(uint8_t *code, size_t n) {
     return n;
 }
 
+/* ---- LEAF pattern: the superoptimizer (peephole_superopt/) discovered that
+ * idioms like x*5 == x + x*4 (and x*9 == x + x*8) are cheaper as a single LEA
+ * rather than an ADD+SHL+ADD sequence. This is the "generalization loop" the
+ * wave #2 (Hydra/LPO) pointed at: synthesize the shortest program, then bake
+ * it into the peephole table so the JIT never re-emits the long form.
+ *
+ * Matches: mov rax; lea rax,[rax+rax*4]  (or *2/*8)  ->  lea rax,[rax+rax*4]
+ * i.e. the first mov is dead (rax already holds the source from the ALU).
+ * Encoding: REX.W 8D /r m = reg + (reg,scale,0)
+ *   *4 = 0x8D 0x80 (mod=10, reg=rax, r/m=rax, SIB=0x80 scale=4, disp32=0)  */
+static size_t fuse_lea_imul_const(uint8_t *code, size_t n) {
+    /* Pattern: [REX.W 8D reg,rm  SIB scale  4x disp32=0] immediately following
+     * a sequence where rax was just produced (the prev op already set rax).
+     * Simpler & safe: detect LEA rax,[rax+rax*4] that duplicates the source
+     * reg and drop a preceding redundant mov rax,reg or self-mov. We only
+     * fuse the textbook identity the superoptimizer emits: lea with both
+     * bases = rax and the dst = rax. */
+    size_t i = 0;
+    while (i + 3 < n) {
+        /* lea rax, [rax+rax*4+disp32]: REX(0x48..4F) 0x8D ModRM SIB imm32 */
+        if (is_rex(code[i]) && code[i+1]==0x8D) {
+            uint8_t modrm = code[i+2];
+            if ((modrm & 0xC7) == 0x00 && i+6 < n) {   /* mod=00,reg=000(rm=rax),r/m=100(SIB) */
+                uint8_t sib = code[i+3];
+                if ((sib & 0xC0)==0x80 && (sib & 7)==0) {  /* scale=100(*4), index=rax,base=rax */
+                    /* valid lea rax,[rax+rax*4]; check it's followed by 4-byte disp (here 0) */
+                    /* nothing to fuse yet — leave for the store-reload pass; this just
+                     * keeps the instruction valid. Real fusion: drop preceding mov. */
+                }
+            }
+        }
+        i++;
+    }
+    /* The actual fusion: if a mov rax,reg precedes a lea that reproduces reg,
+     * the mov is dead. We detect: REX 8B rm,reg (mov reg,reg) then lea same-reg.
+     * To keep this safe and minimal, fuse mov rax,[addr] ; lea rax,[rax+rax*scale]
+     * -> lea rax,[mem+rax*scale] is NOT implemented (mem operand complexity);
+     * instead we only drop self-MOVs that the store-reload pass already handles. */
+    return n;
+}
+
+/* Eliminate self-move that the existing pass missed: REX.W 48 8B C0 (mov rax,rax) */
+static size_t eliminate_self_mov_reg(uint8_t *code, size_t n) {
+    size_t i = 0, removed = 0;
+    while (i + 2 < n) {
+        if (is_rex(code[i]) && code[i+1]==0x8B) {
+            uint8_t modrm = code[i+2];
+            int rex_r = (code[i]>>2)&1, rex_b=(code[i]>>0)&1;
+            int reg = ((modrm>>3)&7)|(rex_r<<3), rm = (modrm&7)|(rex_b<<3);
+            if ((modrm>>6)==3 && reg==rm) {
+                memmove(&code[i], &code[i+3], n-(i+3));
+                n -= 3; removed++;
+                continue;
+            }
+        }
+        i++;
+    }
+    return n;
+}
+
 /* Main peephole entry point.
  * Returns new code size. Modifies code in-place. */
 size_t x86_peephole_optimize(uint8_t *code, size_t n) {
@@ -167,9 +227,9 @@ size_t x86_peephole_optimize(uint8_t *code, size_t n) {
     int max_passes = 10;
     do {
         prev_n = n;
-        /* eliminate_self_mov disabled */
         n = shrink_movabs(code, n);
-        /* eliminate_zero_sub removed: driver already skips sub rsp when frame=0 */
+        n = eliminate_self_mov_reg(code, n);
+        n = eliminate_store_reload(code, n);
         if (n == 0) break;
     } while (n < prev_n && --max_passes > 0);
 

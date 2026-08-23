@@ -41,6 +41,15 @@ typedef struct {
     uint32_t loop_top[MIRGEN_MAX_VARS];   /* continue target */
     uint32_t loop_done[MIRGEN_MAX_VARS];  /* break target */
     int n_loops;
+    /* function-body early-return support: when generating a function body,
+     * RETURN emits `result_vr = expr; jmp ret_label` so an early return skips
+     * trailing statements (MIR is single-exit). 0 when not in a function body. */
+    wubu_vr_t fn_ret_vr;
+    uint32_t fn_ret_label;
+    /* function table for MIR_CALL (collected during TU generation) */
+    const HDASTNode *func_ast[MIR_MAX_FUNCTIONS];
+    int func_id_of[MIR_MAX_FUNCTIONS];     /* -1 until assigned */
+    int n_funcs;
 } HDMirGen;
 
 static wubu_vr_t mir_new_vr(HDMirGen *g) {
@@ -95,6 +104,48 @@ static wubu_vr_t mir_decl_var_unsigned(HDMirGen *g, const char *name, int is_uns
         g->n_vars++;
     }
     return vr;
+}
+
+/* Register a variable name -> (vr, addr) directly, WITHOUT allocating a new
+ * virtual register. Used for function parameters, whose value lives in an
+ * incoming call-register slot (v1..vN) already copied into a memory cell. */
+static void mir_bind_var(HDMirGen *g, const char *name, wubu_vr_t vr, wubu_vr_t addr, int is_unsigned) {
+    if (g->n_vars < MIRGEN_MAX_VARS) {
+        strncpy(g->vars[g->n_vars].name, name, HD_MAX_IDENT_LEN - 1);
+        g->vars[g->n_vars].name[HD_MAX_IDENT_LEN - 1] = '\0';
+        g->vars[g->n_vars].vr = vr;
+        g->vars[g->n_vars].addr = addr;
+        g->vars[g->n_vars].is_unsigned = is_unsigned;
+        g->vars[g->n_vars].is_array = 0;
+        g->vars[g->n_vars].array_size = 0;
+        g->n_vars++;
+    }
+}
+
+/* Walk a top-level translation unit and register every function definition
+ * into the compiler's func table, assigning a stable id (so CALL sites can
+ * resolve the callee regardless of definition order). */
+static void mir_collect_funcs(HDMirGen *g, const HDASTNode *ast) {
+    if (!ast) return;
+    if (ast->kind == HD_AST_BLOCK) {
+        for (uint32_t i = 0; i < ast->n_stmts; i++) {
+            const HDASTNode *s = ast->stmts[i];
+            if (s && s->kind == HD_AST_FUNC_DECL && g->n_funcs < MIR_MAX_FUNCTIONS) {
+                int id = g->n_funcs++;
+                g->func_ast[id] = s;
+                strncpy(g->prog->funcs[id].name, s->ident, HD_MAX_IDENT_LEN - 1);
+                g->prog->funcs[id].name[HD_MAX_IDENT_LEN - 1] = '\0';
+                g->prog->funcs[id].start = 0;
+                g->prog->funcs[id].end = 0;
+            }
+        }
+    } else if (ast->kind == HD_AST_FUNC_DECL && g->n_funcs < MIR_MAX_FUNCTIONS) {
+        int id = g->n_funcs++;
+        g->func_ast[id] = ast;
+        strncpy(g->prog->funcs[id].name, ast->ident, HD_MAX_IDENT_LEN - 1);
+        g->prog->funcs[id].name[HD_MAX_IDENT_LEN - 1] = '\0';
+    }
+    g->prog->n_funcs = g->n_funcs;   /* make the table visible to the interpreter/drivers */
 }
 
 /* Is a comparison operand unsigned? Check the symbol table (var decl) or
@@ -208,8 +259,16 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
     }
     case HD_AST_EXPR_STMT:
         return mir_gen_expr(g, n->child);
-    case HD_AST_RETURN:
-        return mir_gen_expr(g, n->child);
+    case HD_AST_RETURN: {
+        wubu_vr_t val = n->child ? mir_gen_expr(g, n->child) : wubu_mir_const(g->prog, 0);
+        if (g->fn_ret_label != 0) {
+            /* early return: store the value and jump to the function epilogue */
+            wubu_mir_mov_to(g->prog, g->fn_ret_vr, val);
+            wubu_mir_jmp(g->prog, g->fn_ret_label);
+            return g->fn_ret_vr;
+        }
+        return val;
+    }
     case HD_AST_IF: {
         /* if (cond) then_branch else else_branch
          * MIR: [cond] jz else [then -> merge] jmp end [else -> merge] [end] */
@@ -568,6 +627,25 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         wubu_vr_t addr = mir_gen_expr(g, n->child);
         return wubu_mir_load(g->prog, addr);
     }
+    case HD_AST_CALL:
+    case HD_AST_FUNC_CALL: {
+        /* Resolve callee name -> func_id via the collected func table. */
+        int fid = -1;
+        if (n->callee && n->callee->kind == HD_AST_IDENT) {
+            for (int i = 0; i < g->prog->n_funcs; i++)
+                if (strcmp(g->prog->funcs[i].name, n->callee->ident) == 0) { fid = i; break; }
+        }
+        /* Place arguments in v1..vN (calling convention). */
+        for (uint32_t a = 0; a < n->n_args && a < MIR_MAX_CALL_ARGS; a++) {
+            wubu_vr_t av = mir_gen_expr(g, n->args[a]);
+            wubu_mir_mov_to(g->prog, a + 1, av);
+        }
+        wubu_mir_call(g->prog, (uint32_t)(fid >= 0 ? fid : 0));
+        /* Callee returns in vr0; capture it into a fresh vr for the caller. */
+        wubu_vr_t rv = mir_new_vr(g);
+        wubu_mir_mov_to(g->prog, rv, 0);
+        return rv;
+    }
     default:
         /* Unsupported: emit 0 */
         return wubu_mir_const(g->prog, 0);
@@ -644,14 +722,67 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
     g.prog = prog;
     g.next_vr = 1u << 16;  /* 65536 — far above any instr-index vr */
     g.has_error = 0;
+    prog->next_vr_hi = g.next_vr;  /* reserve mem up to the high-vr param-slot range */
 
-    wubu_vr_t result_vr;
+    /* Phase 1: collect top-level function definitions into the func table
+     * (assign stable ids so CALL sites resolve regardless of order). */
+    mir_collect_funcs(&g, ast);
+
+    /* Phase 2: generate top-level (module) statements, skipping function
+     * definitions (their bodies are emitted separately in Phase 3). */
+    wubu_vr_t top_val = 0;
     if (ast->kind == HD_AST_BLOCK) {
-        result_vr = mir_gen_stmt(&g, ast);
+        for (uint32_t i = 0; i < ast->n_stmts; i++)
+            if (ast->stmts[i]->kind != HD_AST_FUNC_DECL)
+                mir_gen_stmt(&g, ast->stmts[i]);
     } else {
-        result_vr = mir_gen_expr(&g, ast);
+        top_val = mir_gen_expr(&g, ast);
     }
-    wubu_mir_ret(prog, result_vr);
+
+    /* Phase 3+4: emit the ENTRY point FIRST (so the interpreter, which starts
+     * at pc=0, runs main), then emit each function body into the MIR recording
+     * its start/end in the func table. Parameters are bound to v1..vN. */
+    int main_id = -1;
+    for (int i = 0; i < prog->n_funcs; i++)
+        if (strcmp(prog->funcs[i].name, "main") == 0) { main_id = i; break; }
+    if (main_id >= 0) {
+        wubu_mir_call(prog, (uint32_t)main_id);
+        wubu_mir_ret(prog, 0);   /* vr0 holds main()'s return */
+    } else {
+        wubu_mir_ret(prog, top_val);
+    }
+
+    for (int fi = 0; fi < g.n_funcs; fi++) {
+        const HDASTNode *fn = g.func_ast[fi];
+        prog->funcs[fi].start = prog->n;
+        /* bind parameters: use HIGH virtual registers for both the address
+         * slot and the value so they NEVER collide with v1..vN (the argument
+         * registers). slot_addr is a high-vr holding the memory address; base
+         * is a high-vr that holds slot_addr; copy the incoming arg (v1..vN)
+         * into the slot, and register the param name so references load it. */
+        for (int pi = 0; pi < fn->n_params; pi++) {
+            wubu_vr_t slot_addr = g.next_vr++;   /* high-vr: memory address value */
+            wubu_vr_t base = g.next_vr++;        /* high-vr: holds slot_addr */
+            wubu_mir_const_to(prog, base, (int64_t)slot_addr);
+            wubu_mir_store(prog, base, (wubu_vr_t)(pi + 1));
+            mir_bind_var(&g, fn->param_names[pi], base, base, 0);
+        }
+        /* Set up early-return: RETURN emits `result_vr = expr; jmp ret_label`,
+         * and the epilogue (placed after the body) moves result_vr into vr0
+         * and returns. This makes `if(c) return x; return y;` correct. */
+        g.fn_ret_vr = mir_new_vr(&g);
+        g.fn_ret_label = wubu_mir_new_label(prog);
+        mir_gen_stmt(&g, fn->body);
+        wubu_mir_place_label(prog, g.fn_ret_label);
+        wubu_mir_mov_to(prog, 0, g.fn_ret_vr);   /* callee returns in vr0 */
+        wubu_mir_ret(prog, 0);
+        g.fn_ret_label = 0;
+        prog->funcs[fi].end = prog->n;
+    }
+
+    /* Record the final high-vr water mark so the interpreter sizes its
+     * memory array to cover the high-vr parameter slot addresses. */
+    if (g.next_vr > prog->next_vr_hi) prog->next_vr_hi = g.next_vr;
 
     hd_ast_free(ast);
 
@@ -780,23 +911,12 @@ int hd_build_mir_ex(const char *source, wubu_mir_prog_t *prog,
         return -1;
     }
 
-    /* Lowering/codegen failure: report a generic but honest reason. */
-    wubu_mir_init(prog);
-    HDMirGen g;
-    memset(&g, 0, sizeof(g));
-    g.prog = prog;
-    g.next_vr = 1u << 16;
-    g.has_error = 0;
-    wubu_vr_t result_vr = (ast->kind == HD_AST_BLOCK) ? mir_gen_stmt(&g, ast) : mir_gen_expr(&g, ast);
-    wubu_mir_ret(prog, result_vr);
-    hd_ast_free(ast);
-    if (g.has_error || prog->n == 0) {
-        if (errbuf && errcap) snprintf(errbuf, errcap, "codegen error");
-        wubu_mir_free(prog);
-        free(pp);
-        return -1;
-    }
-    wubu_mir_optimize(prog, MIR_OPT_FOLD | MIR_OPT_STRENGTH | MIR_OPT_DCE | MIR_OPT_COMBINE | MIR_OPT_CSE);
+    /* Delegate to the shared builder (which now emits full TUs with
+     * function definitions + a `main` entry point). On failure we can't
+     * cheaply recover the exact parse message here, but hd_build_mir
+     * already validated the AST above, so a failure here is a lowering
+     * issue; report honestly. */
+    int rc = hd_build_mir(source, prog);
     free(pp);
-    return 0;
+    return rc;
 }

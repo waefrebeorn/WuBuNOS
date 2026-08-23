@@ -31,6 +31,15 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+static int streq_case(const char *a, const char *b) {
+    for (;; a++, b++) {
+        int ca = ((*a >= 'A' && *a <= 'Z') ? *a + 32 : *a);
+        int cb = ((*b >= 'A' && *b <= 'Z') ? *b + 32 : *b);
+        if (ca != cb) return 0;
+        if (ca == 0) return 1;
+    }
+}
+
 
 #define MAX_LEN 10
 #define MAX_SEEDS 16
@@ -103,11 +112,17 @@ static int search_allowed(int pos) {
 /* Parse the allowed-op list (comma/space separated names). */
 static void parse_ops(const char *s) {
     for (int i = 0; i < (int)N_OPS; i++) g_allowed[i] = 0;
-    char buf[256]; strncpy(buf, s, sizeof(buf)-1); buf[sizeof(buf)-1]=0;
-    char *save=NULL;
-    for (char *tok = strtok_r(buf, ", ", &save); tok; tok = strtok_r(NULL,", ",&save)) {
+    /* portable comma/space tokenizer (no POSIX strtok_r, pure C11) */
+    const char *cur = s;
+    while (*cur) {
+        while (*cur==',' || *cur==' ' || *cur=='\t') cur++;
+        const char *start = cur;
+        while (*cur && *cur!=',' && *cur!=' ' && *cur!='\t') cur++;
+        if (cur==start) break;
+        char tok[32]; size_t tl=cur-start; if (tl>31) tl=31;
+        memcpy(tok, start, tl); tok[tl]=0;
         for (int i = 0; i < (int)N_OPS; i++)
-            if (strcasecmp(tok, OPS[i].name)==0) g_allowed[i]=1;
+            if (streq_case(tok, OPS[i].name)) g_allowed[i]=1;
     }
 }
 

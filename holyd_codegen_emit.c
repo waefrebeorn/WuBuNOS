@@ -1,15 +1,15 @@
 /*
- * holyc_codegen_emit.c  --  HolyC Code Generator: x86-64 Emission Helpers
+ * holyd_codegen_emit.c  --  HolyD Code Generator: x86-64 Emission Helpers
  * Low-level byte emission, instruction patterns, patching utilities.
  */
 
-#include "holyc_codegen_internal.h"
+#include "holyd_codegen_internal.h"
 
 /* ====================================================================
  * CODE EMISSION HELPERS
  * ==================================================================== */
 
-void emit_byte(HCGen *gen, uint8_t b) {
+void emit_byte(HDGen *gen, uint8_t b) {
     if (gen->code_size >= gen->code_cap) {
         gen->code_cap = gen->code_cap ? gen->code_cap * 2 : 256;
         gen->code = (uint8_t *)realloc(gen->code, gen->code_cap);
@@ -17,7 +17,7 @@ void emit_byte(HCGen *gen, uint8_t b) {
     gen->code[gen->code_size++] = b;
 }
 
-void emit_data_byte(HCGen *gen, uint8_t b) {
+void emit_data_byte(HDGen *gen, uint8_t b) {
     if (gen->data_size >= gen->data_cap) {
         gen->data_cap = gen->data_cap ? gen->data_cap * 2 : 256;
         gen->data = (uint8_t *)realloc(gen->data, gen->data_cap);
@@ -25,31 +25,31 @@ void emit_data_byte(HCGen *gen, uint8_t b) {
     gen->data[gen->data_size++] = b;
 }
 
-void emit_word(HCGen *gen, uint16_t w) {
+void emit_word(HDGen *gen, uint16_t w) {
     emit_byte(gen, (uint8_t)(w & 0xFF));
     emit_byte(gen, (uint8_t)((w >> 8) & 0xFF));
 }
 
-void emit_dword(HCGen *gen, uint32_t d) {
+void emit_dword(HDGen *gen, uint32_t d) {
     emit_byte(gen, (uint8_t)(d & 0xFF));
     emit_byte(gen, (uint8_t)((d >> 8) & 0xFF));
     emit_byte(gen, (uint8_t)((d >> 16) & 0xFF));
     emit_byte(gen, (uint8_t)((d >> 24) & 0xFF));
 }
 
-void emit_data_dword(HCGen *gen, uint32_t d) {
+void emit_data_dword(HDGen *gen, uint32_t d) {
     emit_data_byte(gen, (uint8_t)(d & 0xFF));
     emit_data_byte(gen, (uint8_t)((d >> 8) & 0xFF));
     emit_data_byte(gen, (uint8_t)((d >> 16) & 0xFF));
     emit_data_byte(gen, (uint8_t)((d >> 24) & 0xFF));
 }
 
-void emit_data_qword(HCGen *gen, uint64_t q) {
+void emit_data_qword(HDGen *gen, uint64_t q) {
     emit_data_dword(gen, (uint32_t)(q & 0xFFFFFFFF));
     emit_data_dword(gen, (uint32_t)((q >> 32) & 0xFFFFFFFF));
 }
 
-void emit_qword(HCGen *gen, uint64_t q) {
+void emit_qword(HDGen *gen, uint64_t q) {
     emit_dword(gen, (uint32_t)(q & 0xFFFFFFFF));
     emit_dword(gen, (uint32_t)((q >> 32) & 0xFFFFFFFF));
 }
@@ -58,7 +58,7 @@ void emit_qword(HCGen *gen, uint64_t q) {
  * PATCH HELPERS
  * ==================================================================== */
 
-void patch_rel32(HCGen *gen, size_t patch_pos, size_t target_pos) {
+void patch_rel32(HDGen *gen, size_t patch_pos, size_t target_pos) {
     int32_t rel = (int32_t)((int64_t)target_pos - (int64_t)(patch_pos + 4));
     gen->code[patch_pos + 0] = (uint8_t)(rel & 0xFF);
     gen->code[patch_pos + 1] = (uint8_t)((rel >> 8) & 0xFF);
@@ -70,13 +70,13 @@ void patch_rel32(HCGen *gen, size_t patch_pos, size_t target_pos) {
  * x86-64 INSTRUCTION PATTERNS
  * ==================================================================== */
 
-void emit_mov_rax_imm64(HCGen *gen, int64_t val) {
+void emit_mov_rax_imm64(HDGen *gen, int64_t val) {
     emit_byte(gen, 0x48);  /* REX.W */
     emit_byte(gen, 0xB8);  /* mov rax, imm64 */
     emit_qword(gen, (uint64_t)val);
 }
 
-void emit_mov_rdi_imm64(HCGen *gen, int64_t val) {
+void emit_mov_rdi_imm64(HDGen *gen, int64_t val) {
     emit_byte(gen, 0x48);  /* REX.W */
     emit_byte(gen, 0xBF);  /* mov rdi, imm64 */
     emit_qword(gen, (uint64_t)val);
@@ -90,7 +90,7 @@ void emit_mov_rdi_imm64(HCGen *gen, int64_t val) {
  *   cvttsd2si rax, xmm0    F2 48 0F 2C C0
  * (NOT movq xmm0,rax — that instruction decodes to a no-op that leaves
  * xmm0 zeroed in the JIT; the stack round-trip is verified reliable.) */
-void emit_cvt_f64_to_i64(HCGen *gen) {
+void emit_cvt_f64_to_i64(HDGen *gen) {
     emit_byte(gen, 0x50);                                    /* push rax */
     emit_byte(gen, 0xF2); emit_byte(gen, 0x0F); emit_byte(gen, 0x10);
     emit_byte(gen, 0x04); emit_byte(gen, 0x24);              /* movsd xmm0,[rsp] */
@@ -106,7 +106,7 @@ void emit_cvt_f64_to_i64(HCGen *gen) {
  *   cvtsi2sd xmm0,[rsp]    F2 48 0F 2A 04 24
  *   add rsp, 8             48 83 C4 08
  *   movq rax, xmm0         66 48 0F 7E C0   */
-void emit_cvt_i64_to_f64(HCGen *gen) {
+void emit_cvt_i64_to_f64(HDGen *gen) {
     emit_byte(gen, 0x50);                                    /* push rax */
     emit_byte(gen, 0xF2); emit_byte(gen, 0x48); emit_byte(gen, 0x0F);
     emit_byte(gen, 0x2A); emit_byte(gen, 0x04); emit_byte(gen, 0x24); /* cvtsi2sd xmm0,[rsp] */
@@ -119,24 +119,24 @@ void emit_cvt_i64_to_f64(HCGen *gen) {
 /* emit_cdqe: truncate rax to 32-bit signed and sign-extend back to 64-bit.
  * Encodes as: 48 63 C0  (cdqe /.movsxd rax, eax)
  * This gives 32-bit overflow wraparound for integer arithmetic. */
-void emit_cdqe(HCGen *gen) {
+void emit_cdqe(HDGen *gen) {
     emit_byte(gen, 0x48); emit_byte(gen, 0x63); emit_byte(gen, 0xC0);
 }
 
-void emit_add_rax_rdi(HCGen *gen) {
+void emit_add_rax_rdi(HDGen *gen) {
     emit_byte(gen, 0x48); emit_byte(gen, 0x01); emit_byte(gen, 0xF8);
 }
 
-void emit_sub_rax_rdi(HCGen *gen) {
+void emit_sub_rax_rdi(HDGen *gen) {
     emit_byte(gen, 0x48); emit_byte(gen, 0x29); emit_byte(gen, 0xF8);
 }
 
-void emit_mul_rax_rdi(HCGen *gen) {
+void emit_mul_rax_rdi(HDGen *gen) {
     emit_byte(gen, 0x48); emit_byte(gen, 0x0F);
     emit_byte(gen, 0xAF); emit_byte(gen, 0xC7);
 }
 
-void emit_div_rax_rdi(HCGen *gen) {
+void emit_div_rax_rdi(HDGen *gen) {
     /* cqo (sign-extend rax into rdx:rax) */
     emit_byte(gen, 0x48); emit_byte(gen, 0x99);
     /* idiv rdi */
@@ -144,7 +144,7 @@ void emit_div_rax_rdi(HCGen *gen) {
     emit_byte(gen, 0xFF);
 }
 
-void emit_udiv_rax_rdi(HCGen *gen) {
+void emit_udiv_rax_rdi(HDGen *gen) {
     emit_byte(gen, 0x48); emit_byte(gen, 0x31);
     emit_byte(gen, 0xD2);  /* xor rdx, rdx */
     emit_byte(gen, 0x48); emit_byte(gen, 0xF7);
@@ -152,73 +152,73 @@ void emit_udiv_rax_rdi(HCGen *gen) {
 }
 
 /* emit_mod_rax_rdi: rax %= rdi. cqo; idiv rdi leaves the remainder in
- * rdx; move it back to rax. (Matches HC_AST_MOD's div-then-mov-rdx.) */
-void emit_mod_rax_rdi(HCGen *gen) {
+ * rdx; move it back to rax. (Matches HD_AST_MOD's div-then-mov-rdx.) */
+void emit_mod_rax_rdi(HDGen *gen) {
     emit_byte(gen, 0x48); emit_byte(gen, 0x99);   /* cqo (rdx:rax = rax) */
     emit_byte(gen, 0x48); emit_byte(gen, 0xF7); emit_byte(gen, 0xFF); /* idiv rdi */
     emit_byte(gen, 0x48); emit_byte(gen, 0x89); emit_byte(gen, 0xD0); /* mov rax, rdx */
 }
 
 /* emit_shl_rax_rdi: rax <<= (rdi & 0x3f). Shift count must be in cl. */
-void emit_shl_rax_rdi(HCGen *gen) {
+void emit_shl_rax_rdi(HDGen *gen) {
     emit_byte(gen, 0x48); emit_byte(gen, 0x89); emit_byte(gen, 0xF9); /* mov rcx, rdi */
     emit_byte(gen, 0x48); emit_byte(gen, 0xD3); emit_byte(gen, 0xE0); /* shl rax, cl */
 }
 
 /* emit_shr_rax_rdi: rax >>= (rdi & 0x3f). Shift count must be in cl. */
-void emit_shr_rax_rdi(HCGen *gen) {
+void emit_shr_rax_rdi(HDGen *gen) {
     emit_byte(gen, 0x48); emit_byte(gen, 0x89); emit_byte(gen, 0xF9); /* mov rcx, rdi */
     emit_byte(gen, 0x48); emit_byte(gen, 0xD3); emit_byte(gen, 0xE8); /* shr rax, cl */
 }
 
 /* emit_and_rax_rdi: rax &= rdi */
-void emit_and_rax_rdi(HCGen *gen) {
+void emit_and_rax_rdi(HDGen *gen) {
     emit_byte(gen, 0x48); emit_byte(gen, 0x21); emit_byte(gen, 0xF8);
 }
 
 /* emit_or_rax_rdi: rax |= rdi */
-void emit_or_rax_rdi(HCGen *gen) {
+void emit_or_rax_rdi(HDGen *gen) {
     emit_byte(gen, 0x48); emit_byte(gen, 0x09); emit_byte(gen, 0xF8);
 }
 
 /* emit_xor_rax_rdi: rax ^= rdi */
-void emit_xor_rax_rdi(HCGen *gen) {
+void emit_xor_rax_rdi(HDGen *gen) {
     emit_byte(gen, 0x48); emit_byte(gen, 0x31); emit_byte(gen, 0xF8);
 }
 
-void emit_xchg_rax_rdi(HCGen *gen) {
+void emit_xchg_rax_rdi(HDGen *gen) {
     emit_byte(gen, 0x48); emit_byte(gen, 0x87); emit_byte(gen, 0xF8);
 }
 
-void emit_neg_rax(HCGen *gen) {
+void emit_neg_rax(HDGen *gen) {
     emit_byte(gen, 0x48); emit_byte(gen, 0xF7); emit_byte(gen, 0xD8);
 }
 
-void emit_not_rax(HCGen *gen) {
+void emit_not_rax(HDGen *gen) {
     emit_byte(gen, 0x48); emit_byte(gen, 0xF7); emit_byte(gen, 0xD0);
 }
 
-void emit_cmp_rax_rdi(HCGen *gen) {
+void emit_cmp_rax_rdi(HDGen *gen) {
     emit_byte(gen, 0x48); emit_byte(gen, 0x39); emit_byte(gen, 0xF8);
 }
 
-void emit_test_rax_rax(HCGen *gen) {
+void emit_test_rax_rax(HDGen *gen) {
     emit_byte(gen, 0x48); emit_byte(gen, 0x85); emit_byte(gen, 0xC0);
 }
 
-void emit_mov_rdi_rax(HCGen *gen) {
+void emit_mov_rdi_rax(HDGen *gen) {
     emit_byte(gen, 0x48); emit_byte(gen, 0x89); emit_byte(gen, 0xC7);
 }
 
-void emit_xor_rax_rax(HCGen *gen) {
+void emit_xor_rax_rax(HDGen *gen) {
     emit_byte(gen, 0x48); emit_byte(gen, 0x31); emit_byte(gen, 0xC0);
 }
 
-void emit_mov_rax_1(HCGen *gen) {
+void emit_mov_rax_1(HDGen *gen) {
     emit_mov_rax_imm64(gen, 1);
 }
 
-void emit_ret(HCGen *gen) {
+void emit_ret(HDGen *gen) {
     emit_byte(gen, 0xC3);
 }
 
@@ -239,7 +239,7 @@ void emit_ret(HCGen *gen) {
  * >0 after compiling a load-bearing function. */
 unsigned long wubu_hedge_prefetch_count = 0;
 
-static void emit_prefetch_rax_disp32(HCGen *gen, uint32_t disp, uint8_t modrm) {
+static void emit_prefetch_rax_disp32(HDGen *gen, uint32_t disp, uint8_t modrm) {
     emit_byte(gen, 0x0F);
     emit_byte(gen, 0x18);
     emit_byte(gen, modrm);            /* e.g. 0x80 = [rax+disp32] */
@@ -248,7 +248,7 @@ static void emit_prefetch_rax_disp32(HCGen *gen, uint32_t disp, uint8_t modrm) {
 }
 
 /* prefetchnta [rdi] — array-element loads (INDEX path holds base in rdi) */
-void emit_prefetch_rdi(HCGen *gen) {
+void emit_prefetch_rdi(HDGen *gen) {
     if (gen->hedge_loads) {
         emit_byte(gen, 0x0F);
         emit_byte(gen, 0x18);
@@ -258,7 +258,7 @@ void emit_prefetch_rdi(HCGen *gen) {
 }
 
 /* prefetchnta [rax] — plain pointer dereference loads */
-void emit_prefetch_rax(HCGen *gen) {
+void emit_prefetch_rax(HDGen *gen) {
     if (gen->hedge_loads) {
         emit_byte(gen, 0x0F);
         emit_byte(gen, 0x18);
@@ -268,18 +268,18 @@ void emit_prefetch_rax(HCGen *gen) {
 }
 
 /* prefetchnta [rax+disp32] — used by sized/element loads */
-void emit_prefetch_rax_off(HCGen *gen, int32_t off) {
+void emit_prefetch_rax_off(HDGen *gen, int32_t off) {
     emit_prefetch_rax_disp32(gen, (uint32_t)off, 0x80);
 }
 
 /* prefetchnta [rbp - off] — stack-local loads */
-void emit_prefetch_rbp(HCGen *gen, int32_t off) {
+void emit_prefetch_rbp(HDGen *gen, int32_t off) {
     emit_prefetch_rax_disp32(gen, (uint32_t)(-(int32_t)off & 0xFFFFFFFF), 0x85);
 }
 
 /* prefetchnta [rip + disp32] — RIP-relative global loads.
  * Records a global_patch so the disp32 is fixed up to the data section. */
-void emit_prefetch_rip(HCGen *gen, size_t global_offset) {
+void emit_prefetch_rip(HDGen *gen, size_t global_offset) {
     size_t patch_pos = gen->code_size + 3;   /* disp32 start */
     emit_prefetch_rax_disp32(gen, 0, 0x05);
     if (gen->n_global_patches < 128) {
@@ -289,7 +289,7 @@ void emit_prefetch_rip(HCGen *gen, size_t global_offset) {
     }
 }
 
-void emit_prologue(HCGen *gen) {
+void emit_prologue(HDGen *gen) {
     emit_byte(gen, 0x55);                    /* push rbp */
     emit_byte(gen, 0x48); emit_byte(gen, 0x89);
     emit_byte(gen, 0xE5);                    /* mov rbp, rsp */
@@ -301,7 +301,7 @@ void emit_prologue(HCGen *gen) {
     gen->has_prologue = true;
 }
 
-void emit_epilogue(HCGen *gen) {
+void emit_epilogue(HDGen *gen) {
     emit_byte(gen, 0xC9);                    /* leave (mov rsp,rbp; pop rbp) */
     emit_ret(gen);
 }
@@ -310,7 +310,7 @@ void emit_epilogue(HCGen *gen) {
  * CONDITIONAL SET PATTERNS
  * ==================================================================== */
 
-void emit_setcc(HCGen *gen, uint8_t set_op) {
+void emit_setcc(HDGen *gen, uint8_t set_op) {
     emit_byte(gen, 0x0F);               /* Two-byte opcode prefix */
     emit_byte(gen, set_op);             /* setcc al */
     emit_byte(gen, 0xC0);              /* al */
@@ -325,7 +325,7 @@ void emit_setcc(HCGen *gen, uint8_t set_op) {
  * JUMP EMISSION (5-byte, always patchable)
  * ==================================================================== */
 
-size_t emit_jcc_placeholder(HCGen *gen, uint8_t cc) {
+size_t emit_jcc_placeholder(HDGen *gen, uint8_t cc) {
     emit_byte(gen, 0x0F);
     emit_byte(gen, 0x80 | (cc & 0x0F));
     size_t patch_pos = gen->code_size;
@@ -333,7 +333,7 @@ size_t emit_jcc_placeholder(HCGen *gen, uint8_t cc) {
     return patch_pos;
 }
 
-size_t emit_jmp_placeholder(HCGen *gen) {
+size_t emit_jmp_placeholder(HDGen *gen) {
     emit_byte(gen, 0xE9);
     size_t patch_pos = gen->code_size;
     emit_dword(gen, 0);  /* placeholder */
@@ -343,27 +343,27 @@ size_t emit_jmp_placeholder(HCGen *gen) {
 /* Emit `rep movsb` with RCX bytes from [RSI] to [RDI]. Caller must set
  * rsi=src, rdi=dst, rcx=count BEFORE calling this. Used for struct-by-value
  * return memcpy (the RETURN path sets up these regs from the operand). */
-void emit_rep_movsb(HCGen *gen) {
+void emit_rep_movsb(HDGen *gen) {
     emit_byte(gen, 0xF3);   /* REP */
     emit_byte(gen, 0x48);   /* REX.W */
     emit_byte(gen, 0xA4);   /* MOVSB */
 }
 
 /* switch dispatch helpers */
-void emit_push_rax(HCGen *gen)     { emit_byte(gen, 0x50); }
-void emit_pop_rax(HCGen *gen)      { emit_byte(gen, 0x58); }
+void emit_push_rax(HDGen *gen)     { emit_byte(gen, 0x50); }
+void emit_pop_rax(HDGen *gen)      { emit_byte(gen, 0x58); }
 /* cmp rax, [rsp]  — 48 39 04 24 */
-void emit_cmp_rax_mem_rsp(HCGen *gen) {
+void emit_cmp_rax_mem_rsp(HDGen *gen) {
     emit_byte(gen, 0x48); emit_byte(gen, 0x39);
     emit_byte(gen, 0x04); emit_byte(gen, 0x24);
 }
 /* mov rax, [rsp]  — 48 8B 04 24 */
-void emit_mov_rax_mem_rsp(HCGen *gen) {
+void emit_mov_rax_mem_rsp(HDGen *gen) {
     emit_byte(gen, 0x48); emit_byte(gen, 0x8B);
     emit_byte(gen, 0x04); emit_byte(gen, 0x24);
 }
 /* add rsp, 8  — 48 83 C4 08 */
-void emit_add_rsp_8(HCGen *gen) {
+void emit_add_rsp_8(HDGen *gen) {
     emit_byte(gen, 0x48); emit_byte(gen, 0x83);
     emit_byte(gen, 0xC4); emit_byte(gen, 0x08);
 }

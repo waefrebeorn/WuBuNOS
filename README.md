@@ -2,11 +2,26 @@
 
 > **The compiler that runs ON the kernel.**
 
-WuBuNOS is the from-scratch C11 toolchain inside WuBuOS: a HolyC compiler
+WuBuNOS is the from-scratch C11 toolchain inside WuBuOS: a HolyD compiler
 frontend, a mid-level IR with optimizer passes, 14 ISA backends, and a
 self-hosting battery that proves every C11 construct the kernel needs.
 
 **Stats:** 50 C files, 20 header files, ~25,208 lines of code.
+
+---
+
+## HolyD — the founding myth
+
+> *"can we make all expansions to HolyC 'HolyD' like a big joke that I swang my
+> big dick to make ai make this since other humans didn't and were puny"*
+> — WaefreBeorn, quoting the comedian whose line stuck culturally
+
+**HolyD** is the language name. It is deliberately a joke with teeth: the
+other humans were puny and didn't build the self-hosting C11 toolchain that
+runs on the AGI kernel, so it got built anyway — with swagger. Every
+identifier carries the `HD_` prefix (`HD_AST_*`, `hd_build_mir`, …) and the
+frontend lives in `holyd_*.c`. Treat the name as gospel in this repo: if you
+see `HolyC` or `HC_`, that's a leftover and should be renamed to `HolyD`/`HD_`.
 
 ---
 
@@ -16,11 +31,11 @@ WuBuNOS follows the classic retargetable compiler design — one frontend,
 one IR, many backends:
 
 ```
-HolyC Source
+HolyD Source
      │
      ▼
 ┌─────────────────────────────────────────┐
-│  FRONTEND  (holyc_*.c/h)                │
+│  FRONTEND  (holyd_*.c/h)                │
 │  Lexer → Parser → AST → MIR Emitter     │
 └─────────────────┬───────────────────────┘
                   │
@@ -70,22 +85,22 @@ HolyC Source
 Tokenizes and expands `#define` macros, handles `#include` resolution,
 and strips comments before the lexer sees the text.
 
-### 2. Lexing (`holyc_lexer.c/h`)
+### 2. Lexing (`holyd_lexer.c/h`)
 Converts preprocessed source text into a token stream: keywords
 (`if`, `while`, `class`, `switch`), identifiers, literals (integer,
-string, float), operators, and punctuation. The HolyC dialect includes
+string, float), operators, and punctuation. The HolyD dialect includes
 TempleOS-era keywords like `Switch`, `Case`, `Throw`, `Catch`, `try`,
 `if`, `else`, `while`, `for`, `do`, `return`, `break`, `continue`,
 `extern`, `import`, `static`, `public`, `define`, `class`, `union`,
 `enum`, `sizeof`, `true`, `false`, `NULL`.
 
-### 3. Parsing (`holyc_parse.c`, `holyc_parse_ast.c`, `holyc_ast.h`)
+### 3. Parsing (`holyd_parse.c`, `holyd_parse_ast.c`, `holyd_ast.h`)
 Recursive-descent parser that builds an Abstract Syntax Tree (AST).
-Handles the full HolyC grammar: declarations, expressions (with proper
+Handles the full HolyD grammar: declarations, expressions (with proper
 operator precedence), statements, class definitions, function bodies,
 and preprocessor directives embedded in the parse.
 
-### 4. AST → MIR Lowering (`holyc_codegen.c/h`)
+### 4. AST → MIR Lowering (`holyd_codegen.c/h`)
 The AST is lowered to **MIR** (Mid-level IR) — the hourglass neck of
 the compiler. MIR is:
 
@@ -161,7 +176,7 @@ no guessed opcodes.
 |--------|------|-----------|-------------|
 | x86-64 | `wubu_isa_x86_64.c` | **Native JIT** | AMD64 / Intel 64 |
 | ARM64 | `wubu_isa_arm64.c` | **Native JIT** | AArch64 (ARMv8+) |
-| PTX | `wubu_isa_ptx.c`, `holyc_ptx.c` | **Native JIT** | NVIDIA GPU (PTX/SASS) |
+| PTX | `wubu_isa_ptx.c`, `holyd_ptx.c` | **Native JIT** | NVIDIA GPU (PTX/SASS) |
 | RISC-V | `wubu_isa_riscv.c` | Interpreter | RV64I (2010 ISA) |
 | MIPS | `wubu_isa_mips.c` | Interpreter | MIPS (Berkeley RISC lineage) |
 | M68000 | `wubu_isa_m68k.c` | Interpreter | Motorola 68,000 (1979) |
@@ -180,11 +195,11 @@ driven by the same MIR, so correctness is guaranteed by construction.
 
 ## Self-Hosting Battery
 
-The test suite (`holyc_test.c`, `test_isa_driver.c`) is a **self-hosting
+The test suite (`holyd_test.c`, `test_isa_driver.c`) is a **self-hosting
 battery** — it compiles and executes every C11 construct WuBuOS needs,
 then cross-checks results:
 
-- **84 HolyC compiler tests** (`make test_holyc`): lexer, parser, AST,
+- **84 HolyD compiler tests** (`make test_holyd`): lexer, parser, AST,
   codegen, and end-to-end compilation of every language construct.
 - **11 ISA driver differential tests** (`make test_drivers`): each
   driver executes 33+ expressions and is verified against gcc output.
@@ -206,7 +221,7 @@ WuBuOS has both wubuNOS and wubuwizard as submodules:
 - `wubuos/src/compiler/` → this repo (WuBuNOS)
 - `wubuos/src/brain/` → wubuwizard
 
-WuBuNOS compiles HolyC programs that run **ring-0 on the WuBuOS kernel**.
+WuBuNOS compiles HolyD programs that run **ring-0 on the WuBuOS kernel**.
 
 ---
 
@@ -225,7 +240,7 @@ This builds the full compiler test binary and runs the self-hosting battery.
 
 ```bash
 cd wubuos
-make test_holyc    # 84/84 HolyC compiler tests
+make test_holyd    # 84/84 HolyD compiler tests
 make test_drivers  # 11 ISA drivers differential-tested vs gcc
 ```
 
@@ -233,16 +248,16 @@ make test_drivers  # 11 ISA drivers differential-tested vs gcc
 
 ```bash
 gcc -O0 -g -I. \
-  holyc_lexer.c holyc_parse.c holyc_parse_ast.c holyc_codegen.c \
-  holyc_codegen_emit.c holyc_codegen_expr.c holyc_codegen_stmt.c \
-  holyc_codegen_api.c holyc_runtime.c holyc_test.c \
+  holyd_lexer.c holyd_parse.c holyd_parse_ast.c holyd_codegen.c \
+  holyd_codegen_emit.c holyd_codegen_expr.c holyd_codegen_stmt.c \
+  holyd_codegen_api.c holyd_runtime.c holyd_test.c \
   wubu_preproc.c \
   wubu_mir.c wubu_mir_opt.c wubu_mir_regalloc.c wubu_mir_lower.c \
   wubu_isa_driver.c \
   wubu_isa_x86_64.c wubu_isa_arm64.c wubu_isa_mips.c \
   wubu_isa_m68k.c wubu_isa_riscv.c wubu_isa_8086.c \
   wubu_isa_6502.c wubu_isa_z80.c wubu_isa_8051.c wubu_isa_avr.c \
-  wubu_isa_ptx.c holyc_ptx.c \
+  wubu_isa_ptx.c holyd_ptx.c \
   x86_peephole.c \
   brainfuck.c test_isa_driver.c \
   -o wubunos_test -ldl -lm
@@ -255,14 +270,14 @@ gcc -O0 -g -I. \
 
 | Path | Purpose |
 |------|---------|
-| `holyc_lexer.c/h` | HolyC tokenizer |
-| `holyc_parse.c`, `holyc_parse_ast.c`, `holyc_parser.h` | Recursive-descent parser + AST builder |
-| `holyc_ast.h` | AST node definitions |
-| `holyc_codegen.c/h`, `holyc_codegen_emit.c`, `holyc_codegen_expr.c`, `holyc_codegen_stmt.c`, `holyc_codegen_api.c` | AST → MIR lowering |
-| `holyc_types.h` | Core type definitions |
-| `holyc_runtime.c` | Runtime support (memory, syscalls) |
-| `holyc_test.c` | Self-hosting test battery |
-| `holyc.h` | Master include for the HolyC frontend |
+| `holyd_lexer.c/h` | HolyD tokenizer |
+| `holyd_parse.c`, `holyd_parse_ast.c`, `holyd_parser.h` | Recursive-descent parser + AST builder |
+| `holyd_ast.h` | AST node definitions |
+| `holyd_codegen.c/h`, `holyd_codegen_emit.c`, `holyd_codegen_expr.c`, `holyd_codegen_stmt.c`, `holyd_codegen_api.c` | AST → MIR lowering |
+| `holyd_types.h` | Core type definitions |
+| `holyd_runtime.c` | Runtime support (memory, syscalls) |
+| `holyd_test.c` | Self-hosting test battery |
+| `holyd.h` | Master include for the HolyD frontend |
 | `wubu_preproc.c/h` | C preprocessor (macros, includes) |
 | `wubu_mir.c/h` | Mid-level IR: construction, printing, utilities |
 | `wubu_mir_opt.c/h` | Optimizer passes (fold, strength, DCE, CSE, LICM, unroll) |
@@ -279,7 +294,7 @@ gcc -O0 -g -I. \
 | `wubu_isa_z80.c` | Zilog Z80 interpreter backend |
 | `wubu_isa_8051.c` | Intel 8051 interpreter backend |
 | `wubu_isa_avr.c` | Atmel AVR interpreter backend |
-| `wubu_isa_ptx.c/h`, `holyc_ptx.c/h` | NVIDIA PTX GPU backend |
+| `wubu_isa_ptx.c/h`, `holyd_ptx.c/h` | NVIDIA PTX GPU backend |
 | `x86_peephole.c` | x86-64 peephole optimizer |
 | `brainfuck.c` | Brainfuck → x86-64 JIT (end-to-end proof) |
 | `test_isa_driver.c` | Differential ISA driver tests |
@@ -304,7 +319,7 @@ Three real, separate repos. **Do not confuse them:**
 
 This compiler repo is reached by the OS repo via a **symlink**:
 `/home/wubu/wubuos/src/compiler → /home/wubu/wubunos`. The OS `Makefile`
-uses `$(COMP) = src/compiler`, so `make holyc` in `wubuos` compiles sources
+uses `$(COMP) = src/compiler`, so `make holyd` in `wubuos` compiles sources
 from here directly. There is **no submodule** for the compiler (the `.gitmodules`
 entry was stale and is removed).
 
@@ -320,10 +335,10 @@ Built entirely from the OS repo (compiler has no standalone Makefile):
 
 ```bash
 cd /home/wubu/wubuos
-make holyc                          # build the compiler driver
+make holyd                          # build the compiler driver
 make gauntlet_runner                # build the universal test gauntlet
 make test_gauntlet                  # run 4,450 tests across 14 ISAs
-make test_holyc                     # run holyc's self-tests
+make test_holyd                     # run holyd's self-tests
 ```
 
 The `test_gauntlet_runner.c`, `isa-test/`, `peephole_superopt/`, and
