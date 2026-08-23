@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include "wubu_softfloat.h"
 
 #define AVR_VR_BASE 0x30
 #define AVR_RAM_SIZE 256
@@ -35,6 +36,8 @@
 #define AVR_LE   0x13
 #define AVR_EQ   0x14
 #define AVR_NE   0x15
+#define AVR_FOP  0x20   /* soft-float hostcall */
+#define AVR_FRET 0x21   /* soft-float return */
 
 int64_t wubu_avr_interp(const uint8_t *code, size_t size, int64_t arg)
 {
@@ -47,7 +50,7 @@ int64_t wubu_avr_interp(const uint8_t *code, size_t size, int64_t arg)
     size_t pc = 0;
     while (pc < size) {
         uint8_t op = code[pc++];
-        uint8_t a, b;
+        uint8_t a, b, fn, sa, sb, sd;
 
         switch (op) {
         case AVR_LDI: /* LDI vr, imm8 */
@@ -155,6 +158,30 @@ int64_t wubu_avr_interp(const uint8_t *code, size_t size, int64_t arg)
             vr[AVR_VR_BASE + a] = ((vr[AVR_VR_BASE + a] & 0xFF) !=
                                     (vr[AVR_VR_BASE + b] & 0xFF)) ? 1 : 0;
             break;
+        case AVR_FOP: /* fn, sa, sb, sd (vr slots) */
+            fn = code[pc++]; sa = code[pc++]; sb = code[pc++]; sd = code[pc++];
+            {
+                uint32_t fa = (uint32_t)(vr[AVR_VR_BASE + sa] & 0xFFFFFFFF);
+                uint32_t fb = (uint32_t)(vr[AVR_VR_BASE + sb] & 0xFFFFFFFF);
+                uint32_t r = 0;
+                switch (fn) {
+                case 0: r = wubu_sf_f32_add(fa,fb); break;
+                case 1: r = wubu_sf_f32_sub(fa,fb); break;
+                case 2: r = wubu_sf_f32_mul(fa,fb); break;
+                case 3: r = wubu_sf_f32_div(fa,fb); break;
+                case 10: r = fa ^ 0x80000000u; break;
+                case 6:  r = (wubu_sf_f32_cmp(fa,fb)==0)?0xFFFFFFFFu:0; break;
+                case 7:  r = (wubu_sf_f32_cmp(fa,fb)!=0)?0xFFFFFFFFu:0; break;
+                case 8:  r = (wubu_sf_f32_cmp(fa,fb) <0)?0xFFFFFFFFu:0; break;
+                case 9:  r = (wubu_sf_f32_cmp(fa,fb)<=0)?0xFFFFFFFFu:0; break;
+                default: break;
+                }
+                vr[AVR_VR_BASE + sd] = (int64_t)r;
+            }
+            break;
+        case AVR_FRET:
+            a = code[pc++];
+            return (int64_t)(int32_t)(vr[AVR_VR_BASE + a] & 0xFFFFFFFF);
         default:
             return 0;
         }

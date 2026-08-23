@@ -49,6 +49,8 @@ static void note_label(avr_emitter_t *e, uint32_t label, size_t off) {
 /* Virtual AVR opcodes */
 #define AVR_LDI  0x01
 #define AVR_ADD  0x02
+#define AVR_FOP  0x20   /* soft-float hostcall */
+#define AVR_FRET 0x21   /* soft-float return */
 #define AVR_SUB  0x03
 #define AVR_AND  0x04
 #define AVR_OR   0x05
@@ -182,6 +184,28 @@ static int avr_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
         case MIR_NE:
             ep8(&e, AVR_MOV); ep8(&e, (uint8_t)in->dst); ep8(&e, (uint8_t)in->a);
             ep8(&e, AVR_NE); ep8(&e, (uint8_t)in->dst); ep8(&e, (uint8_t)in->b); break;
+        case MIR_FADD:
+        case MIR_FSUB:
+        case MIR_FMUL:
+        case MIR_FDIV: {
+            uint8_t fn = (in->op==MIR_FADD)?0:(in->op==MIR_FSUB)?1:(in->op==MIR_FMUL)?2:3;
+            ep8(&e, AVR_FOP); ep8(&e, fn);
+            ep8(&e, (uint8_t)in->a); ep8(&e, (uint8_t)in->b);
+            ep8(&e, (uint8_t)in->dst);
+            break;
+        }
+        case MIR_FEQ: case MIR_FNE: case MIR_FLT: case MIR_FLE: {
+            uint8_t fn = (in->op==MIR_FEQ)?6:(in->op==MIR_FNE)?7:(in->op==MIR_FLT)?8:9;
+            ep8(&e, AVR_FOP); ep8(&e, fn);
+            ep8(&e, (uint8_t)in->a); ep8(&e, (uint8_t)in->b);
+            ep8(&e, (uint8_t)in->dst);
+            break;
+        }
+        case MIR_FRET:
+            ep8(&e, AVR_FRET);
+            ep8(&e, (uint8_t)in->a);
+            break;
+
         case MIR_RET:
             ep8(&e, AVR_RET);
             ep8(&e, (uint8_t)in->a);
