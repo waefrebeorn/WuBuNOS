@@ -8,6 +8,7 @@
  * C11, self-contained.
  */
 #include <stdint.h>
+#include "wubu_softfloat.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -41,6 +42,9 @@
 #define EXT_EQ   0x0C
 #define EXT_NE   0x0D
 #define EXT_RET  0x0E
+#define EXT_FOP  0x20   /* soft-float: fn, slot_a, slot_b, slot_dst */
+#define EXT_FRET 0x21
+#define EXT_FCONST 0x22   /* soft-float return: slot */
 
 int64_t wubu_8051_interp_exec(const uint8_t *code, size_t size, int64_t arg)
 {
@@ -173,6 +177,41 @@ int64_t wubu_8051_interp_exec(const uint8_t *code, size_t size, int64_t arg)
                 case EXT_RET:
                     a = code[pc++];
                     return (int64_t)(int8_t)(ram[I8051_VR_BASE + a] & 0xFF);
+                case EXT_FOP: {
+                    /* fn, sa, sb, sd — slots index ram[] directly; the
+                     * f32 bits live in the low 32 bits of each cell */
+                    uint8_t fn = code[pc++];
+                    int64_t fa = ram[code[pc++]] & 0xFFFFFFFFLL;
+                    int64_t fb = ram[code[pc++]] & 0xFFFFFFFFLL;
+                    uint8_t sd = code[pc++];
+                    uint32_t r = 0;
+                    switch (fn) {
+                    case 0:  r = wubu_sf_f32_add((uint32_t)fa, (uint32_t)fb); break;
+                    case 1:  r = wubu_sf_f32_sub((uint32_t)fa, (uint32_t)fb); break;
+                    case 2:  r = wubu_sf_f32_mul((uint32_t)fa, (uint32_t)fb); break;
+                    case 3:  r = wubu_sf_f32_div((uint32_t)fa, (uint32_t)fb); break;
+                    case 10: r = (uint32_t)fa ^ 0x80000000u; break;
+                    case 6:  r = (wubu_sf_f32_cmp((uint32_t)fa,(uint32_t)fb)==0)?0xFFFFFFFFu:0; break;
+                    case 7:  r = (wubu_sf_f32_cmp((uint32_t)fa,(uint32_t)fb)!=0)?0xFFFFFFFFu:0; break;
+                    case 8:  r = (wubu_sf_f32_cmp((uint32_t)fa,(uint32_t)fb) <0)?0xFFFFFFFFu:0; break;
+                    case 9:  r = (wubu_sf_f32_cmp((uint32_t)fa,(uint32_t)fb)<=0)?0xFFFFFFFFu:0; break;
+                    default: break;
+                    }
+                    ram[sd] = (int64_t)r;   /* zero-extend into cell */
+                    break;
+                }
+                case EXT_FCONST: {
+                    uint8_t sd = code[pc+4];
+                    int64_t v = (int64_t)code[pc] | ((int64_t)code[pc+1]<<8)
+                              | ((int64_t)code[pc+2]<<16) | ((int64_t)code[pc+3]<<24);
+                    pc += 5;
+                    ram[sd] = v;
+                    break;
+                }
+                case EXT_FRET: {
+                    uint8_t sa = code[pc++];
+                    return (int64_t)(int32_t)(ram[sa] & 0xFFFFFFFFLL);
+                }
                 default:
                     return 0;
                 }

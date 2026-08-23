@@ -32,6 +32,9 @@
 #define EXT_EQ       0x0C
 #define EXT_NE       0x0D
 #define EXT_RET      0x0E
+#define EXT_FOP      0x20
+#define EXT_FRET     0x21
+#define EXT_FCONST   0x22
 
 typedef struct {
     uint8_t *code;
@@ -73,6 +76,13 @@ static int i8051_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
         case MIR_CONST:
             e8(&e, 0x74); e8(&e, (uint8_t)(in->imm & 0xFF)); /* MOV A, #imm */
             e8(&e, 0xF5); e8(&e, slot);                       /* MOV [slot], A */
+            {
+                int64_t v = in->imm;
+                e8(&e, I8051_EXT); e8(&e, EXT_FCONST);
+                for (int i = 0; i < 4; i++)
+                    e8(&e, (uint8_t)((v >> (i*8)) & 0xFF));
+                e8(&e, slot);
+            }
             break;
         case MIR_MOV:
             sa = (uint8_t)(I8051_VR_BASE + in->a);
@@ -192,6 +202,32 @@ static int i8051_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
             e8(&e, 0xF5); e8(&e, slot);  /* MOV [slot], A */
             break;
         }
+        case MIR_FADD:
+        case MIR_FSUB:
+        case MIR_FMUL:
+        case MIR_FDIV: {
+            uint8_t fn = (in->op==MIR_FADD)?0:(in->op==MIR_FSUB)?1:(in->op==MIR_FMUL)?2:3;
+            e8(&e, I8051_EXT); e8(&e, EXT_FOP);
+            e8(&e, fn);
+            e8(&e, (uint8_t)(I8051_VR_BASE + in->a));
+            e8(&e, (uint8_t)(I8051_VR_BASE + in->b));
+            e8(&e, (uint8_t)(I8051_VR_BASE + in->dst));
+            break;
+        }
+        case MIR_FEQ: case MIR_FNE: case MIR_FLT: case MIR_FLE: {
+            uint8_t fn = (in->op==MIR_FEQ)?6:(in->op==MIR_FNE)?7:(in->op==MIR_FLT)?8:9;
+            e8(&e, I8051_EXT); e8(&e, EXT_FOP);
+            e8(&e, fn);
+            e8(&e, (uint8_t)(I8051_VR_BASE + in->a));
+            e8(&e, (uint8_t)(I8051_VR_BASE + in->b));
+            e8(&e, (uint8_t)(I8051_VR_BASE + in->dst));
+            break;
+        }
+        case MIR_FRET:
+            e8(&e, I8051_EXT); e8(&e, EXT_FRET);
+            e8(&e, (uint8_t)(I8051_VR_BASE + in->a));
+            break;
+
         case MIR_RET:
             sa = (uint8_t)(I8051_VR_BASE + in->a);
             e8(&e, 0xE5); e8(&e, sa);   /* MOV A, [sa] */
