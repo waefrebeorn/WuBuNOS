@@ -43,9 +43,9 @@ OS_INTERP = $(OS_ROOT)/runtime/wubu_6502_interp.c $(OS_ROOT)/runtime/wubu_riscv_
             $(OS_ROOT)/runtime/wubu_dos_emu_decode.c wubu_softfloat.c
 
 # Frontend (for gauntlet which needs hc_eval_mir)
-FRONT   = holyc_lexer.c holyc_parse.c holyc_parse_ast.c holyc_codegen.c \
-          holyc_codegen_emit.c holyc_codegen_expr.c holyc_codegen_stmt.c \
-          holyc_codegen_api.c holyc_runtime.c holyc_mir_eval.c wubu_preproc.c
+FRONT   = holyd_lexer.c holyd_parse.c holyd_parse_ast.c holyd_codegen.c \
+          holyd_codegen_emit.c holyd_codegen_expr.c holyd_codegen_stmt.c \
+          holyd_codegen_api.c holyd_runtime.c holyd_mir_eval.c wubu_preproc.c
 
 # JIT runtime (for gauntlet — provides jit_alloc_exec, jit_lock_exec, etc.)
 JIT_SRC = $(wildcard $(OS_ROOT)/jit/jit.c $(OS_ROOT)/jit/jit_encode.c \
