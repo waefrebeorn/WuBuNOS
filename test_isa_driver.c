@@ -327,6 +327,38 @@ static void test_describe(void)
     pass++; total++;
 }
 
+
+/* ---- Test: float ops through the 6502 soft-float hostcall ---- */
+static void test_6502_float(void)
+{
+    printf("-- Test: 6502 float add 1.5+2.25=3.75 --\n");
+    wubu_mir_prog_t prog;
+    wubu_mir_init(&prog);
+    uint32_t a_bits; { float x=1.5f; a_bits=*(uint32_t*)&x; }
+    uint32_t b_bits; { float x=2.25f; b_bits=*(uint32_t*)&x; }
+    wubu_vr_t va = wubu_mir_const(&prog, (int64_t)(uint32_t)a_bits);
+    wubu_vr_t vb = wubu_mir_const(&prog, (int64_t)(uint32_t)b_bits);
+    wubu_vr_t r  = wubu_mir_binop(&prog, MIR_FADD, va, vb);
+    wubu_mir_fret(&prog, r);
+    const char *names[] = {"6502"};
+    int64_t result = 0;
+    const wubu_isa_driver_t *d = wubu_isa_find("6502");
+    CHECK(d != NULL, "6502 driver present");
+    uint8_t *dbg_code=NULL; size_t dbg_size=0;
+    if (d->compile(&prog,&dbg_code,&dbg_size)==0) {
+        printf("  [dbg] size=%zu:",dbg_size);
+        for(size_t i=0;i<dbg_size;i++) printf(" %02X",dbg_code[i]);
+        printf("\n");
+    }
+    if (d && run_with_driver(d, &prog, &result) == 0) {
+        uint32_t got = (uint32_t)result;
+        float fg; memcpy(&fg, &got, 4);
+        CHECK(got == 0x40680000 || fg == 3.75f, "6502 float add");
+        printf("  6502: fadd -> %08X (%f)\n", got, fg);
+    }
+    wubu_mir_free(&prog);
+}
+
 int main(void)
 {
     printf("=== ISA DRIVER SPACE TEST ===\n\n");
@@ -334,6 +366,8 @@ int main(void)
     test_registry();
     printf("\n");
     test_constant();
+
+    test_6502_float();
     printf("\n");
     test_arithmetic();
     printf("\n");

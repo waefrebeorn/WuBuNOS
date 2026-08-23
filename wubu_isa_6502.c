@@ -138,6 +138,16 @@ static void emit_sbc(cpu6502_emitter_t *e, uint8_t va, uint8_t vb, uint8_t vdst)
     e8(e, SBC_ZP); e8(e, vb);
     e8(e, STA_ZP); e8(e, vdst);
 }
+/* ---- soft-float hostcall escape hatch (opcode 0x02) ----
+ * fn: 0=ADD 1=SUB 2=MUL 3=DIV 4=ITOF 5=FTOI 6=FEQ 7=FNE 8=FLT 9=FLE
+ * Each slot is a 4-byte little-endian f32 buffer in ZP. */
+static void emit_fhostcall(cpu6502_emitter_t *e, uint8_t fn,
+                           uint8_t vdst, uint8_t va, uint8_t vb) {
+    e8(e, 0x02); e8(e, fn); e8(e, vdst); e8(e, va); e8(e, vb);
+}
+/* 6502 has no FP registers: float vrs live as 4-byte ZP cells, identical
+ * layout to int vrs but accessed as little-endian f32. */
+
 
 /* emit a loop with BEQ condition at the top:
  *   back_jmp_pos: emits JMP_ABS back to here (backward)
@@ -177,8 +187,19 @@ static int cpu6502_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_
         }
         switch (in->op) {
         case MIR_CONST:
-            lda_imm8(&e, (uint8_t)(in->imm & 0xFF));
-            sta_zp8(&e, zp_slot(in->dst));
+            /* Store immediately into BOTH regions so integer (low-ZP byte 0)
+             * and float (high-ZP 4-byte cell) operands read the same value. */
+            {
+                int64_t v = in->imm;
+                uint8_t lo = zp_slot(in->dst);
+                lda_imm8(&e, (uint8_t)(v & 0xFF));
+                sta_zp8(&e, lo);
+                uint8_t base = zp_fslot(in->dst);
+                for (int i = 0; i < 4; i++) {
+                    lda_imm8(&e, (uint8_t)((v >> (i*8)) & 0xFF));
+                    sta_zp8(&e, (uint8_t)(base + i));
+                }
+            }
             break;
 
         case MIR_MOV:
@@ -190,9 +211,26 @@ static int cpu6502_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_
             emit_adc(&e, zp_slot(in->a), zp_slot(in->b), zp_slot(in->dst));
             break;
 
-        case MIR_SUB:
-            emit_sbc(&e, zp_slot(in->a), zp_slot(in->b), zp_slot(in->dst));
+        case MIR_FADD:
+        case MIR_FSUB:
+        case MIR_FMUL:
+        case MIR_FDIV: {
+            /* fp ops read 4-byte f32 buffers from the ZP slot; hostcall
+             * (opcode 0x02) services them via the soft-float runtime. */
+            uint8_t fn = (in->op==MIR_FADD)?0:(in->op==MIR_FSUB)?1:(in->op==MIR_MUL)?2:3;
+            emit_fhostcall(&e, fn, zp_fslot(in->dst),
+                           zp_fslot(in->a), zp_fslot(in->b));
             break;
+        }
+        case MIR_FNEG:
+            /* negate via ITOF-of-negated? no — hostcall fn for f32 negate.
+             * Reuse 0x02 with fn=10 (FNEG), b unused. */
+            emit_fhostcall(&e, 10, zp_fslot(in->dst), zp_fslot(in->a), zp_fslot(in->a));
+            break;
+        case MIR_FEQ:  emit_fhostcall(&e, 6, zp_fslot(in->dst), zp_slot(in->a), zp_slot(in->b)); break;
+        case MIR_FNE:  emit_fhostcall(&e, 7, zp_fslot(in->dst), zp_slot(in->a), zp_slot(in->b)); break;
+        case MIR_FLT:  emit_fhostcall(&e, 8, zp_fslot(in->dst), zp_slot(in->a), zp_slot(in->b)); break;
+        case MIR_FLE:  emit_fhostcall(&e, 9, zp_fslot(in->dst), zp_slot(in->a), zp_slot(in->b)); break;
 
         case MIR_AND:
             e8(&e, LDA_ZP); e8(&e, zp_slot(in->a));
@@ -476,6 +514,12 @@ static int cpu6502_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_
 
         case MIR_RET:
             e8(&e, LDA_ZP); e8(&e, zp_slot(in->a));
+            e8(&e, BRK);
+            break;
+        case MIR_FRET:
+            /* float return: hostcall copies the 4-byte f32 at slot in->a
+             * into the float-return scratch the run() exits with. */
+            emit_fhostcall(&e, 11, zp_fslot(in->a), zp_fslot(in->a), zp_fslot(in->a));
             e8(&e, BRK);
             break;
 

@@ -62,6 +62,7 @@ typedef enum {
     MIR_BREAK,         /* pc = enclosing loop's done label */
     MIR_CONTINUE,      /* pc = enclosing loop's top label */
     MIR_RET,           /* return vr 0 */
+    MIR_FRET,          /* return float vr 0 (bits reinterpreted as f32, returned low-32) */
     /* Memory model (arrays + pointers live in a flat int64 memory array) */
     MIR_ALLOC,         /* dst = base_addr; imm = n_elements (reserves memory) */
     MIR_LOAD,          /* dst = mem[a] */
@@ -123,6 +124,8 @@ wubu_vr_t wubu_mir_const(wubu_mir_prog_t *p, int64_t imm);
 wubu_vr_t wubu_mir_const_to(wubu_mir_prog_t *p, wubu_vr_t dst, int64_t imm);
 wubu_vr_t wubu_mir_binop(wubu_mir_prog_t *p, wubu_mir_op_t op,
                          wubu_vr_t a, wubu_vr_t b);
+/* Return a float vr (bits reinterpreted as f32 on float-less ISAs). */
+void     wubu_mir_fret(wubu_mir_prog_t *p, wubu_vr_t a);
 wubu_vr_t wubu_mir_unop(wubu_mir_prog_t *p, wubu_mir_op_t op, wubu_vr_t a);
 wubu_vr_t wubu_mir_mov(wubu_mir_prog_t *p, wubu_vr_t a);
 /* mov INTO a pre-chosen dst (phi-merge: both arms write the same vr) */

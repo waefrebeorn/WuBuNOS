@@ -40,7 +40,7 @@ OS_INTERP = $(OS_ROOT)/runtime/wubu_6502_interp.c $(OS_ROOT)/runtime/wubu_riscv_
             $(OS_ROOT)/runtime/wubu_mips_interp.c $(OS_ROOT)/runtime/wubu_dos_emu.c \
             $(OS_ROOT)/runtime/wubu_dos_emu_mem.c $(OS_ROOT)/runtime/wubu_dos_emu_regs.c \
             $(OS_ROOT)/runtime/wubu_dos_emu_alu.c $(OS_ROOT)/runtime/wubu_dos_emu_int.c \
-            $(OS_ROOT)/runtime/wubu_dos_emu_decode.c
+            $(OS_ROOT)/runtime/wubu_dos_emu_decode.c wubu_softfloat.c
 
 # Frontend (for gauntlet which needs hc_eval_mir)
 FRONT   = holyc_lexer.c holyc_parse.c holyc_parse_ast.c holyc_codegen.c \

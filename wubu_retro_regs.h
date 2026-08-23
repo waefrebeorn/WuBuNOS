@@ -40,6 +40,18 @@ static inline uint8_t zp_slot(wubu_vr_t vr) {
 }
 #define ZP_SCRATCH  255
 
+/* ---- float operand slots (6502): 4-byte little-endian cells ----
+ * Integers use zp_slot(vr) (1 byte). Float vrs instead live in a
+ * high-ZP region aligned +4 so the 4 bytes never overlap a neighbour.
+ * Float vrs are dense in [0..max_vr]; the slot base is 0xFC - vr*4
+ * scanning downward from the top, clamped into the 0x80..0xFD window. */
+static inline uint8_t zp_fslot(wubu_vr_t vr) {
+    uint32_t off = (uint32_t)vr * 4u;
+    uint32_t base = 0xFCu;                 /* top of ZP, 4-aligned */
+    if (off >= (base - 0x80u)) return 0x80u;  /* clamp: low float region */
+    return (uint8_t)(base - off);
+}
+
 /* ---- Z80 imaginary register file (direct 16-bit memory slots) ----
  * Z80 has a full 16-bit address space; vrs live in 2-byte memory slots.
  * slot_addr(vr) = vr*2 (little-endian 16-bit cells). */

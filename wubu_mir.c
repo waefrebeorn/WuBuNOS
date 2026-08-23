@@ -59,6 +59,15 @@ wubu_vr_t wubu_mir_const_to(wubu_mir_prog_t *p, wubu_vr_t dst, int64_t imm)
     return dst;
 }
 
+/* Return a float vr (bits reinterpreted as f32 on 32-bit-float
+ * ISAs that lack an FP return register). */
+void wubu_mir_fret(wubu_mir_prog_t *p, wubu_vr_t a) {
+    wubu_mir_instr_t *i = emit(p);
+    if (!i) return;
+    i->op = MIR_FRET;
+    i->a = a;
+}
+
 wubu_vr_t wubu_mir_binop(wubu_mir_prog_t *p, wubu_mir_op_t op,
                          wubu_vr_t a, wubu_vr_t b)
 {
