@@ -132,9 +132,59 @@ static void x86_patch_push(x86_patch_t **patches, size_t *np, size_t *cap,
 /* ---- the full compile function with regalloc ---- */
 
 /* scalar tensor GEMM: C += A*B (row-major, int64).
- * Mirrors MIR_T_GEMM interpreter semantics exactly. */
+ * Mirrors MIR_T_GEMM interpreter semantics exactly.
+ *
+ * Tiled kernel (H4): 4-row register blocking — one pass over B[k][j] feeds
+ * four A rows' accumulators (4x fewer B loads), plus K-unroll-by-4 with
+ * hoisted row pointers. Bit-identical to the naive reference loop below. */
 static void wubu_tgemm_scalar(int64_t *mem, int64_t A, int64_t B,
                               int64_t C, int M, int N, int K)
+{
+    int i = 0;
+    for (; i + 3 < M; i += 4) {
+        const int64_t *a0 = &mem[A + (int64_t)(i+0) * K];
+        const int64_t *a1 = &mem[A + (int64_t)(i+1) * K];
+        const int64_t *a2 = &mem[A + (int64_t)(i+2) * K];
+        const int64_t *a3 = &mem[A + (int64_t)(i+3) * K];
+        int64_t       *c0 = &mem[C + (int64_t)(i+0) * N];
+        int64_t       *c1 = &mem[C + (int64_t)(i+1) * N];
+        int64_t       *c2 = &mem[C + (int64_t)(i+2) * N];
+        int64_t       *c3 = &mem[C + (int64_t)(i+3) * N];
+        for (int j = 0; j < N; j++) {
+            int64_t s0 = c0[j], s1 = c1[j], s2 = c2[j], s3 = c3[j];
+            const int64_t *bk = &mem[B] + j;
+            for (int k = 0; k + 3 < K; k += 4) {
+                const int64_t b0 = bk[(size_t)(k+0) * N];
+                const int64_t b1 = bk[(size_t)(k+1) * N];
+                const int64_t b2 = bk[(size_t)(k+2) * N];
+                const int64_t b3 = bk[(size_t)(k+3) * N];
+                s0 += a0[k+0]*b0 + a0[k+1]*b1 + a0[k+2]*b2 + a0[k+3]*b3;
+                s1 += a1[k+0]*b0 + a1[k+1]*b1 + a1[k+2]*b2 + a1[k+3]*b3;
+                s2 += a2[k+0]*b0 + a2[k+1]*b1 + a2[k+2]*b2 + a2[k+3]*b3;
+                s3 += a3[k+0]*b0 + a3[k+1]*b1 + a3[k+2]*b2 + a3[k+3]*b3;
+            }
+            for (int k = K & ~3; k < K; k++) {
+                const int64_t b = bk[(size_t)k * N];
+                s0 += a0[k]*b; s1 += a1[k]*b; s2 += a2[k]*b; s3 += a3[k]*b;
+            }
+            c0[j] = s0; c1[j] = s1; c2[j] = s2; c3[j] = s3;
+        }
+    }
+    for (; i < M; i++) {                       /* tail rows */
+        const int64_t *a0 = &mem[A + (int64_t)i * K];
+        int64_t       *c0 = &mem[C + (int64_t)i * N];
+        for (int j = 0; j < N; j++) {
+            int64_t s0 = c0[j];
+            const int64_t *bk = &mem[B] + j;
+            for (int k = 0; k < K; k++)
+                s0 += a0[k] * bk[(size_t)k * N];
+            c0[j] = s0;
+        }
+    }
+}
+#if defined(WUBU_TGEMM_KEEP_NAIVE)
+static void wubu_tgemm_naive(int64_t *mem, int64_t A, int64_t B,
+                             int64_t C, int M, int N, int K)
 {
     for (int i = 0; i < M; i++)
         for (int j = 0; j < N; j++) {
@@ -144,6 +194,7 @@ static void wubu_tgemm_scalar(int64_t *mem, int64_t A, int64_t B,
             mem[C + (int64_t)i * N + j] = acc;
         }
 }
+#endif
 static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size) {
 #if !defined(__x86_64__)
     (void)p; (void)out; (void)out_size;
