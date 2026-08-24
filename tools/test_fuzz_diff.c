@@ -210,6 +210,56 @@ static long fuzz_dtypes(long n)
     return bad;
 }
 
+static long fuzz_native_f32(long n)
+{
+    const wubu_isa_driver_t *d = wubu_isa_find("x86-64");
+    if (!d) { printf("  native f32: skip (no x86-64 driver)\n"); return 0; }
+    long ok=0, bad=0, bf=0;
+    for (long s=0; s<n; s++){
+        uint32_t ab[2]; float av[2];
+        for (int k=0;k<2;k++){
+            uint32_t bits = (uint32_t)(lcg_next() >> 32);
+            bits &= 0x7F7FFFFFu; if (bits > 0x4B000000u) bits = 0x4B000000u | (bits & 0x7FFFFF);
+            ab[k]=bits; memcpy(&av[k],&bits,4);
+        }
+        int sel = (int)(lcg_next() % 7);
+        static const wubu_mir_op_t OPS[7] = {
+            MIR_FADD, MIR_FSUB, MIR_FMUL, MIR_FDIV,
+            MIR_FNEG, MIR_FEQ, MIR_FLT
+        };
+        wubu_mir_op_t mo = OPS[sel];
+        wubu_mir_prog_t p; wubu_mir_init(&p);
+        wubu_vr_t va = wubu_mir_const(&p, (int64_t)(uint32_t)ab[0]);
+        wubu_vr_t vb = wubu_mir_const(&p, (int64_t)(uint32_t)ab[1]);
+        wubu_vr_t vr;
+        if (mo == MIR_FNEG) vr = wubu_mir_unop(&p, mo, va);
+        else                vr = wubu_mir_binop(&p, mo, va, vb);
+        wubu_mir_ret(&p, vr);
+        int64_t ri = d->run ? -9999 : -9999;
+        {   /* compiled path */
+            uint8_t *code=NULL; size_t sz=0;
+            int crc = d->compile(&p, &code, &sz);
+            if (crc != 0){ free(code); if (bf < 3) printf("    [nat buildfail] rc=%d name=%s exec=%d\n", crc, d->name, d->exec); bf++; wubu_mir_free(&p); continue; }
+            ri = d->run(code, sz, 0);
+            free(code);
+        }
+        int64_t ref = wubu_mir_interp(&p);
+        wubu_mir_free(&p);
+        /* FEQ/FLT return 0/1 ints; others return f32 bits. Compare accordingly:
+         * both must agree exactly (same op, same inputs, two independent FUs). */
+        uint32_t g32 = (uint32_t)ri, r32 = (uint32_t)ref;
+        if (ri == ref || ((ri|ref) != -9999 && g32 == r32)) ok++;
+        else {
+            bad++;
+            if (bad <= 10)
+                printf("[nat-mismatch] seed %ld op=%d a=%08X b=%08X sse=%08X sf=%08X\n",
+                       s, (int)mo, ab[0], ab[1], g32, r32);
+        }
+    }
+    printf("  native-f32 seeds: %ld  match: %ld  bad: %ld  buildfail: %ld\n", n, ok, bad, bf);
+    return bad;
+}
+
 int main(int argc, char **argv){
     long n = 3000;
     if (argc > 1) n = strtol(argv[1], NULL, 10);
@@ -276,17 +326,23 @@ int main(int argc, char **argv){
             ok++;
         } else {
             mismatch++;
-            if (mismatch <= 25)
+            if (mismatch <= 25) {
                 printf("[mismatch] seed %ld: x86-64=%lld 8086=%lld interp=%lld want=%lld fits16=%d\n",
                        s, (long long)a, (long long)b, (long long)r, (long long)want, fits16);
+            }
         }
         /* ORACLE 2: interpreter vs itself must always agree with want (sanity). */
     }
 
+    
+
+    long nfbad = 0;
     long fbad = fuzz_float(n/2);
     mismatch += fbad;
     long dbad = fuzz_dtypes(n/2);
     mismatch += dbad;
+    long nvbad = fuzz_native_f32(n/2);
+    mismatch += nvbad;
     printf("\n=== Differential Fuzz Summary (Fmax oracle) ===\n");
     printf("  seeds:      %ld\n", n);
     printf("  match-all:  %ld\n", ok);

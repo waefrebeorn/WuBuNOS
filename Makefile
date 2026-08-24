@@ -119,7 +119,7 @@ test_mir_float: wubu_mir.c wubu_mir_interp.c wubu_mir_opt.c wubu_mir_lower.c \
 # Differential fuzz oracle: random-MIR cross-check across backends
 # (x86-64 JIT, 8086, interpreter) — finds correctness bugs via differential
 # comparison, no per-case oracle needed.
-test_fuzz_diff: tools/test_fuzz_diff.c $(MIR) $(ISA) $(INTERP) $(OS_INTERP)
+test_fuzz_diff: tools/test_fuzz_diff.c $(MIR) $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c $(INTERP) $(OS_INTERP) jit_stub.c jit_stubs_arm64.c
 	$(CC) $(CFLAGS) -I. -o $@ $^
 	./$@ 3000
 
