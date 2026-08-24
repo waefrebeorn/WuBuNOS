@@ -323,6 +323,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
         case MIR_FEQ: case MIR_FNE: case MIR_FLT: case MIR_FLE:
         case MIR_FADD: case MIR_FSUB: case MIR_FMUL: case MIR_FDIV:
         case MIR_ITOF: case MIR_FTOI:
+        case MIR_F32_TO_F64: case MIR_F64_TO_F32:
         case MIR_DADD: case MIR_DSUB: case MIR_DMUL: case MIR_DDIV: case MIR_DNEG:
         case MIR_FNEG: {
             /* Load 'a' into rax (accumulator) */
@@ -398,6 +399,27 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
                 e8(&e, 0x0F); e8(&e, 0x57); e8(&e, 0xC1);
                 /* movq rax, xmm0 */
                 e8(&e, 0x66); e8(&e, 0x48); e8(&e, 0x0F); e8(&e, 0x7E); e8(&e, 0xC0);
+                break;
+            }
+
+            case MIR_F32_TO_F64: case MIR_F64_TO_F32: {
+                int sc = VR_ENC(in->a);
+                if (sc >= 0) emit_mov_reg(&e, 0, sc);
+                else emit_load_rbp(&e, 0, VR_SPILL(in->a));
+                if (in->op == MIR_F32_TO_F64) {
+                    /* movd xmm0, eax ; cvtss2sd xmm0, xmm0 : F3 0F 5A C1 */
+                    e8(&e, 0x66); e8(&e, 0x0F); e8(&e, 0x6E); e8(&e, 0xC0);
+                    e8(&e, 0xF3); e8(&e, 0x0F); e8(&e, 0x5A); e8(&e, 0xC0);
+                    /* movq rax, xmm0 : 66 48 0F 7E C0 */
+                    e8(&e, 0x66); e8(&e, 0x48); e8(&e, 0x0F); e8(&e, 0x7E); e8(&e, 0xC0);
+                } else {
+                    /* movq xmm0, rax : 66 48 0F 6E C0 */
+                    e8(&e, 0x66); e8(&e, 0x48); e8(&e, 0x0F); e8(&e, 0x6E); e8(&e, 0xC0);
+                    /* cvtsd2ss xmm0, xmm0 : F2 0F 5A C1 */
+                    e8(&e, 0xF2); e8(&e, 0x0F); e8(&e, 0x5A); e8(&e, 0xC0);
+                    /* movd eax, xmm0 */
+                    e8(&e, 0x66); e8(&e, 0x0F); e8(&e, 0x7E); e8(&e, 0xC0);
+                }
                 break;
             }
 
