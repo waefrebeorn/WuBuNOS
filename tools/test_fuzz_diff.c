@@ -274,7 +274,22 @@ int main(int argc, char **argv){
         wubu_mir_prog_t prog;
         wubu_mir_init(&prog);
         int64_t want=0; int fits16=0;
-        build_random(&prog, 3 + (int)(lcg_next() % 8), &want, &fits16);
+        size_t pre_lcg = g_lcg;   /* snapshot so 'min' mode can replay this seed */
+        int nstmts = 3 + (int)(lcg_next() % 8);
+        build_random(&prog, nstmts, &want, &fits16);
+        if (argc > 2 && s == 0) {
+            /* minimizer mode: dump program + per-driver results for seed 0 */
+            printf("=== minimize seed 0 (nstmts=%d) ===\n", nstmts);
+            wubu_mir_dump(&prog);
+            int64_t ra = d_a ? run_prog(&prog, d_a) : -9999;
+            int64_t rb = d_b ? run_prog(&prog, d_b) : -9999;
+            int64_t rr = wubu_mir_interp(&prog);
+            printf("x86-64=%lld 8086=%lld interp=%lld want=%lld\n",
+                   (long long)ra,(long long)rb,(long long)rr,(long long)want);
+            wubu_mir_free(&prog);
+            return 0;
+        }
+        g_lcg = pre_lcg;   /* restore: the dump path consumed LCG state */
 
         int pipefd[2];
         if (pipe(pipefd)!=0){ wubu_mir_free(&prog); continue; }
@@ -329,6 +344,7 @@ int main(int argc, char **argv){
             if (mismatch <= 25) {
                 printf("[mismatch] seed %ld: x86-64=%lld 8086=%lld interp=%lld want=%lld fits16=%d\n",
                        s, (long long)a, (long long)b, (long long)r, (long long)want, fits16);
+                wubu_mir_dump(&prog);   /* minimize: inspect the failing program */
             }
         }
         /* ORACLE 2: interpreter vs itself must always agree with want (sanity). */
