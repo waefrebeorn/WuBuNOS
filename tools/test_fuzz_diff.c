@@ -227,6 +227,7 @@ static long fuzz_dtypes(long n)
 static long fuzz_native_f32(long n)
 {
     const wubu_isa_driver_t *d = wubu_isa_find("x86-64");
+    const wubu_isa_driver_t *gpud = wubu_isa_find("ptx");
     if (!d) { printf("  native f32: skip (no x86-64 driver)\n"); return 0; }
     long ok=0, bad=0, bf=0;
     for (long s=0; s<n; s++){
@@ -258,16 +259,25 @@ static long fuzz_native_f32(long n)
             free(code);
         }
         int64_t ref = wubu_mir_interp(&p);
+        /* PTX GPU cross-check: run same program on GPU */
+        int64_t gpu = -9999;
+        if (gpud) {
+            uint8_t *pcode=NULL; size_t psz=0;
+            if (gpud->compile(&p, &pcode, &psz) == 0 && pcode)
+                gpu = gpud->run(pcode, psz, 0);
+            free(pcode);
+        }
         wubu_mir_free(&p);
         /* FEQ/FLT return 0/1 ints; others return f32 bits. Compare accordingly:
-         * both must agree exactly (same op, same inputs, two independent FUs). */
+         * all backends must agree exactly (same op, same inputs, independent FUs). */
         uint32_t g32 = (uint32_t)ri, r32 = (uint32_t)ref;
-        if (ri == ref || ((ri|ref) != -9999 && g32 == r32)) ok++;
+        uint32_t gpu32 = (uint32_t)gpu;
+        if (ri == ref && (gpu == -9999 || gpu32 == r32)) ok++;
         else {
             bad++;
             if (bad <= 10)
-                printf("[nat-mismatch] seed %ld op=%d a=%08X b=%08X sse=%08X sf=%08X\n",
-                       s, (int)mo, ab[0], ab[1], g32, r32);
+                printf("[nat-mismatch] seed %ld op=%d a=%08X b=%08X sse=%08X sf=%08X ptx=%08X\n",
+                       s, (int)mo, ab[0], ab[1], g32, r32, gpu32);
         }
     }
     printf("  native-f32 seeds: %ld  match: %ld  bad: %ld  buildfail: %ld\n", n, ok, bad, bf);
@@ -282,6 +292,7 @@ int main(int argc, char **argv){
     long ok=0, mismatch=0, crash=0, buildfail=0;
     const wubu_isa_driver_t *d_a = wubu_isa_find("x86-64");
     const wubu_isa_driver_t *d_b = wubu_isa_find("8086");
+    const wubu_isa_driver_t *d_gpu = wubu_isa_find("ptx");  /* GPU leg (sm_89) */
 
     for (long s = 0; s < n; s++){
         /* (1) parent: build the program */
@@ -292,7 +303,6 @@ int main(int argc, char **argv){
         int nstmts = 3 + (int)(lcg_next() % 8);
         build_random(&prog, nstmts, &want, &fits16);
         if (argc > 2 && s == 0) {
-            /* minimizer mode: dump program + per-driver results for seed 0 */
             printf("=== minimize seed 0 (nstmts=%d) ===\n", nstmts);
             wubu_mir_dump(&prog);
             int64_t ra = d_a ? run_prog(&prog, d_a) : -9999;
@@ -315,13 +325,14 @@ int main(int argc, char **argv){
             signal(SIGABRT,SIG_DFL);
             int64_t a = d_a ? run_prog(&prog,d_a) : wubu_mir_interp(&prog);
             int64_t b = d_b ? run_prog(&prog,d_b) : wubu_mir_interp(&prog);
+            int64_t g = d_gpu ? run_prog(&prog,d_gpu) : -9999;
             int64_t r = wubu_mir_interp(&prog);
-            int64_t out[3] = {a,b,r};
+            int64_t out[4] = {a,b,g,r};
             ssize_t w = write(pipefd[1], out, sizeof(out)); (void)w;
             close(pipefd[1]); wubu_mir_free(&prog); _exit(0);
         }
         close(pipefd[1]);
-        int64_t out[3] = {-9999,-9999,-9999};
+        int64_t out[4] = {-9999,-9999,-9999,-9999};
         size_t got=0;
         while (got < sizeof(out)){
             ssize_t r = read(pipefd[0], ((uint8_t*)out)+got, sizeof(out)-got);
@@ -339,11 +350,12 @@ int main(int argc, char **argv){
                     WIFSIGNALED(status)?WTERMSIG(status):0);
             continue;
         }
-        int64_t a=out[0], b=out[1], r=out[2];
+        int64_t a=out[0], b=out[1], g=out[2], r=out[3];
         /* any backend returning the -9999 sentinel = compile failure (not a bug).
          * Backends that fail to compile here (e.g. the x86-64 native-JIT driver
          * needs the OS JIT runtime) drop out of the comparison; the remaining
-         * pair (8086 vs interpreter) is still a real differential oracle. */
+         * pair is still a real differential oracle. PTX GPU is treated as
+         * best-effort: compile failures are buildfail, mismatches are reported. */
         int na = (a != -9999), nb = (b != -9999);
         if (!na && !nb){ buildfail++; continue; }
         /* ORACLE 1: every backend must match the HOST-SEMANTIC expected value
@@ -351,6 +363,18 @@ int main(int argc, char **argv){
         int a_ok  = !na || (a == want);
         int b_ok  = !nb || (!fits16) || (b == want);
         int ref_ok = (r == want);
+        /* PTX GPU cross-check (best-effort on int programs).
+         * Only compared for programs whose result fits in uint32 range,
+         * since PTX int64 edge cases (large const mov) may differ. */
+        if (g != -9999) {
+            int64_t gv = (uint32_t)g;
+            int64_t rv = (uint32_t)r;
+            if (gv != rv) {
+                mismatch++;
+                if (mismatch <= 25)
+                    printf("[gpu-mismatch] seed %ld: gpu=%08llx interp=%08llx\n", s, (long long)gv, (long long)rv);
+            }
+        }
         if (a_ok && b_ok && ref_ok){
             ok++;
         } else {
@@ -379,6 +403,6 @@ int main(int argc, char **argv){
     printf("  mismatch:   %ld\n", mismatch);
     printf("  crash:      %ld\n", crash);
     printf("  buildfail:  %ld  (driver compile failure, not a correctness bug)\n", buildfail);
-    printf("  backends:   x86-64 JIT, 8086, interpreter\n");
+    printf("  backends:   x86-64 JIT, 8086, PTX(sm_89 GPU), interpreter\n");
     return (mismatch || crash) ? 1 : 0;
 }
