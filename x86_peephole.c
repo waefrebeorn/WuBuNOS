@@ -111,14 +111,16 @@ static size_t shrink_movabs(uint8_t *code, size_t n) {
             for (int j = 0; j < 8; j++) {
                 imm |= ((int64_t)(uint8_t)code[i+2+j]) << (j*8);
             }
-            if (imm >= -2147483648LL && imm <= 2147483647LL) {
+            if ((uint64_t)imm <= 2147483647ULL) {
                 uint8_t rd = code[i+1] & 7;
-                if (!need_rex_b) {
-                    out[oi++] = (uint8_t)(0xB8 | rd);
-                } else {
-                    out[oi++] = 0x41;
-                    out[oi++] = (uint8_t)(0xB8 | rd);
+                /* Shrink to 32-bit mov (rXXd, imm32). This ZERO-extends to rXX,
+                 * which is only safe when imm is non-negative — that's already gated
+                 * by the (uint64_t)imm <= INT32_MAX condition above. We emit NO REX.W
+                 * (mov r64,imm32 doesn't exist in x86-64); REX.B is kept for r8-r15. */
+                if (need_rex_b) {
+                    out[oi++] = 0x41;  /* REX.B (no W): mov r11d,imm32 etc. */
                 }
+                out[oi++] = (uint8_t)(0xB8 | rd);
                 out[oi++] = (uint8_t)(imm & 0xFF);
                 out[oi++] = (uint8_t)((imm >> 8) & 0xFF);
                 out[oi++] = (uint8_t)((imm >> 16) & 0xFF);
