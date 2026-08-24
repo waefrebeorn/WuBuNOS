@@ -447,8 +447,7 @@ static void test_call(void)
     prog.funcs[0].end = fend;
     prog.n_funcs = 1;
 
-    /* riscv/mips CALL pending next wave */
-    const char *names[] = {"6502", "z80", "8051", "avr", "pic", "m68k", "8086"};
+    const char *names[] = {"6502", "z80", "8051", "avr", "pic", "m68k", "8086", "riscv", "mips"};
     for (int i = 0; i < 8; i++) {
         const wubu_isa_driver_t *d = wubu_isa_find(names[i]);
         if (!d) continue;

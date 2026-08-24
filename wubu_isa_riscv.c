@@ -197,22 +197,19 @@ static void addi(riscv_emitter_t *e, int rd, int rs1, int32_t imm)
 /* LOAD rd, offset(rs1) — for 64-bit LD */
 static void load_d(riscv_emitter_t *e, int rd, int rs1, int32_t offset)
 {
-    uint32_t imm12 = (uint32_t)(offset & 0xFFF);
-    if (offset < 0) imm12 |= 0x800;
-    uint32_t inst = (imm12 << 20) | (rs1 << 15) | (rd << 7) | (0x3 << 0);  /* LD = 0x03, funct3=3 */
-    /* funct3=3 for LD, opcode=0x03 */
-    inst = (imm12 << 20) | (rs1 << 15) | (3 << 12) | (rd << 7) | OPC_LOAD;
+    uint32_t imm12 = ((uint32_t)offset & 0xFFF);   /* two's-complement low 12 */
+    uint32_t inst = (imm12 << 20) | (rs1 << 15) | (3u << 12) | ((uint32_t)rd << 7) | OPC_LOAD;
     emit32(e, inst);
 }
 
 /* STORE rs2, offset(rs1) — for 64-bit SD */
 static void store_d(riscv_emitter_t *e, int rs2, int rs1, int32_t offset)
 {
-    uint32_t imm12 = (uint32_t)(offset & 0xFFF);
-    if (offset < 0) imm12 |= 0x800;
-    uint32_t imm5 = (imm12 >> 5) & 0x7F;
-    uint32_t imm_low = imm12 & 0x1F;
-    uint32_t inst = (imm5 << 25) | (rs2 << 20) | (rs1 << 15) | (3 << 12) | (imm_low << 7) | OPC_STORE;
+    uint32_t imm12 = ((uint32_t)offset & 0xFFF);
+    uint32_t imm_hi = (imm12 >> 5) & 0x7F;
+    uint32_t imm_lo = imm12 & 0x1F;
+    uint32_t inst = (imm_hi << 25) | ((uint32_t)rs2 << 20) | ((uint32_t)rs1 << 15)
+                  | (3u << 12) | (imm_lo << 7) | OPC_STORE;
     emit32(e, inst);
 }
 
@@ -711,13 +708,8 @@ static int riscv_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
 
         case MIR_RET:
             if (riscv_in_func_body(p, i)) {
-                /* FUNC_RET: result slot via sa */
+                /* FUNC_RET: interp pops the call stack directly; no epilogue */
                 emit_fhostcall(&e, 28, 0, (int32_t)slot_off(e.frame, in->a), 0);
-                /* epilogue: restore fp, deallocate frame, ret */
-                mv(&e, REG_SP, REG_FP);
-                load_d(&e, REG_FP, REG_SP, 0);
-                addi(&e, REG_SP, REG_SP, (int32_t)e.frame);
-                ret_instr(&e);
                 break;
             }
             load_d(&e, REG_A0, REG_FP, (int32_t)slot_off(e.frame, in->a));
@@ -774,7 +766,7 @@ static int riscv_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
     /* entry trampoline: JAL x0 (J-type) to entry_off.
      * J-type imm layout: imm[20|10:1|11|19:12] in bits [31|30:21|20|19:12] */
     if (p->n_funcs > 0 && entry_off != (size_t)-1) {
-        uint32_t off = (uint32_t)entry_off;
+        uint32_t off = (uint32_t)(entry_off - entry_jmp_pos);   /* JAL is PC-relative */
         uint32_t inst = 0x0000006Fu
             | ((off & 0x100000) << (31-20))
             | (((off >> 1) & 0x3FF) << 21)
