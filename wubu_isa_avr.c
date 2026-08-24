@@ -50,6 +50,7 @@ static void note_label(avr_emitter_t *e, uint32_t label, size_t off) {
 #define AVR_LDI  0x01
 #define AVR_ADD  0x02
 #define AVR_FOP  0x20   /* soft-float hostcall */
+#define AVR_MEMOP 0x23   /* MIR memory LOAD/STORE */
 #define AVR_FRET 0x21   /* soft-float return */
 #define AVR_SUB  0x03
 #define AVR_AND  0x04
@@ -221,6 +222,18 @@ static int avr_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
         case MIR_FRET:
             ep8(&e, AVR_FRET);
             ep8(&e, (uint8_t)in->a);
+            break;
+
+        case MIR_LOAD:
+            /* dst = mem[addr]; cell c -> data[AVR_XMEM_BASE + c] */
+            ep8(&e, AVR_MEMOP); ep8(&e, 25);
+            ep8(&e, (uint8_t)in->a); ep8(&e, (uint8_t)in->dst);
+            break;
+
+        case MIR_STORE:
+            /* mem[addr] = val */
+            ep8(&e, AVR_MEMOP); ep8(&e, 26);
+            ep8(&e, (uint8_t)in->a); ep8(&e, (uint8_t)in->b);
             break;
 
         case MIR_RET:

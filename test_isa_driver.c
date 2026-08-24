@@ -388,6 +388,34 @@ static void test_6502_float(void)
     wubu_mir_free(&prog);
 }
 
+
+/* ---- Test: memory model (ALLOC/STORE/LOAD) ----
+ * store 77 at cell, load it back, return it. ALLOC lowers to a CONST vr
+ * (the base address); LOAD/STORE exercise each backend's flat-memory path. */
+static void test_memory(void)
+{
+    printf("-- Test: memory (mem[0]=77; return mem[0] = 77) --\n");
+    wubu_mir_prog_t prog;
+    wubu_mir_init(&prog);
+    wubu_vr_t base = wubu_mir_alloc(&prog, 4);   /* reserve 4 cells */
+    wubu_vr_t val = wubu_mir_const(&prog, 77);
+    wubu_mir_store(&prog, base, val);            /* mem[base] = 77 */
+    wubu_vr_t got = wubu_mir_load(&prog, base);  /* got = mem[base] */
+    wubu_mir_ret(&prog, got);
+
+    const char *names[] = {"x86-64", "8086", "m68k", "6502", "riscv", "z80", "mips", "8051", "avr", "pic", "amdgpu", "ptx", "arm64"};
+    for (int i = 0; i < 13; i++) {
+        const wubu_isa_driver_t *d = wubu_isa_find(names[i]);
+        if (!d) continue;
+        int64_t result = 0;
+        if (run_with_driver(d, &prog, &result) == 0) {
+            CHECK(result == 77, names[i]);
+            if (result == 77) printf("  %s: %lld OK\n", names[i], (long long)result);
+        }
+    }
+    wubu_mir_free(&prog);
+}
+
 int main(void)
 {
     printf("=== ISA DRIVER SPACE TEST ===\n\n");
@@ -397,6 +425,7 @@ int main(void)
     test_constant();
 
     test_6502_float();
+    test_memory();
     printf("\n");
     test_arithmetic();
     printf("\n");

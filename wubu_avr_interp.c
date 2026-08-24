@@ -12,7 +12,8 @@
 #include "wubu_softfloat.h"
 
 #define AVR_VR_BASE 0x30
-#define AVR_RAM_SIZE 256
+#define AVR_RAM_SIZE 1024
+#define AVR_XMEM_BASE 256
 
 /* Virtual AVR opcodes (must match wubu_isa_avr.c) */
 #define AVR_LDI  0x01
@@ -40,7 +41,8 @@
 #define AVR_ULT  0x17
 #define AVR_UGE  0x18
 #define AVR_ULE  0x19
-#define AVR_FOP  0x20   /* soft-float hostcall */
+#define AVR_FOP  0x20
+#define AVR_MEMOP 0x23   /* MIR memory LOAD/STORE */   /* soft-float hostcall */
 #define AVR_FRET 0x21   /* soft-float return */
 
 int64_t wubu_avr_interp(const uint8_t *code, size_t size, int64_t arg)
@@ -211,6 +213,18 @@ int64_t wubu_avr_interp(const uint8_t *code, size_t size, int64_t arg)
         case AVR_FRET:
             a = code[pc++];
             return (int64_t)(int32_t)(vr[AVR_VR_BASE + a] & 0xFFFFFFFF);
+        case AVR_MEMOP: { /* fn, cell_slot, s2 (dst|val) */
+            uint8_t mfn = code[pc++];
+            uint8_t cell_slot = code[pc++];
+            uint8_t s2 = code[pc++];
+            if (mfn == 25)      /* MEM_LOAD */
+                vr[AVR_VR_BASE + s2] =
+                    vr[AVR_XMEM_BASE + (vr[AVR_VR_BASE + cell_slot] & 0xFF)] & 0xFF;
+            else if (mfn == 26) /* MEM_STORE */
+                vr[AVR_XMEM_BASE + (vr[AVR_VR_BASE + cell_slot] & 0xFF)] =
+                    vr[AVR_VR_BASE + s2] & 0xFF;
+            break;
+        }
         default:
             return 0;
         }

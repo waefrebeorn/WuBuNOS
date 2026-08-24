@@ -310,6 +310,25 @@ static int i8086_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
             patch_push(&patches, &np, &cap, pos, 0x74, in->label);
             break;
         }
+        case MIR_LOAD:
+            /* dst = mem[addr] via hostcall fn=25 (BP-relative slot displacements) */
+            e8(&e, 0xF1); e8(&e, 25);
+            e16(&e, (uint16_t)(uint16_t)slot_disp(in->dst));
+            e16(&e, (uint16_t)(int16_t)slot_disp(in->a));
+            e16(&e, 0);
+            /* hostcall leaves the byte in AL; park it in dst's slot */
+            emit_store_ax_slot(&e, slot_disp(in->dst));
+            break;
+
+        case MIR_STORE:
+            /* mem[addr] = val via hostcall fn=26 */
+            emit_load_ax_slot(&e, slot_disp(in->b));   /* ax = value */
+            e8(&e, 0xF1); e8(&e, 26);
+            e16(&e, 0);
+            e16(&e, (uint16_t)(int16_t)slot_disp(in->b));
+            e16(&e, (uint16_t)(int16_t)slot_disp(in->a));
+            break;
+
         case MIR_RET:
             emit_load_ax_slot(&e, slot_disp(in->a));   /* ax = result */
             e8(&e, 0x89); e8(&e, 0xEC);        /* mov sp,bp */

@@ -405,6 +405,22 @@ static int mips_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_siz
             e32(&e, 0x03E00008);  /* jr $ra */
             break;
 
+        case MIR_LOAD:
+            /* dst = mem[addr] via hostcall fn=25 */
+            e32(&e, 0xFC000000u); e32(&e, 25);
+            e32(&e, (uint32_t)slot_off(in->dst));
+            e32(&e, (uint32_t)slot_off(in->a));
+            e32(&e, 0);
+            break;
+
+        case MIR_STORE:
+            /* mem[addr] = val via hostcall fn=26 */
+            e32(&e, 0xFC000000u); e32(&e, 26);
+            e32(&e, 0);
+            e32(&e, (uint32_t)slot_off(in->b));
+            e32(&e, (uint32_t)slot_off(in->a));
+            break;
+
         case MIR_RET:
             e32(&e, MIPS_LW(29, MIPS_REG_T0, (uint16_t)slot_off(in->a)));
             /* move $v0, $t0 */

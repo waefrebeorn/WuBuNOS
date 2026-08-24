@@ -191,6 +191,18 @@ static void patch_push(m68k_patch_t **patches, size_t *np, size_t *cap,
     (*np)++;
 }
 
+
+/* ---- hostcall escape (opcode 0x0B00): fn + dst/sa/sb A6 displacements ---- */
+static void emit_m68k_hostcall(m68k_emitter_t *e, uint16_t fn,
+                               int16_t dst, int16_t sa, int16_t sb)
+{
+    e16(e, 0x0B00);
+    e16(e, fn);
+    e16(e, (uint16_t)(uint16_t)dst);
+    e16(e, (uint16_t)(uint16_t)sa);
+    e16(e, (uint16_t)(uint16_t)sb);
+}
+
 static int m68k_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size)
 {
     size_t max_vr = 0;
@@ -347,6 +359,16 @@ static int m68k_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_siz
             e16(&e, 0x6700);   /* BEQ.s (patched in the final pass) */
             break;
         }
+        case MIR_LOAD:
+            /* dst = mem[addr] via hostcall fn=25 */
+            emit_m68k_hostcall(&e, 25, slot_disp(in->dst), slot_disp(in->a), 0);
+            break;
+
+        case MIR_STORE:
+            /* mem[addr] = val via hostcall fn=26 */
+            emit_m68k_hostcall(&e, 26, 0, slot_disp(in->b), slot_disp(in->a));
+            break;
+
         case MIR_RET:
             move_a6_d(&e, slot_disp(in->a), 0);  /* D0 = result */
             e16(&e, 0x4E5E);   /* UNLK A6 */

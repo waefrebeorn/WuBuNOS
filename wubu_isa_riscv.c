@@ -648,6 +648,22 @@ static int riscv_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
             ret_instr(&e);
             break;
 
+        case MIR_LOAD:
+            /* dst = mem[addr]; cell index from addr vr's slot (4-byte LE) */
+            emit_fhostcall(&e, 25,
+                           (int32_t)slot_off(0, in->dst),
+                           (int32_t)slot_off(0, in->a),
+                           0);
+            break;
+
+        case MIR_STORE:
+            /* mem[addr] = val; value from val slot, cell index from addr slot */
+            emit_fhostcall(&e, 26,
+                           0,
+                           (int32_t)slot_off(0, in->b),
+                           (int32_t)slot_off(0, in->a));
+            break;
+
         case MIR_RET:
             load_d(&e, REG_A0, REG_FP, (int32_t)slot_off(e.frame, in->a));
             /* epilogue: restore fp, deallocate frame */

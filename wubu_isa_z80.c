@@ -517,6 +517,20 @@ static int z80_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             e8(&e, 0x76); /* HALT */
             break;
 
+        case MIR_LOAD:
+            /* dst = mem[addr]. fn=25: cell index read from the addr vr's
+             * 2-byte slot; result low byte written back to dst's slot. */
+            emit_z80_fhostcall(&e, 25, z80_slot_addr(in->dst),
+                               z80_slot_addr(in->a), 0x0000 /* unused */);
+            break;
+
+        case MIR_STORE:
+            /* mem[addr] = val. fn=26: value from val vr's slot,
+             * cell index from addr vr's slot. */
+            emit_z80_fhostcall(&e, 26, 0,
+                               z80_slot_addr(in->b), z80_slot_addr(in->a));
+            break;
+
         case MIR_MOV:
             e8(&e, Z80_LD_A_NN);
             e16(&e, va);

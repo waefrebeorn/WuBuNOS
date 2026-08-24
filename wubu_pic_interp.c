@@ -11,7 +11,8 @@
 #include <string.h>
 #include "wubu_softfloat.h"
 
-#define PIC_RAM_SIZE 256
+#define PIC_RAM_SIZE 1024
+#define PIC_XMEM_BASE 256   /* MIR flat memory: cell c -> ram[BASE+c] */
 #define PIC_VR_BASE 0x20
 
 /* Virtual PIC opcodes — MUST match wubu_isa_pic.c exactly */
@@ -47,6 +48,7 @@
 #define PIC_LEQ   0x1E /* LEQ fr — W = (W <  RAM[fr]) ? 1 : 0 (unsigned) */
 #define PIC_ULEQ  0x1F /* ULEQ fr — W = (W <= RAM[fr]) ? 1 : 0 (unsigned) */
 #define PIC_FOP   0x20
+#define PIC_MEMOP 0x23
 #define PIC_FRET  0x21 /* XR  fr      — W = W ^ RAM[fr]  */
 
 const char *wubu_pic_interp_name = "pic";
@@ -218,6 +220,18 @@ int64_t wubu_pic_interp(const uint8_t *code, size_t size, int64_t arg)
             fret = (uint32_t)(ram[fr] & 0xFFFFFFFF);
             fret_valid = 1;
             break;
+        case PIC_MEMOP: { /* fn, cell_slot, s2 (dst|val) */
+            uint8_t mfn = code[pc++];
+            uint8_t cell_slot = code[pc++];
+            uint8_t s2 = code[pc++];
+            if (mfn == 25)      /* MEM_LOAD */
+                ram[PIC_VR_BASE + s2] =
+                    ram[PIC_XMEM_BASE + (ram[PIC_VR_BASE + cell_slot] & 0xFF)] & 0xFF;
+            else if (mfn == 26) /* MEM_STORE */
+                ram[PIC_XMEM_BASE + (ram[PIC_VR_BASE + cell_slot] & 0xFF)] =
+                    ram[PIC_VR_BASE + s2] & 0xFF;
+            break;
+        }
         case PIC_OR: /* W |= ram[fr] (same as ORW) */
             fr = code[pc++];
             W |= (uint8_t)ram[PIC_VR_BASE + fr];

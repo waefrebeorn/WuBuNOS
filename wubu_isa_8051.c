@@ -40,6 +40,7 @@
 #define EXT_FOP      0x20
 #define EXT_FRET     0x21
 #define EXT_FCONST   0x22
+#define EXT_MEMOP    0x23
 
 typedef struct {
     uint8_t *code;
@@ -240,6 +241,22 @@ static int i8051_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
         case MIR_FRET:
             e8(&e, I8051_EXT); e8(&e, EXT_FRET);
             e8(&e, (uint8_t)(I8051_VR_BASE + in->a));
+            break;
+
+        case MIR_LOAD:
+            /* dst = mem[addr]; cell index byte from addr vr's internal-RAM slot */
+            e8(&e, I8051_EXT); e8(&e, EXT_MEMOP);
+            e8(&e, 25);
+            e8(&e, (uint8_t)(I8051_VR_BASE + in->a));   /* cell slot */
+            e8(&e, (uint8_t)(I8051_VR_BASE + in->dst)); /* dst slot */
+            break;
+
+        case MIR_STORE:
+            /* mem[addr] = val */
+            e8(&e, I8051_EXT); e8(&e, EXT_MEMOP);
+            e8(&e, 26);
+            e8(&e, (uint8_t)(I8051_VR_BASE + in->a));   /* cell slot */
+            e8(&e, (uint8_t)(I8051_VR_BASE + in->b));   /* val slot */
             break;
 
         case MIR_RET:

@@ -232,6 +232,19 @@ static int cpu6502_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_
         case MIR_FLT:  emit_fhostcall(&e, 8, zp_fslot(in->dst), zp_slot(in->a), zp_slot(in->b)); break;
         case MIR_FLE:  emit_fhostcall(&e, 9, zp_fslot(in->dst), zp_slot(in->a), zp_slot(in->b)); break;
 
+        case MIR_LOAD:
+            /* dst = mem[addr]. Hostcall fn=25 (MEM_LOAD): reads the cell
+             * index byte from the addr vr's ZP slot, returns the low byte
+             * of mem64[cell] via the standard 4-byte write-back. */
+            emit_fhostcall(&e, 25, zp_slot(in->dst), zp_slot(in->a), ZP_SCRATCH);
+            break;
+
+        case MIR_STORE:
+            /* mem[addr] = val. Hostcall fn=26 (MEM_STORE): value byte from
+             * val vr's slot, cell index byte from addr vr's slot. */
+            emit_fhostcall(&e, 26, 0 /* unused */, zp_slot(in->b), zp_slot(in->a));
+            break;
+
         case MIR_AND:
             e8(&e, LDA_ZP); e8(&e, zp_slot(in->a));
             e8(&e, AND_ZP); e8(&e, zp_slot(in->b));

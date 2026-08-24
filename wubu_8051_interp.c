@@ -13,7 +13,8 @@
 #include <string.h>
 
 #define I8051_VR_BASE 0x30
-#define I8051_RAM_SIZE 256
+#define I8051_RAM_SIZE 1024
+#define I8051_XMEM_BASE 256   /* MIR flat memory: cell c lives at ram[BASE+c] */
 
 #define I8051_MOV_A_IMM 0x74
 #define I8051_MOV_A_DIR 0xE5
@@ -49,6 +50,7 @@
 #define EXT_FOP  0x20   /* soft-float: fn, slot_a, slot_b, slot_dst */
 #define EXT_FRET 0x21
 #define EXT_FCONST 0x22   /* soft-float return: slot */
+#define EXT_MEMOP 0x23   /* MIR memory LOAD/STORE */
 
 int64_t wubu_8051_interp_exec(const uint8_t *code, size_t size, int64_t arg)
 {
@@ -234,6 +236,18 @@ int64_t wubu_8051_interp_exec(const uint8_t *code, size_t size, int64_t arg)
                               | ((int64_t)code[pc+2]<<16) | ((int64_t)code[pc+3]<<24);
                     pc += 5;
                     ram[sd] = v;
+                    break;
+                }
+                case EXT_MEMOP: {
+                    /* fn, cell_slot, second_slot (dst for LOAD, val for STORE).
+                     * MIR flat memory: cell c -> ram[I8051_XMEM_BASE + c]. */
+                    uint8_t fn = code[pc++];
+                    uint8_t cell_slot = code[pc++];
+                    uint8_t s2 = code[pc++];
+                    if (fn == 25)      /* MEM_LOAD */
+                        ram[s2] = ram[I8051_XMEM_BASE + (ram[cell_slot] & 0xFF)] & 0xFF;
+                    else if (fn == 26) /* MEM_STORE */
+                        ram[I8051_XMEM_BASE + (ram[cell_slot] & 0xFF)] = ram[s2] & 0xFF;
                     break;
                 }
                 case EXT_FRET: {

@@ -71,6 +71,7 @@ static void pic_note_label(pic_emitter_t *e, uint32_t label, size_t off) {
 #define PIC_ULEQ 0x1F /* EQ  fr      — W = (W == RAM[fr]) ? 1 : 0 */
 #define PIC_RET  0x0E /* RET         — return W */
 #define PIC_FOP  0x20 /* soft-float hostcall */
+#define PIC_MEMOP 0x23 /* MIR memory LOAD/STORE */
 #define PIC_FRET 0x21 /* soft-float return */
 
 static int pic_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size) {
@@ -272,6 +273,17 @@ static int pic_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
         case MIR_FRET:
             pic_ep8(&e, PIC_FRET);
             pic_ep8(&e, (uint8_t)in->a);
+            break;
+
+        case MIR_LOAD:
+            /* dst = mem[addr]; cell c -> ram[BASE + c] */
+            pic_ep8(&e, PIC_MEMOP); pic_ep8(&e, 25);
+            pic_ep8(&e, (uint8_t)in->a); pic_ep8(&e, (uint8_t)in->dst);
+            break;
+
+        case MIR_STORE:
+            pic_ep8(&e, PIC_MEMOP); pic_ep8(&e, 26);
+            pic_ep8(&e, (uint8_t)in->a); pic_ep8(&e, (uint8_t)in->b);
             break;
 
         case MIR_RET:

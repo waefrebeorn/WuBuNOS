@@ -399,12 +399,30 @@ int64_t wubu_z80_run(const uint8_t *code, size_t size, int64_t arg)
             case 4:  r = (uint32_t)wubu_sf_i64_to_f32(fa); break;  /* ITOF */
             case 5:  r = (uint32_t)wubu_sf_f32_to_i64((uint32_t)fa); break;  /* FTOI */
             case 11: r = fa; cpu.fret = fa; cpu.fret_valid = 1; break;
+            /* MEM_LOAD: dst = mem64[cell] low byte. sa/sb are 16-bit slot
+             * addresses; the cell index lives in the 2-byte integer slot at
+             * z80_slot_addr(vr) = vr*2 (little-endian). */
+            case 25: {
+                uint16_t cell = cpu.mem[sa];   /* 1-byte cell index, 8-bit slot semantics */
+                r = cpu.mem[(size_t)cell * 8u];
+                break;
+            }
+            /* MEM_STORE: mem64[cell] low byte = value.
+             * sa = value slot, sb = cell-index slot. */
+            case 26: {
+                uint16_t cell = cpu.mem[sb];   /* 1-byte cell index */
+                cpu.mem[(size_t)cell * 8u] = cpu.mem[sa];
+                r = 0;
+                break;
+            }
             default: break;
             }
-            cpu.mem[dst+0] = (uint8_t)(r & 0xFF);
-            cpu.mem[dst+1] = (uint8_t)((r >> 8) & 0xFF);
-            cpu.mem[dst+2] = (uint8_t)((r >> 16) & 0xFF);
-            cpu.mem[dst+3] = (uint8_t)((r >> 24) & 0xFF);
+            if (dst != 0) {   /* dst==0 means "no destination" (MEM_STORE) */
+                cpu.mem[dst+0] = (uint8_t)(r & 0xFF);
+                cpu.mem[dst+1] = (uint8_t)((r >> 8) & 0xFF);
+                cpu.mem[dst+2] = (uint8_t)((r >> 16) & 0xFF);
+                cpu.mem[dst+3] = (uint8_t)((r >> 24) & 0xFF);
+            }
             break;
         }
 

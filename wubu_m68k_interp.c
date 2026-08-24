@@ -321,13 +321,39 @@ int64_t wubu_m68k_run(const uint8_t *code, size_t size, int64_t arg)
             case 9:  r = (wubu_sf_f32_cmp((uint32_t)fa,(uint32_t)fb)<=0)?0xFFFFFFFFu:0; break;
             case 10: r = fa ^ 0x80000000u; break;
             case 11: r = fa; cpu.fret = fa; cpu.fret_valid = 1; break;
+            case 25: { /* MEM_LOAD: dst = mem64[cell] low byte.
+                        * wsa = slot displacement holding the cell index
+                        * (4-byte big-endian like every m68k slot). */
+                uint32_t ca = base + (int16_t)wsa;
+                uint32_t cell = ((uint32_t)cpu.mem[ca] << 24) |
+                                ((uint32_t)cpu.mem[ca+1] << 16) |
+                                ((uint32_t)cpu.mem[ca+2] << 8) |
+                                (uint32_t)cpu.mem[ca+3];
+                r = (cell < M68K_MEM / 8u) ? cpu.mem[cell * 8u] : 0;
+                break;
+            }
+            case 26: { /* MEM_STORE: mem64[cell] low byte = value.
+                        * wsa = value slot, wsb = cell-index slot. */
+                uint32_t va = base + (int16_t)wsa;
+                uint32_t ca = base + (int16_t)wsb;
+                uint32_t cell = ((uint32_t)cpu.mem[ca] << 24) |
+                                ((uint32_t)cpu.mem[ca+1] << 16) |
+                                ((uint32_t)cpu.mem[ca+2] << 8) |
+                                (uint32_t)cpu.mem[ca+3];
+                if (cell < M68K_MEM / 8u)
+                    cpu.mem[cell * 8u] = cpu.mem[va + 3];   /* LSB lane of BE word */
+                r = 0;
+                break;
+            }
             default: break;
             }
+            if (wdst != 0) {
             uint32_t _a = base + (int16_t)wdst;
             cpu.mem[_a]     = (uint8_t)((uint32_t)r >> 24);
             cpu.mem[_a + 1] = (uint8_t)((uint32_t)r >> 16);
             cpu.mem[_a + 2] = (uint8_t)((uint32_t)r >> 8);
             cpu.mem[_a + 3] = (uint8_t)r;
+            }
             continue;
         }
 
