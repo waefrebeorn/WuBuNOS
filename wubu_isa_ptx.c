@@ -77,6 +77,28 @@ static uint32_t ptx_vr(ptx_emitter_t *e, wubu_vr_t vr)
 
 /* ---- MIR -> PTX translation ---- */
 
+/* Forward declaration: T_GEMM emission (defined after emit_ptx's helper region) */
+static void emit_tgemm(ptx_emitter_t *e, const wubu_mir_instr_t *ins);
+
+/* Shared-memory bridge: PTX mov.b32 cannot truncate .b64->.b32 (argument
+ * width mismatch). f32 bit patterns live in the LOW 32 bits of b64 VRs
+ * (upper 32 are zero per softfloat's uint32_t->uint64_t return). We use a
+ * single shared-memory slot [s] as a type-punning bridge:
+ *   VR(.b64) -> .f32: st.shared.b64 [s], %r<vr>; ld.shared.b32 %w<s>, [s];
+ *                    mov.b32 %f<fd>, %w<s>;
+ *   .f32 -> VR(.b64): st.shared.b32 [s], %f<fs>; ld.shared.b64 %r<vr>, [s];
+ *                      (shared mem is zero-initialized, so hi 32 bits = 0)
+ * The scratch .b32 %w0 and .f32 %f<n_vregs> are pre-declared. */
+static inline void ptx_vr_to_f32(ptx_emitter_t *e, uint32_t fd, uint32_t vr) {
+    ptx_emit(e, "    st.shared.b64 [s], %%r%u;\n", vr);
+    ptx_emit(e, "    ld.shared.b32 %%w0, [s];\n");
+    ptx_emit(e, "    mov.b32 %%f%u, %%w0;\n", fd);
+}
+static inline void ptx_f32_to_vr(ptx_emitter_t *e, uint32_t vr, uint32_t fs) {
+    ptx_emit(e, "    st.shared.b32 [s], %%f%u;\n", fs);
+    ptx_emit(e, "    ld.shared.b64 %%r%u, [s];\n", vr);
+}
+
 static void emit_kernel_body(ptx_emitter_t *e, const wubu_mir_prog_t *p)
 {
     /* We need to track label positions. PTX labels are just identifiers
@@ -151,14 +173,27 @@ static void emit_kernel_body(ptx_emitter_t *e, const wubu_mir_prog_t *p)
 
         case MIR_SHL:
             rd = ptx_vr(e, ins->dst);
-            ptx_emit(e, "    shl.b64 %%r%d, %%r%d, %%r%d;\n",
-                     (int)rd, (int)ptx_vr(e, ins->a), (int)ptx_vr(e, ins->b));
+            /* PTX shl.b64 requires a .u32 count, but MIR VRs are .b64.
+             * Extract low 32 bits of the count via the shared-mem bridge
+             * into scratch %w0, mask to 0..63, then shift. We must NOT
+             * clobber rd before reading ins->a — use %w0 only. */
+            { uint32_t cnt = ptx_vr(e, ins->b) + 1; /* scratch f32 VR slot */
+              ptx_vr_to_f32(e, cnt, ptx_vr(e, ins->b));
+              ptx_emit(e, "    and.b32 %%w0, %%w0, 63;\n");
+              ptx_emit(e, "    mov.b64 %%r%d, %%r%d;\n", (int)rd, (int)ptx_vr(e, ins->a));
+              ptx_emit(e, "    shl.b64 %%r%d, %%r%d, %%w0;\n", (int)rd, (int)rd);
+            }
             break;
 
         case MIR_SHR:
             rd = ptx_vr(e, ins->dst);
-            ptx_emit(e, "    shr.u64 %%r%d, %%r%d, %%r%d;\n",
-                     (int)rd, (int)ptx_vr(e, ins->a), (int)ptx_vr(e, ins->b));
+            /* MIR_SHR is LOGICAL right shift (zero-fill). Same .u32 count issue. */
+            { uint32_t cnt = ptx_vr(e, ins->b) + 1; /* scratch f32 VR slot */
+              ptx_vr_to_f32(e, cnt, ptx_vr(e, ins->b));
+              ptx_emit(e, "    and.b32 %%w0, %%w0, 63;\n");
+              ptx_emit(e, "    mov.b64 %%r%d, %%r%d;\n", (int)rd, (int)ptx_vr(e, ins->a));
+              ptx_emit(e, "    shr.u64 %%r%d, %%r%d, %%w0;\n", (int)rd, (int)rd);
+            }
             break;
 
         case MIR_NEG:
@@ -260,6 +295,197 @@ static void emit_kernel_body(ptx_emitter_t *e, const wubu_mir_prog_t *p)
             break;
         }
 
+        /* ---- f32 arithmetic -- IEEE-754 bit patterns in low 32 of b64 VR.
+         * VR registers are .b64; f32 values live in low 32 bits (upper 32
+         * are zero per softfloat return type). PTX mov.b32 cannot truncate
+         * b64->b32 (width mismatch), so use shared-mem bridge helpers.
+         * Scratch .f32 reg at index n_vregs for dst-src aliasing. */
+        case MIR_FADD: case MIR_FSUB: case MIR_FMUL: case MIR_FDIV: {
+            uint32_t rd = ptx_vr(e, ins->dst);
+            uint32_t ra = ptx_vr(e, ins->a);
+            uint32_t rb = ptx_vr(e, ins->b);
+            uint32_t fs = e->n_vregs;            /* scratch .f32 reg */
+            uint32_t fd = (ra == rd) ? fs : rd;  /* .f32 dst (scratch if aliased) */
+            uint32_t fa = (ra == rd) ? fs : ra;  /* .f32 src-a */
+            uint32_t fb = (rb == rd) ? fs : rb;  /* .f32 src-b */
+            const char *opn;
+            switch (ins->op) {
+                case MIR_FADD: opn = "add.f32"; break;
+                case MIR_FSUB: opn = "sub.f32"; break;
+                case MIR_FMUL: opn = "mul.f32"; break;
+                default:       opn = "div.rn.f32"; break;
+            }
+            ptx_vr_to_f32(e, fa, ra);
+            if (fb != fa) ptx_vr_to_f32(e, fb, rb);
+            ptx_emit(e, "    %s %%f%u, %%f%u, %%f%u;\n", opn, fd, fa, fb);
+            ptx_f32_to_vr(e, rd, fd);
+            break;
+        }
+
+        case MIR_FNEG: {
+            uint32_t rd = ptx_vr(e, ins->dst);
+            uint32_t ra = ptx_vr(e, ins->a);
+            uint32_t fs = e->n_vregs;
+            uint32_t fd = (ra == rd) ? fs : rd;
+            uint32_t fa = (ra == rd) ? fs : ra;
+            ptx_vr_to_f32(e, fa, ra);
+            ptx_emit(e, "    neg.f32 %%f%u, %%f%u;\n", fd, fa);
+            ptx_f32_to_vr(e, rd, fd);
+            break;
+        }
+
+        /* ITOF: int64 -> f32 (RNE). */
+        case MIR_ITOF: {
+            uint32_t rd = ptx_vr(e, ins->dst);
+            uint32_t ra = ptx_vr(e, ins->a);
+            uint32_t fs = e->n_vregs;
+            ptx_emit(e, "    cvt.rn.f32.s64 %%f%u, %%r%u;\n", fs, ra);
+            ptx_f32_to_vr(e, rd, fs);
+            break;
+        }
+
+        /* FTOI: f32 (bits in low 32 of VR) -> int64 via cvt.rni.s64.f32. */
+        case MIR_FTOI: {
+            uint32_t rd = ptx_vr(e, ins->dst);
+            uint32_t ra = ptx_vr(e, ins->a);
+            uint32_t fs = e->n_vregs;
+            ptx_vr_to_f32(e, fs, ra);
+            ptx_emit(e, "    cvt.rni.s64.f32 %%r%u, %%f%u;\n", rd, fs);
+            break;
+        }
+
+        /* f32 comparisons: setp on .f32, selp 0/1 into b64 dst. */
+        case MIR_FEQ: case MIR_FNE: case MIR_FLT: case MIR_FLE: {
+            uint32_t rd = ptx_vr(e, ins->dst);
+            uint32_t ra = ptx_vr(e, ins->a);
+            uint32_t rb = ptx_vr(e, ins->b);
+            uint32_t pred = e->n_pred++;
+            uint32_t fs = e->n_vregs;            /* scratch .f32 for b-source */
+            uint32_t fa = (ra == rd) ? fs : ra;
+            uint32_t fb = (rb == rd || rb == ra) ? fs : rb;
+            const char *cmp;
+            switch (ins->op) {
+                case MIR_FEQ: cmp = "eq"; break;
+                case MIR_FNE: cmp = "ne"; break;
+                case MIR_FLT: cmp = "lt"; break;
+                default:      cmp = "le"; break;
+            }
+            ptx_vr_to_f32(e, fa, ra);
+            if (fb != fa) ptx_vr_to_f32(e, fb, rb);
+            ptx_emit(e, "    setp.%s.f32 p%u, %%f%u, %%f%u;\n", cmp, pred, fa, fb);
+            ptx_emit(e, "    selp.b64 %%r%u, 1, 0, p%u;\n", rd, pred);
+            break;
+        }
+
+        /* ---- f64 (double) arithmetic -- bits travel in the full int64 VR.
+         * mov.b64 %d<rd>, %r<rd> (bit copy, both 64-bit — no width issue). */
+        case MIR_DADD: case MIR_DSUB: case MIR_DMUL: case MIR_DDIV: {
+            uint32_t rd = ptx_vr(e, ins->dst);
+            uint32_t ra = ptx_vr(e, ins->a);
+            uint32_t rb = ptx_vr(e, ins->b);
+            uint32_t ds = e->n_vregs;          /* scratch .f64 */
+            uint32_t fd = (ra == rd) ? ds : rd;
+            uint32_t fa = (ra == rd) ? ds : ra;
+            uint32_t fb = (rb == rd) ? ds : rb;
+            const char *opn;
+            switch (ins->op) {
+                case MIR_DADD: opn = "add.f64"; break;
+                case MIR_DSUB: opn = "sub.f64"; break;
+                case MIR_DMUL: opn = "mul.f64"; break;
+                default:       opn = "div.rn.f64"; break;
+            }
+            ptx_emit(e, "    mov.b64 %%d%u, %%r%u;\n", fa, ra);
+            ptx_emit(e, "    mov.b64 %%d%u, %%r%u;\n", fb, rb);
+            ptx_emit(e, "    %s %%d%u, %%d%u, %%d%u;\n", opn, fd, fa, fb);
+            ptx_emit(e, "    mov.b64 %%r%u, %%d%u;\n", rd, fd);
+            break;
+        }
+
+        case MIR_DNEG: {
+            uint32_t rd = ptx_vr(e, ins->dst);
+            uint32_t ra = ptx_vr(e, ins->a);
+            uint32_t ds = e->n_vregs;
+            uint32_t fd = (ra == rd) ? ds : rd;
+            ptx_emit(e, "    mov.b64 %%d%u, %%r%u;\n", fd, ra);
+            ptx_emit(e, "    neg.f64 %%d%u, %%d%u;\n", fd, fd);
+            ptx_emit(e, "    mov.b64 %%r%u, %%d%u;\n", rd, fd);
+            break;
+        }
+
+        /* DITOF: int64 -> f64 */
+        case MIR_DITOF: {
+            uint32_t rd = ptx_vr(e, ins->dst);
+            uint32_t ra = ptx_vr(e, ins->a);
+            ptx_emit(e, "    cvt.rn.f64.s64 %%d%u, %%r%u;\n", rd, ra);
+            ptx_emit(e, "    mov.b64 %%r%u, %%d%u;\n", rd, rd);
+            break;
+        }
+
+        /* DTOI: f64 -> int64. */
+        case MIR_DTOI: {
+            uint32_t rd = ptx_vr(e, ins->dst);
+            uint32_t ra = ptx_vr(e, ins->a);
+            uint32_t ds = e->n_vregs;
+            uint32_t fd = (ra == rd) ? ds : rd;
+            ptx_emit(e, "    mov.b64 %%d%u, %%r%u;\n", fd, ra);
+            ptx_emit(e, "    cvt.rni.s64.f64 %%r%u, %%d%u;\n", rd, fd);
+            break;
+        }
+
+        /* F32_TO_F64: f32 -> f64 (exact widening) */
+        case MIR_F32_TO_F64: {
+            uint32_t rd = ptx_vr(e, ins->dst);
+            uint32_t ra = ptx_vr(e, ins->a);
+            uint32_t fs = e->n_vregs;
+            ptx_vr_to_f32(e, fs, ra);
+            ptx_emit(e, "    cvt.f64.f32 %%d%u, %%f%u;\n", rd, fs);
+            ptx_emit(e, "    mov.b64 %%r%u, %%d%u;\n", rd, rd);
+            break;
+        }
+
+        /* F64_TO_F32: f64 -> f32 (RNE narrowing) */
+        case MIR_F64_TO_F32: {
+            uint32_t rd = ptx_vr(e, ins->dst);
+            uint32_t ra = ptx_vr(e, ins->a);
+            uint32_t fs = e->n_vregs;
+            uint32_t fd = (ra == rd) ? fs : rd;
+            ptx_emit(e, "    mov.b64 %%d%u, %%r%u;\n", fd, ra);
+            ptx_emit(e, "    cvt.rn.f32.f64 %%f%u, %%d%u;\n", fd, fd);
+            ptx_f32_to_vr(e, rd, fd);
+            break;
+        }
+
+        /* BF16_TO_F32: bf16 (uint16 in low 16 of VR) -> f32.
+         * Extract low 32 bits via shared bridge, then low 16 bits via mov.b16. */
+        case MIR_BF16_TO_F32: {
+            uint32_t rd = ptx_vr(e, ins->dst);
+            uint32_t ra = ptx_vr(e, ins->a);
+            uint32_t fs = e->n_vregs;
+            ptx_vr_to_f32(e, fs, ra);            /* %f<fs> = bits */
+            ptx_emit(e, "    mov.b16 %%rh0, %%f%u;\n", fs); /* low 16 of .f32 */
+            ptx_emit(e, "    cvt.rn.f32.bf16 %%f%u, %%rh0;\n", rd);
+            ptx_f32_to_vr(e, rd, rd);
+            break;
+        }
+
+        /* F32_TO_BF16: f32 -> bf16 (uint16 in low 16, upper zero). */
+        case MIR_F32_TO_BF16: {
+            uint32_t rd = ptx_vr(e, ins->dst);
+            uint32_t ra = ptx_vr(e, ins->a);
+            uint32_t fs = e->n_vregs;
+            ptx_vr_to_f32(e, fs, ra);
+            ptx_emit(e, "    cvt.rn.bf16.f32 %%rh0, %%f%u;\n", fs);
+            ptx_emit(e, "    mov.b32 %%w0, %%rh0;\n");  /* bf16 -> b32 (zero-ext) */
+            ptx_emit(e, "    st.shared.b32 [s], %%w0;\n");
+            ptx_emit(e, "    ld.shared.b64 %%r%u, [s];\n", rd);
+            break;
+        }
+
+        case MIR_T_GEMM:
+            emit_tgemm(e, ins);
+            break;
+
+
         default:
             /* Unknown op — emit a comment so it's visible */
             ptx_emit(e, "    /* MIR op %d — not yet implemented */\n", (int)ins->op);
@@ -268,7 +494,111 @@ static void emit_kernel_body(ptx_emitter_t *e, const wubu_mir_prog_t *p)
     }
 }
 
-/* ---- Write the full PTX file from a MIR program ---- */
+/* ---- T_GEMM emission (scalar triple loop on a single GPU thread) ----
+ *
+ * MIR_T_GEMM encoding (from wubu_mir.h):
+ *   imm = ((uint64_t)M << 22) | ((uint64_t)N << 11) | (uint64_t)K
+ *   a = base cell index of A, b = base of B, dst = base of C (all int64)
+ *   A is MxK row-major, B is KxN row-major, C is MxN row-major.
+ *
+ * The kernel runs as ONE thread (per gpu_host_stub.cu), so this is a scalar
+ * triple loop — not parallel. Parallelism over MxN output is a future wave.
+ *
+ * Register map (scratch regs %r48-%r58, safe in single-thread kernel):
+ *   %r48 = A_base, %r49 = B_base, %r50 = C_base
+ *   %r51 = i (outer), %r52 = k (mid), %r53 = j (inner)
+ *   %r54 = acc (accumulate C[i*N+j] + sum of A*B products)
+ *   %r55 = addr (reused for each address computation)
+ * PTX local labels (.L_t*) handle forward branches.
+ * The mem[] base address is in %ra0. */
+static void emit_tgemm(ptx_emitter_t *e, const wubu_mir_instr_t *ins)
+{
+    int M = (int)(ins->imm >> 22);
+    int N = (int)((ins->imm >> 11) & 0x7FF);
+    int K = (int)(ins->imm & 0x7FF);
+
+    /* Save A, B, C base cell indices (they're int64 VRs: cell * 8 + mem_base) */
+    ptx_emit(e, "    mov.b64 %%r48, %%r%d;\n", (int)ptx_vr(e, ins->a));
+    ptx_emit(e, "    mov.b64 %%r49, %%r%d;\n", (int)ptx_vr(e, ins->b));
+    ptx_emit(e, "    mov.b64 %%r50, %%r%d;\n", (int)ptx_vr(e, ins->dst));
+    /* Convert base cell indices to byte addresses (cell * 8 + mem_base) */
+    ptx_emit(e, "    shl.b64 %%r48, %%r48, 3;\n");
+    ptx_emit(e, "    add.s64 %%r48, %%r48, %%ra0;\n");
+    ptx_emit(e, "    shl.b64 %%r49, %%r49, 3;\n");
+    ptx_emit(e, "    add.s64 %%r49, %%r49, %%ra0;\n");
+    ptx_emit(e, "    shl.b64 %%r50, %%r50, 3;\n");
+    ptx_emit(e, "    add.s64 %%r50, %%r50, %%ra0;\n");
+
+    /* i loop (0..M-1) */
+    ptx_emit(e, "    mov.u64 %%r51, 0;\n");
+    ptx_emit(e, "    bra t_i_test;\n");
+    ptx_emit(e, "t_i_body:\n");
+    /* k loop (0..K-1) */
+    ptx_emit(e, "    mov.u64 %%r52, 0;\n");
+    ptx_emit(e, "    bra t_k_test;\n");
+    ptx_emit(e, "t_k_body:\n");
+    /* j loop (0..N-1) */
+    ptx_emit(e, "    mov.u64 %%r53, 0;\n");
+    ptx_emit(e, "    bra t_j_test;\n");
+    ptx_emit(e, "t_j_body:\n");
+
+    /* acc = C[i*N+j] */
+    ptx_emit(e, "    mul.lo.s64 %%r55, %%r51, %d;\n", N);
+    ptx_emit(e, "    add.s64 %%r55, %%r55, %%r53;\n");
+    ptx_emit(e, "    shl.b64 %%r55, %%r55, 3;\n");
+    ptx_emit(e, "    add.s64 %%r55, %%r55, %%r50;\n");
+    ptx_emit(e, "    ld.global.s64 %%r54, [%%r55];\n");
+
+    /* a_elem = A[i*K+k] */
+    ptx_emit(e, "    mul.lo.s64 %%r55, %%r51, %d;\n", K);
+    ptx_emit(e, "    add.s64 %%r55, %%r55, %%r52;\n");
+    ptx_emit(e, "    shl.b64 %%r55, %%r55, 3;\n");
+    ptx_emit(e, "    add.s64 %%r55, %%r55, %%r48;\n");
+    ptx_emit(e, "    ld.global.s64 %%r55, [%%r55];\n");
+
+    /* b_elem = B[k*N+j] */
+    ptx_emit(e, "    mul.lo.s64 %%r56, %%r52, %d;\n", N);
+    ptx_emit(e, "    add.s64 %%r56, %%r56, %%r53;\n");
+    ptx_emit(e, "    shl.b64 %%r56, %%r56, 3;\n");
+    ptx_emit(e, "    add.s64 %%r56, %%r56, %%r49;\n");
+    ptx_emit(e, "    ld.global.s64 %%r56, [%%r56];\n");
+
+    /* acc += a_elem * b_elem */
+    ptx_emit(e, "    mul.lo.s64 %%r55, %%r55, %%r56;\n");
+    ptx_emit(e, "    add.s64 %%r54, %%r54, %%r55;\n");
+
+    /* C[i*N+j] = acc */
+    ptx_emit(e, "    mul.lo.s64 %%r55, %%r51, %d;\n", N);
+    ptx_emit(e, "    add.s64 %%r55, %%r55, %%r53;\n");
+    ptx_emit(e, "    shl.b64 %%r55, %%r55, 3;\n");
+    ptx_emit(e, "    add.s64 %%r55, %%r55, %%r50;\n");
+    ptx_emit(e, "    st.global.s64 [%%r55], %%r54;\n");
+
+    /* j++ */
+    ptx_emit(e, "    add.u64 %%r53, %%r53, 1;\n");
+    ptx_emit(e, "t_j_test:\n");
+    ptx_emit(e, "    setp.ge.s64 p1, %%r53, %d;\n", N);
+    ptx_emit(e, "    @p1 bra t_k_next;\n");
+    ptx_emit(e, "    bra t_j_body;\n");
+    ptx_emit(e, "t_k_next:\n");
+
+    /* k++ */
+    ptx_emit(e, "    add.u64 %%r52, %%r52, 1;\n");
+    ptx_emit(e, "t_k_test:\n");
+    ptx_emit(e, "    setp.ge.s64 p2, %%r52, %d;\n", K);
+    ptx_emit(e, "    @p2 bra t_i_next;\n");
+    ptx_emit(e, "    bra t_k_body;\n");
+    ptx_emit(e, "t_i_next:\n");
+
+    /* i++ */
+    ptx_emit(e, "    add.u64 %%r51, %%r51, 1;\n");
+    ptx_emit(e, "t_i_test:\n");
+    ptx_emit(e, "    setp.ge.s64 p3, %%r51, %d;\n", M);
+    ptx_emit(e, "    @p3 bra t_gemm_end;\n");
+    ptx_emit(e, "    bra t_i_body;\n");
+    ptx_emit(e, "t_gemm_end:\n");
+}
+
 
 /* First pass: count how many virtual registers and predicates we need.
  * Each comparison (EQ/NE/LT/LE/GT/GE) needs one predicate for setp+selp.
@@ -297,6 +627,30 @@ static void count_regs(const wubu_mir_prog_t *p, uint32_t *out_vregs, uint32_t *
         case MIR_EQ: case MIR_NE: case MIR_LT: case MIR_LE: case MIR_GT: case MIR_GE:
             local_max = ins->dst + 1;
             n_preds++;  /* one predicate for setp */
+            break;
+        case MIR_FADD: case MIR_FSUB: case MIR_FMUL: case MIR_FDIV:
+        case MIR_FNEG: case MIR_ITOF: case MIR_FTOI:
+        case MIR_F32_TO_F64: case MIR_F64_TO_F32:
+        case MIR_BF16_TO_F32: case MIR_F32_TO_BF16:
+        case MIR_DADD: case MIR_DSUB: case MIR_DMUL: case MIR_DDIV:
+        case MIR_DNEG: case MIR_DITOF: case MIR_DTOI:
+            local_max = ins->dst + 1;
+            if (ins->a + 1 > local_max) local_max = ins->a + 1;
+            if (ins->b + 1 > local_max) local_max = ins->b + 1;
+            break;
+        case MIR_FEQ: case MIR_FNE: case MIR_FLT: case MIR_FLE:
+            local_max = ins->dst + 1;
+            n_preds++;
+            break;
+        case MIR_T_GEMM:
+            /* T_GEMM uses scratch regs %r48-%r56 (9 regs) + 3 preds.
+             * Ensure enough regs are declared by bumping local_max. */
+            if (48 + 1 > local_max) local_max = 48 + 1;
+            if (56 + 1 > local_max) local_max = 56 + 1;
+            n_preds += 3;  /* p1, p2, p3 for loop tests */
+            local_max = ins->a + 1;
+            if (ins->b + 1 > local_max) local_max = ins->b + 1;
+            if (56 + 1 > local_max) local_max = 56 + 1;
             break;
         case MIR_JZ:
             local_max = ins->a + 1;
@@ -339,11 +693,20 @@ static char *emit_ptx(const wubu_mir_prog_t *p)
     ptx_emit(&e, "    .global .b64 mem[%zu];\n", n_cells);
 
     /* Declare registers: %r0..%r{n_vregs-1} plus rd_result */
-    ptx_emit(&e, "    .reg .b64 %r<%u>;\n", n_vregs + 1);
-    ptx_emit(&e, "    .reg .b64 %rd_result;\n");
+    ptx_emit(&e, "    .reg .b64 %%r<%u>;\n", n_vregs + 1);
+    ptx_emit(&e, "    .reg .b64 %%rd_result;\n");
     ptx_emit(&e, "    .reg .pred p<%u>;\n", n_preds);
-    ptx_emit(&e, "    .reg .u64 %ra<2>;\n");  /* address math for mem[] */
-    ptx_emit(&e, "    .reg .u32 %rc<2>;\n\n"); /* 32-bit temp for offset */
+    ptx_emit(&e, "    .reg .u64 %%ra<2>;\n");  /* address math for mem[] */
+    ptx_emit(&e, "    .reg .u32 %%rc<2>;\n"); /* 32-bit temp for offset */
+    /* Float register files mirror the VR space. .b32 %w is a mirror of
+     * %r's low 32 bits for f32 load/store bridging. .f32 has n_vregs+2
+     * entries: one per VR + one scratch (index n_vregs) for dst-src aliasing.
+     * .b16 %rh0 is a single bf16 scratch. */
+    ptx_emit(&e, "    .reg .b32 %%w<%u>;\n", n_vregs + 1);
+    ptx_emit(&e, "    .reg .f32 %%f<%u>;\n", n_vregs + 2);
+    ptx_emit(&e, "    .reg .f64 %%d<%u>;\n", n_vregs + 2);
+    ptx_emit(&e, "    .reg .b16 %%rh0;\n");
+    ptx_emit(&e, "    .shared .b8 s[8];\n\n"); /* type-punning bridge for b32<->b64 */
 
     /* Base address of mem[] into %ra0 (a .u64 pointer register). */
     ptx_emit(&e, "    cvta.global.u64 %ra0, mem;\n\n");
@@ -577,8 +940,14 @@ static void ptx_describe(void)
     printf("  Compile:       MIR -> PTX -> cubin (ptxas)\n");
     printf("  Run:           cubin -> GPU launch -> result\n");
     printf("  MIR ops:       ADD SUB MUL DIV MOD AND OR XOR SHL SHR\n");
-    printf("                 NEG NOT EQ NE LT LE GT GE MOV JMP JZ RET\n");
-    printf("  Registers:     unlimited virtual -> PTX .reg .b64\n");
+    printf("                 NEG NOT EQ NE LT LE GT GE ULT ULE UGT UGE\n");
+    printf("                 FADD FSUB FMUL FDIV FNEG ITOF FTOI\n");
+    printf("                 FEQ FNE FLT FLE F32_TO_F64 F64_TO_F32\n");
+    printf("                 DADD DSUB DMUL DDIV DNEG DITOF DTOI\n");
+    printf("                 BF16_TO_F32 F32_TO_BF16 T_GEMM\n");
+    printf("                 MOV JMP JZ RET\n");
+    printf("  Float model:   IEEE-754 f32/f64 native hardware + bf16 conversion\n");
+    printf("  Registers:     unlimited virtual -> PTX .reg .b64 + .f32/.f64/.b32/.b16\n");
 }
 
 /* ---- The driver object ---- */
