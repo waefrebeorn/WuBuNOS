@@ -323,6 +323,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
         case MIR_FEQ: case MIR_FNE: case MIR_FLT: case MIR_FLE:
         case MIR_FADD: case MIR_FSUB: case MIR_FMUL: case MIR_FDIV:
         case MIR_ITOF: case MIR_FTOI:
+        case MIR_BF16_TO_F32: case MIR_F32_TO_BF16:
         case MIR_F32_TO_F64: case MIR_F64_TO_F32:
         case MIR_DADD: case MIR_DSUB: case MIR_DMUL: case MIR_DDIV: case MIR_DNEG:
         case MIR_FNEG: {
@@ -420,6 +421,29 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
                     /* movd eax, xmm0 */
                     e8(&e, 0x66); e8(&e, 0x0F); e8(&e, 0x7E); e8(&e, 0xC0);
                 }
+                break;
+            }
+
+            case MIR_BF16_TO_F32: {
+                /* widen: f32 bits = bf16 << 16 (exact) */
+                int sc = VR_ENC(in->a);
+                if (sc >= 0) emit_mov_reg(&e, 0, sc);
+                else emit_load_rbp(&e, 0, VR_SPILL(in->a));
+                rex(&e,1,0,0,0); e8(&e, 0xC1); e8(&e, 0xE0); e8(&e, 0x10); /* shl rax,16 */
+                break;
+            }
+
+            case MIR_F32_TO_BF16: {
+                /* narrow RNE: (x + 0x7FFF + ((x>>16)&1)) >> 16 */
+                int sc = VR_ENC(in->a);
+                if (sc >= 0) emit_mov_reg(&e, 0, sc);
+                else emit_load_rbp(&e, 0, VR_SPILL(in->a));
+                e8(&e, 0x89); e8(&e, 0xC1);                              /* mov ecx,eax */
+                e8(&e, 0xC1); e8(&e, 0xE9); e8(&e, 0x10);                /* shr ecx,16 */
+                e8(&e, 0x83); e8(&e, 0xE1); e8(&e, 0x01);                /* and ecx,1 */
+                e8(&e, 0x01); e8(&e, 0xC8);                              /* add eax,ecx */
+                e8(&e, 0x05); e8(&e, 0xFF); e8(&e, 0x7F); e8(&e, 0x00); e8(&e, 0x00);
+                e8(&e, 0xC1); e8(&e, 0xE8); e8(&e, 0x10);                /* shr eax,16 */
                 break;
             }
 
