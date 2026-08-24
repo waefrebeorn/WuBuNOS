@@ -370,7 +370,8 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             else emit_store_rbp(&e, VR_SPILL(in->dst), 0);
             break;
         }
-        case MIR_EQ: case MIR_NE: case MIR_LT: case MIR_LE: case MIR_GT: case MIR_GE: {
+        case MIR_EQ: case MIR_NE: case MIR_LT: case MIR_LE: case MIR_GT: case MIR_GE:
+        case MIR_ULT: case MIR_ULE: case MIR_UGT: case MIR_UGE: {
             int sa = VR_ENC(in->a);
             if (sa >= 0) emit_mov_reg(&e, 0, sa);
             else emit_load_rbp(&e, 0, VR_SPILL(in->a));
@@ -388,6 +389,11 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             case MIR_LE: cc = 0x9E; break;
             case MIR_GT: cc = 0x9F; break;
             case MIR_GE: cc = 0x9D; break;
+            /* unsigned SETcc: setb / setbe / seta / setae */
+            case MIR_ULT: cc = 0x92; break;
+            case MIR_ULE: cc = 0x96; break;
+            case MIR_UGT: cc = 0x97; break;
+            case MIR_UGE: cc = 0x93; break;
             default: cc = 0x94; break;
             }
             e8(&e, 0x0F); e8(&e, cc); e8(&e, 0xC0);        /* setcc al */

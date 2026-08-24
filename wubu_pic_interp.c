@@ -43,6 +43,9 @@
 #define PIC_AND   0x1A /* AND fr      — W = W & RAM[fr]  */
 #define PIC_OR    0x1B /* OR  fr      — W = W | RAM[fr]  */
 #define PIC_XR    0x1C
+#define PIC_GEU   0x1D /* GEU fr — W = (W >= RAM[fr]) ? 1 : 0 (unsigned) */
+#define PIC_LEQ   0x1E /* LEQ fr — W = (W <  RAM[fr]) ? 1 : 0 (unsigned) */
+#define PIC_ULEQ  0x1F /* ULEQ fr — W = (W <= RAM[fr]) ? 1 : 0 (unsigned) */
 #define PIC_FOP   0x20
 #define PIC_FRET  0x21 /* XR  fr      — W = W ^ RAM[fr]  */
 
@@ -151,6 +154,18 @@ int64_t wubu_pic_interp(const uint8_t *code, size_t size, int64_t arg)
             W = (W > (uint8_t)ram[PIC_VR_BASE + fr]) ? 1 : 0;
             break;
         case PIC_LEU: /* unsigned: W <= ram[fr] */
+            fr = code[pc++];
+            W = (W <= (uint8_t)ram[PIC_VR_BASE + fr]) ? 1 : 0;
+            break;
+        case PIC_GEU: /* unsigned: W >= ram[fr] */
+            fr = code[pc++];
+            W = (W >= (uint8_t)ram[PIC_VR_BASE + fr]) ? 1 : 0;
+            break;
+        case PIC_LEQ: /* unsigned: W < ram[fr]  (LTU complement for ULE building) */
+            fr = code[pc++];
+            W = (W < (uint8_t)ram[PIC_VR_BASE + fr]) ? 1 : 0;
+            break;
+        case PIC_ULEQ: /* unsigned: W <= ram[fr] */
             fr = code[pc++];
             W = (W <= (uint8_t)ram[PIC_VR_BASE + fr]) ? 1 : 0;
             break;

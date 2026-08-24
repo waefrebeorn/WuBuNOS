@@ -108,6 +108,9 @@ static uint32_t mips_xor(uint32_t rs, uint32_t rt, uint32_t rd) {
 static uint32_t mips_slt(uint32_t rs, uint32_t rt, uint32_t rd) {
     return R_TYPE(rs, rt, rd, 0, MF_SLT);
 }
+static uint32_t mips_sltu(uint32_t rs, uint32_t rt, uint32_t rd) {
+    return R_TYPE(rs, rt, rd, 0, MF_SLTU);   /* unsigned less-than */
+}
 static uint32_t mips_sll(uint32_t rt, uint32_t rd, uint32_t sa) {
     return R_TYPE(0, rt, rd, sa, MF_SLL);
 }
@@ -332,6 +335,32 @@ static int mips_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_siz
             /* true: $t0 = 1 */
             e32(&e, mips_ori(MIPS_REG_T0, 0, 1));
             note_label(&e, done, e.n / 4);
+            e32(&e, MIPS_SW(29, MIPS_REG_T0, (uint16_t)slot_off(in->dst)));
+            break;
+        }
+        /* unsigned compares via native sltu (funct 0x2B):
+         *   ULT: $t0 = sltu(a, b)
+         *   UGT: $t0 = sltu(b, a)
+         *   ULE: $t0 = 1 - sltu(a, b)
+         *   UGE: $t0 = 1 - sltu(b, a) */
+        case MIR_ULT: case MIR_ULE: case MIR_UGT: case MIR_UGE: {
+            e32(&e, MIPS_LW(29, MIPS_REG_T0, (uint16_t)slot_off(in->a)));
+            e32(&e, MIPS_LW(29, MIPS_REG_T1, (uint16_t)slot_off(in->b)));
+            switch (in->op) {
+            case MIR_ULT:
+                e32(&e, mips_sltu(MIPS_REG_T0, MIPS_REG_T1, MIPS_REG_T0)); break;
+            case MIR_UGT:
+                e32(&e, mips_sltu(MIPS_REG_T1, MIPS_REG_T0, MIPS_REG_T0)); break;
+            case MIR_ULE: /* a<=b = NOT(a>b) = 1 - sltu(b,a) */
+                e32(&e, mips_sltu(MIPS_REG_T1, MIPS_REG_T0, MIPS_REG_T0));
+                e32(&e, mips_addui(0, MIPS_REG_T2, 1));
+                e32(&e, mips_sub(MIPS_REG_T2, MIPS_REG_T0, MIPS_REG_T0)); break;
+            case MIR_UGE: /* a>=b = NOT(a<b) = 1 - sltu(a,b) */
+                e32(&e, mips_sltu(MIPS_REG_T0, MIPS_REG_T1, MIPS_REG_T0));
+                e32(&e, mips_addui(0, MIPS_REG_T2, 1));
+                e32(&e, mips_sub(MIPS_REG_T2, MIPS_REG_T0, MIPS_REG_T0)); break;
+            default: break;
+            }
             e32(&e, MIPS_SW(29, MIPS_REG_T0, (uint16_t)slot_off(in->dst)));
             break;
         }

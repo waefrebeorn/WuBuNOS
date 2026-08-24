@@ -64,7 +64,11 @@ static void pic_note_label(pic_emitter_t *e, uint32_t label, size_t off) {
 #define PIC_SHR  0x13 /* SHR fr      — W = W >> RAM[fr] (unsigned) */
 #define PIC_GTU  0x14 /* GTU fr      — W = (W > RAM[fr]) ? 1 : 0 */
 #define PIC_LTU  0x15 /* LTU fr      — W = (W < RAM[fr]) ? 1 : 0 */
-#define PIC_EQ   0x16 /* EQ  fr      — W = (W == RAM[fr]) ? 1 : 0 */
+#define PIC_EQ   0x16
+/* NOTE: opcode values must match the INTERP's table (wubu_pic_interp.c),
+ * not the compiler's local historical numbering. GEU=0x1D, LT-complement=0x1E. */
+#define PIC_GEU  0x1D
+#define PIC_ULEQ 0x1F /* EQ  fr      — W = (W == RAM[fr]) ? 1 : 0 */
 #define PIC_RET  0x0E /* RET         — return W */
 #define PIC_FOP  0x20 /* soft-float hostcall */
 #define PIC_FRET 0x21 /* soft-float return */
@@ -216,7 +220,39 @@ static int pic_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             pic_ep8(&e, PIC_MVF);
             pic_ep8(&e, (uint8_t)in->dst);
             break;
-        case MIR_FADD:
+
+        case MIR_UGT:
+            pic_ep8(&e, PIC_MVW);
+            pic_ep8(&e, (uint8_t)in->a);
+            pic_ep8(&e, PIC_GTU);
+            pic_ep8(&e, (uint8_t)in->b);
+            pic_ep8(&e, PIC_MVF);
+            pic_ep8(&e, (uint8_t)in->dst);
+            break;
+        case MIR_ULT:
+            pic_ep8(&e, PIC_MVW);
+            pic_ep8(&e, (uint8_t)in->a);
+            pic_ep8(&e, PIC_LTU);
+            pic_ep8(&e, (uint8_t)in->b);
+            pic_ep8(&e, PIC_MVF);
+            pic_ep8(&e, (uint8_t)in->dst);
+            break;
+        case MIR_UGE:
+            pic_ep8(&e, PIC_MVW);
+            pic_ep8(&e, (uint8_t)in->a);
+            pic_ep8(&e, PIC_GEU);
+            pic_ep8(&e, (uint8_t)in->b);
+            pic_ep8(&e, PIC_MVF);
+            pic_ep8(&e, (uint8_t)in->dst);
+            break;
+        case MIR_ULE:
+            pic_ep8(&e, PIC_MVW);
+            pic_ep8(&e, (uint8_t)in->a);
+            pic_ep8(&e, PIC_ULEQ);
+            pic_ep8(&e, (uint8_t)in->b);
+            pic_ep8(&e, PIC_MVF);
+            pic_ep8(&e, (uint8_t)in->dst);
+            break;        case MIR_FADD:
         case MIR_FSUB:
         case MIR_FMUL:
         case MIR_FDIV: {

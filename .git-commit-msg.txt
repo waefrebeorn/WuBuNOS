@@ -1,0 +1,17 @@
+feat: unsigned compares (ULT/ULE/UGT/UGE) on ALL 14 drivers + test
+
+- riscv: native SLTU (funct7 0x00, funct3 0x03)
+- mips: native SLTU (funct 0x2B) + correct negate idiom
+- x86_64: SETb/SETbe/SETa/SETae (0x92/96/97/93)
+- arm64: CC_LO/HS/HI/LS via mir_to_arm64_cc
+- m68k: BHI/BLS/BCC/BCS compiler + interp cond_true cases 2-5
+- 8086: JB/JBE/JA/JAE
+- 6502: CMP-native unsigned w/ dual-branch ULE + BEQ-skip UGT
+- z80: JP C/NC/Z per-op patterns in emit_compare
+- 8051: EXT_UGT/ULT/UGE/ULE (0x0F-0x12) compiler+interp
+- avr: AVR_UGT/ULT/UGE/ULE (0x16-0x19) compiler+interp
+- pic: PIC_GTU/LTU wired + GEU(0x1D)/ULEQ(0x1F) new ops
+- ptx: setp.lt/le/gt/ge.u64 - REAL GPU verified on RTX 4050
+- test_isa_driver: (-1 as u32) vs 1 battery proves unsignedness
+
+Result: 160/160 ALL TESTS PASSED

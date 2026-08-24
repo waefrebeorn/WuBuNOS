@@ -36,6 +36,10 @@
 #define AVR_LE   0x13
 #define AVR_EQ   0x14
 #define AVR_NE   0x15
+#define AVR_UGT  0x16
+#define AVR_ULT  0x17
+#define AVR_UGE  0x18
+#define AVR_ULE  0x19
 #define AVR_FOP  0x20   /* soft-float hostcall */
 #define AVR_FRET 0x21   /* soft-float return */
 
@@ -158,7 +162,28 @@ int64_t wubu_avr_interp(const uint8_t *code, size_t size, int64_t arg)
             vr[AVR_VR_BASE + a] = ((vr[AVR_VR_BASE + a] & 0xFF) !=
                                     (vr[AVR_VR_BASE + b] & 0xFF)) ? 1 : 0;
             break;
-        case AVR_FOP: /* fn, sa, sb, sd (vr slots) */
+
+        /* unsigned compares: plain uint8 */
+        case AVR_UGT:
+            a = code[pc++]; b = code[pc++];
+            vr[AVR_VR_BASE + a] = ((vr[AVR_VR_BASE + a] & 0xFF) >
+                                    (vr[AVR_VR_BASE + b] & 0xFF)) ? 1 : 0;
+            break;
+        case AVR_ULT:
+            a = code[pc++]; b = code[pc++];
+            vr[AVR_VR_BASE + a] = ((vr[AVR_VR_BASE + a] & 0xFF) <
+                                    (vr[AVR_VR_BASE + b] & 0xFF)) ? 1 : 0;
+            break;
+        case AVR_UGE:
+            a = code[pc++]; b = code[pc++];
+            vr[AVR_VR_BASE + a] = ((vr[AVR_VR_BASE + a] & 0xFF) >=
+                                    (vr[AVR_VR_BASE + b] & 0xFF)) ? 1 : 0;
+            break;
+        case AVR_ULE:
+            a = code[pc++]; b = code[pc++];
+            vr[AVR_VR_BASE + a] = ((vr[AVR_VR_BASE + a] & 0xFF) <=
+                                    (vr[AVR_VR_BASE + b] & 0xFF)) ? 1 : 0;
+            break;        case AVR_FOP: /* fn, sa, sb, sd (vr slots) */
             fn = code[pc++]; sa = code[pc++]; sb = code[pc++]; sd = code[pc++];
             {
                 uint32_t fa = (uint32_t)(vr[AVR_VR_BASE + sa] & 0xFFFFFFFF);

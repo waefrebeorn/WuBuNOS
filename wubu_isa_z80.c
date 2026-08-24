@@ -358,6 +358,71 @@ static void emit_compare(z80_emitter_t *e, int mir_op, uint16_t va,
         e8(e, Z80_LD_A_N); e8(e, 0x01);
         store_a_to_slot(e, vdst);
         break;
+    /* unsigned compares: CP is natively unsigned on Z80 (C=1 iff a<b).
+     *   ULT: JP C set1        UGE: JP NC set1
+     *   ULE: JP C|JP Z set1   UGT: JP Z set0; JP NC set1 */
+    case MIR_ULT:
+        e8(e, Z80_JP_C_NN);
+        e16(e, 0x0000);
+        patch_push(e, patches, np, cap, e->n - 2, 2, set1);
+        note_label(e, set0, e->n);
+        e8(e, Z80_LD_A_N); e8(e, 0x00);
+        store_a_to_slot(e, vdst);
+        e8(e, Z80_JP_NN);
+        e16(e, 0x0000);
+        patch_push(e, patches, np, cap, e->n - 2, 2, done);
+        note_label(e, set1, e->n);
+        e8(e, Z80_LD_A_N); e8(e, 0x01);
+        store_a_to_slot(e, vdst);
+        break;
+    case MIR_UGE:
+        e8(e, Z80_JP_NC_NN);
+        e16(e, 0x0000);
+        patch_push(e, patches, np, cap, e->n - 2, 2, set1);
+        note_label(e, set0, e->n);
+        e8(e, Z80_LD_A_N); e8(e, 0x00);
+        store_a_to_slot(e, vdst);
+        e8(e, Z80_JP_NN);
+        e16(e, 0x0000);
+        patch_push(e, patches, np, cap, e->n - 2, 2, done);
+        note_label(e, set1, e->n);
+        e8(e, Z80_LD_A_N); e8(e, 0x01);
+        store_a_to_slot(e, vdst);
+        break;
+    case MIR_ULE:
+        e8(e, Z80_JP_C_NN);
+        e16(e, 0x0000);
+        patch_push(e, patches, np, cap, e->n - 2, 2, set1);
+        e8(e, Z80_JP_Z_NN);
+        e16(e, 0x0000);
+        patch_push(e, patches, np, cap, e->n - 2, 2, set1);
+        note_label(e, set0, e->n);
+        e8(e, Z80_LD_A_N); e8(e, 0x00);
+        store_a_to_slot(e, vdst);
+        e8(e, Z80_JP_NN);
+        e16(e, 0x0000);
+        patch_push(e, patches, np, cap, e->n - 2, 2, done);
+        note_label(e, set1, e->n);
+        e8(e, Z80_LD_A_N); e8(e, 0x01);
+        store_a_to_slot(e, vdst);
+        break;
+    case MIR_UGT:
+        e8(e, Z80_JP_Z_NN);
+        e16(e, 0x0000);
+        patch_push(e, patches, np, cap, e->n - 2, 2, set0);
+        e8(e, Z80_JP_NC_NN);
+        e16(e, 0x0000);
+        patch_push(e, patches, np, cap, e->n - 2, 2, set1);
+        note_label(e, set0, e->n);
+        e8(e, Z80_LD_A_N); e8(e, 0x00);
+        store_a_to_slot(e, vdst);
+        e8(e, Z80_JP_NN);
+        e16(e, 0x0000);
+        patch_push(e, patches, np, cap, e->n - 2, 2, done);
+        note_label(e, set1, e->n);
+        e8(e, Z80_LD_A_N); e8(e, 0x01);
+        store_a_to_slot(e, vdst);
+        break;
     default: /* JP Z set1; set0; JP done; set1 */
         e8(e, Z80_JP_Z_NN);
         e16(e, 0x0000);
@@ -724,6 +789,7 @@ static int z80_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
 
         case MIR_EQ: case MIR_NE: case MIR_LT: case MIR_LE:
         case MIR_GT: case MIR_GE:
+        case MIR_ULT: case MIR_ULE: case MIR_UGT: case MIR_UGE:
             emit_compare(&e, in->op, va, vb, vd, &patches, &np, &cp);
             break;
 

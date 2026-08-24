@@ -32,6 +32,11 @@
 #define EXT_EQ       0x0C
 #define EXT_NE       0x0D
 #define EXT_RET      0x0E
+/* unsigned compares (8-bit unsigned semantics) */
+#define EXT_UGT      0x0F
+#define EXT_ULT      0x10
+#define EXT_UGE      0x11
+#define EXT_ULE      0x12
 #define EXT_FOP      0x20
 #define EXT_FRET     0x21
 #define EXT_FCONST   0x22
@@ -183,7 +188,11 @@ static int i8051_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
         case MIR_GE:
         case MIR_LE:
         case MIR_EQ:
-        case MIR_NE: {
+        case MIR_NE:
+        case MIR_UGT:
+        case MIR_ULT:
+        case MIR_UGE:
+        case MIR_ULE: {
             /* Signed comparison using EXT ops */
             sa = (uint8_t)(I8051_VR_BASE + in->a);
             sb = (uint8_t)(I8051_VR_BASE + in->b);
@@ -195,6 +204,11 @@ static int i8051_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
                 case MIR_LE: ext_op = EXT_LE; break;
                 case MIR_EQ: ext_op = EXT_EQ; break;
                 case MIR_NE: ext_op = EXT_NE; break;
+                /* unsigned */
+                case MIR_UGT: ext_op = EXT_UGT; break;
+                case MIR_ULT: ext_op = EXT_ULT; break;
+                case MIR_UGE: ext_op = EXT_UGE; break;
+                case MIR_ULE: ext_op = EXT_ULE; break;
                 default: ext_op = EXT_EQ; break;
             }
             e8(&e, 0xE5); e8(&e, sa);    /* MOV A, [sa] */

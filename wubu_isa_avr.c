@@ -70,6 +70,11 @@ static void note_label(avr_emitter_t *e, uint32_t label, size_t off) {
 #define AVR_LE   0x13
 #define AVR_EQ   0x14
 #define AVR_NE   0x15
+/* unsigned compares */
+#define AVR_UGT  0x16
+#define AVR_ULT  0x17
+#define AVR_UGE  0x18
+#define AVR_ULE  0x19
 
 static int avr_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size) {
     avr_emitter_t e;
@@ -184,7 +189,19 @@ static int avr_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
         case MIR_NE:
             ep8(&e, AVR_MOV); ep8(&e, (uint8_t)in->dst); ep8(&e, (uint8_t)in->a);
             ep8(&e, AVR_NE); ep8(&e, (uint8_t)in->dst); ep8(&e, (uint8_t)in->b); break;
-        case MIR_FADD:
+
+        case MIR_UGT:
+            ep8(&e, AVR_MOV); ep8(&e, (uint8_t)in->dst); ep8(&e, (uint8_t)in->a);
+            ep8(&e, AVR_UGT); ep8(&e, (uint8_t)in->dst); ep8(&e, (uint8_t)in->b); break;
+        case MIR_ULT:
+            ep8(&e, AVR_MOV); ep8(&e, (uint8_t)in->dst); ep8(&e, (uint8_t)in->a);
+            ep8(&e, AVR_ULT); ep8(&e, (uint8_t)in->dst); ep8(&e, (uint8_t)in->b); break;
+        case MIR_UGE:
+            ep8(&e, AVR_MOV); ep8(&e, (uint8_t)in->dst); ep8(&e, (uint8_t)in->a);
+            ep8(&e, AVR_UGE); ep8(&e, (uint8_t)in->dst); ep8(&e, (uint8_t)in->b); break;
+        case MIR_ULE:
+            ep8(&e, AVR_MOV); ep8(&e, (uint8_t)in->dst); ep8(&e, (uint8_t)in->a);
+            ep8(&e, AVR_ULE); ep8(&e, (uint8_t)in->dst); ep8(&e, (uint8_t)in->b); break;        case MIR_FADD:
         case MIR_FSUB:
         case MIR_FMUL:
         case MIR_FDIV: {

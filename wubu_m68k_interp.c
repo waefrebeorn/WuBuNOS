@@ -77,6 +77,11 @@ static int cond_true(const m68k_cpu_t *cpu, uint16_t cc)
     case 0xC: return cpu->n == cpu->v;       /* BGE */
     case 0xD: return cpu->n != cpu->v;       /* BLT */
     case 0xF: return cpu->z || (cpu->n != cpu->v);   /* BLE */
+    /* unsigned: BHI BLS BCC BCS */
+    case 0x2: return !cpu->c && !cpu->z;             /* BHI: higher */
+    case 0x3: return cpu->c || cpu->z;               /* BLS: lower or same */
+    case 0x4: return !cpu->c;                        /* BCC: carry clear (>=) */
+    case 0x5: return cpu->c;                         /* BCS: carry set (<) */
     default:  return 0;
     }
 }

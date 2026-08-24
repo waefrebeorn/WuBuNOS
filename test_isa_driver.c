@@ -231,6 +231,38 @@ static void test_division(void)
 }
 
 /* Test 9: modulo (10 % 3 = 1) */
+/* unsigned compares: -1 as uint32 is 0xFFFFFFFF (huge), 1 is tiny.
+ * ULT(-1,1) must be 0 and UGT(-1,1) must be 1 — a signed backend fails this. */
+static void test_unsigned_compare(void)
+{
+    printf("-- Test: unsigned compare ((uint32)-1 vs 1) --\n");
+    const struct { wubu_mir_op_t op; int64_t want; const char *nm; } cases[] = {
+        { MIR_ULT, 0, "ult" }, { MIR_ULE, 0, "ule" },
+        { MIR_UGT, 1, "ugt" }, { MIR_UGE, 1, "uge" },
+    };
+    for (unsigned ci = 0; ci < sizeof(cases)/sizeof(cases[0]); ci++) {
+        wubu_mir_prog_t prog;
+        wubu_mir_init(&prog);
+        wubu_vr_t a = wubu_mir_const(&prog, (int64_t)(int32_t)-1);
+        wubu_vr_t b = wubu_mir_const(&prog, 1);
+        wubu_vr_t r = wubu_mir_binop(&prog, cases[ci].op, a, b);
+        wubu_mir_ret(&prog, r);
+
+        const char *names[] = {"x86-64", "8086", "m68k", "6502", "riscv", "z80", "mips", "8051", "avr", "pic", "amdgpu", "ptx", "arm64"};
+        for (int i = 0; i < 13; i++) {
+            const wubu_isa_driver_t *d = wubu_isa_find(names[i]);
+            if (!d) continue;
+            int64_t result = 0;
+            if (run_with_driver(d, &prog, &result) == 0) {
+                CHECK(result == cases[ci].want, names[i]);
+                if (result == cases[ci].want)
+                    printf("  %s: %s=%lld OK\n", names[i], cases[ci].nm, (long long)result);
+            }
+        }
+        wubu_mir_free(&prog);
+    }
+}
+
 static void test_modulo(void)
 {
     printf("-- Test: modulo (10 %% 3 = 1) --\n");
@@ -381,6 +413,7 @@ int main(void)
     test_division();
     printf("\n");
     test_modulo();
+    test_unsigned_compare();
     printf("\n");
     test_branch();
     printf("\n");

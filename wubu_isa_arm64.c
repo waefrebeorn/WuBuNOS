@@ -74,6 +74,11 @@ static WArm64CC mir_to_arm64_cc(wubu_mir_op_t op) {
     case MIR_LE: return W64CC_LE;
     case MIR_GT: return W64CC_GT;
     case MIR_GE: return W64CC_GE;
+    /* unsigned: LO(<) HS(>=) HI(>) LS(<=) */
+    case MIR_ULT: return W64CC_CC;
+    case MIR_UGE: return W64CC_CS;
+    case MIR_UGT: return W64CC_HI;
+    case MIR_ULE: return W64CC_LS;
     default: return W64CC_AL;
     }
 }
@@ -256,7 +261,8 @@ static int arm64_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
             STORE_VR(WREG_X0, in->dst);
             break;
         }
-        case MIR_EQ: case MIR_NE: case MIR_LT: case MIR_LE: case MIR_GT: case MIR_GE: {
+        case MIR_EQ: case MIR_NE: case MIR_LT: case MIR_LE: case MIR_GT: case MIR_GE:
+        case MIR_ULT: case MIR_ULE: case MIR_UGT: case MIR_UGE: {
             LOAD_VR(in->a, WREG_X9);
             LOAD_VR(in->b, WREG_X10);
             warm64_cmp_reg(&e.enc, WREG_X9, WREG_X10, 1);

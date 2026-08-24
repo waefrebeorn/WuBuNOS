@@ -173,33 +173,6 @@ static void emit_kernel_body(ptx_emitter_t *e, const wubu_mir_prog_t *p)
                      (int)rd, (int)ptx_vr(e, ins->a));
             break;
 
-        /* Comparisons: setp.eq/ne/lt/le/gt/ge — produces a 0/1 in a register */
-        case MIR_EQ:
-        case MIR_NE:
-        case MIR_LT:
-        case MIR_LE:
-        case MIR_GT:
-        case MIR_GE: {
-            rd = ptx_vr(e, ins->dst);
-            uint32_t pred = e->n_pred++;
-            const char *cmp;
-            switch (ins->op) {
-                case MIR_EQ: cmp = "eq"; break;
-                case MIR_NE: cmp = "ne"; break;
-                case MIR_LT: cmp = "lt"; break;
-                case MIR_LE: cmp = "le"; break;
-                case MIR_GT: cmp = "gt"; break;
-                case MIR_GE: cmp = "ge"; break;
-                default: cmp = "eq"; break;
-            }
-            /* PTX setp produces a predicate; we convert to int via selp */
-            ptx_emit(e, "    setp.%s.s64 p%u, %%r%d, %%r%d;\n",
-                     cmp, pred, (int)ptx_vr(e, ins->a), (int)ptx_vr(e, ins->b));
-            ptx_emit(e, "    selp.b64 %%r%d, 1, 0, p%u;\n",
-                     (int)rd, pred);
-            break;
-        }
-
         case MIR_LABEL:
             /* Label id becomes a PTX label */
             ptx_emit(e, "L_%u:\n", ins->label);
@@ -251,6 +224,31 @@ static void emit_kernel_body(ptx_emitter_t *e, const wubu_mir_prog_t *p)
             ptx_emit(e, "    cvt.u64.u32 %ra1, %rc1;\n");
             ptx_emit(e, "    add.u64 %ra1, %ra1, %ra0;\n");
             ptx_emit(e, "    st.global.s64 [%ra1], %r%d;\n", (int)ptx_vr(e, ins->b));
+            break;
+        }
+
+        case MIR_EQ: case MIR_NE: case MIR_LT: case MIR_LE:
+        case MIR_GT: case MIR_GE:
+        case MIR_ULT: case MIR_ULE: case MIR_UGT: case MIR_UGE: {
+            int rd2 = ptx_vr(e, ins->dst);
+            uint32_t pred = e->n_pred++;
+            const char *cmp;
+            switch (ins->op) {
+                case MIR_EQ:  cmp = "eq.s64";  break;
+                case MIR_NE:  cmp = "ne.s64";  break;
+                case MIR_LT:  cmp = "lt.s64";  break;
+                case MIR_LE:  cmp = "le.s64";  break;
+                case MIR_GT:  cmp = "gt.s64";  break;
+                case MIR_GE:  cmp = "ge.s64";  break;
+                case MIR_ULT: cmp = "lt.u64";  break;
+                case MIR_ULE: cmp = "le.u64";  break;
+                case MIR_UGT: cmp = "gt.u64";  break;
+                case MIR_UGE: cmp = "ge.u64";  break;
+                default:      cmp = "eq.s64";  break;
+            }
+            ptx_emit(e, "    setp.%s p%u, %%r%d, %%r%d;\n",
+                     cmp, pred, (int)ptx_vr(e, ins->a), (int)ptx_vr(e, ins->b));
+            ptx_emit(e, "    selp.b64 %%r%d, 1, 0, p%u;\n", rd2, pred);
             break;
         }
 

@@ -300,6 +300,56 @@ static int cpu6502_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_
             e8(&e, STA_ZP); e8(&e, zp_slot(in->dst));
             break;
 
+        /* unsigned compares: 6502 CMP is natively unsigned (C=1 iff a>=b).
+         *   ULT: BCC   UGE: BCS   ULE: BCC|BEQ   UGT: BCS with BEQ->false */
+        case MIR_ULT: case MIR_ULE: case MIR_UGT: case MIR_UGE: {
+            e8(&e, LDA_ZP); e8(&e, zp_slot(in->a));
+            e8(&e, CMP_ZP); e8(&e, zp_slot(in->b));
+
+            size_t cc_pos[2];
+            int n_branches = 0;
+            if (in->op == MIR_ULT) { cc_pos[n_branches++] = e.n + 1; e8(&e, BCC); e8(&e, 0x00); }
+            else if (in->op == MIR_UGE) { cc_pos[n_branches++] = e.n + 1; e8(&e, BCS); e8(&e, 0x00); }
+            else if (in->op == MIR_ULE) {
+                /* true when C==0 or Z==1: two forward branches */
+                cc_pos[n_branches++] = e.n + 1; e8(&e, BEQ); e8(&e, 0x00);
+                cc_pos[n_branches++] = e.n + 1; e8(&e, BCC); e8(&e, 0x00);
+            } else { /* UGT: true when C==1 and Z==0.
+                      * invert: BEQ skips to false... use: BCS check_next;
+                      *   check_next falls into false unless !Z.
+                      * Simplest: BEQ over the BCS:  BEQ +2 ; BCS set1 */
+                cc_pos[1] = e.n + 1; e8(&e, BEQ); e8(&e, 0x02); /* +2 skips the BCS */
+                cc_pos[0] = e.n + 1; e8(&e, BCS); e8(&e, 0x00);
+                n_branches = 1;
+            }
+
+            /* false path */
+            lda_imm8(&e, 0);
+            sta_zp8(&e, zp_slot(in->dst));
+
+            /* JMP done (3 bytes) then true path (4 bytes) */
+            size_t jmp_pos = e.n;
+            e8(&e, JMP_ABS);
+            size_t done_pos = e.n + 3 + 4;
+            e8(&e, (uint8_t)(done_pos & 0xFF));
+            e8(&e, (uint8_t)((done_pos >> 8) & 0xFF));
+
+            size_t true_pos = e.n;
+            lda_imm8(&e, 1);
+            sta_zp8(&e, zp_slot(in->dst));
+
+            /* patch the recorded forward-branch displacements to true_pos */
+            int nb = (in->op == MIR_ULE) ? 2 : 1;
+            for (int bi = 0; bi < nb; bi++) {
+                int32_t rel = (int32_t)(true_pos - (cc_pos[bi] + 1));
+                if (rel < -128) rel = -128;
+                if (rel > 127) rel = 127;
+                e.code[cc_pos[bi]] = (uint8_t)(rel & 0xFF);
+            }
+            (void)jmp_pos;
+            break;
+        }
+
         case MIR_EQ: case MIR_NE: case MIR_LT: case MIR_LE:
         case MIR_GT: case MIR_GE: {
             /* LDA a; CMP b; branch to set1 or fall to false */

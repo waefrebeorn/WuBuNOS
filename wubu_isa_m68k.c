@@ -139,6 +139,11 @@ static void move_a6_d(m68k_emitter_t *e, int16_t d16, int m)
 #define CC_GE 0xC   /* BGE */
 #define CC_LT 0xD   /* BLT */
 #define CC_LE 0xF   /* BLE */
+/* unsigned: BHI(>) BLS(<=) BCC(>=) BCS(<) — standard m68k Bcc nibbles */
+#define CC_UHI 0x2
+#define CC_ULS 0x3
+#define CC_UGE 0x4
+#define CC_ULT 0x5
 
 static void note_label(m68k_emitter_t *e, uint32_t label, size_t off)
 {
@@ -247,6 +252,7 @@ static int m68k_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_siz
             move_d_a6(&e, 0, slot_disp(in->dst));
             break;
         case MIR_EQ: case MIR_NE: case MIR_LT: case MIR_LE: case MIR_GT: case MIR_GE:
+        case MIR_ULT: case MIR_ULE: case MIR_UGT: case MIR_UGE:
         {
             /* D0 = a; D1 = b; cmp.l d1,d0; bCC set1; moveq #0,d0; bra done;
              * set1: moveq #1,d0; done: store.
@@ -264,6 +270,11 @@ static int m68k_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_siz
             case MIR_LE: cc = CC_LE; break;
             case MIR_GT: cc = CC_GT; break;
             case MIR_GE: cc = CC_GE; break;
+            /* unsigned */
+            case MIR_UGT: cc = CC_UHI; break;
+            case MIR_ULE: cc = CC_ULS; break;
+            case MIR_UGE: cc = CC_UGE; break;
+            case MIR_ULT: cc = CC_ULT; break;
             default: cc = CC_EQ; break;
             }
             /* branch to set1 IF the condition holds (Bcc.s with the

@@ -41,6 +41,10 @@
 #define EXT_LE   0x0B
 #define EXT_EQ   0x0C
 #define EXT_NE   0x0D
+#define EXT_UGT  0x0F
+#define EXT_ULT  0x10
+#define EXT_UGE  0x11
+#define EXT_ULE  0x12
 #define EXT_RET  0x0E
 #define EXT_FOP  0x20   /* soft-float: fn, slot_a, slot_b, slot_dst */
 #define EXT_FRET 0x21
@@ -163,6 +167,27 @@ int64_t wubu_8051_interp_exec(const uint8_t *code, size_t size, int64_t arg)
                     a = code[pc++]; b = code[pc++];
                     ram[0xE0] = ((int8_t)(ram[I8051_VR_BASE + a] & 0xFF) <=
                                   (int8_t)(ram[I8051_VR_BASE + b] & 0xFF)) ? 1 : 0;
+                    break;
+                /* unsigned compares: plain uint8 compare */
+                case EXT_UGT:
+                    a = code[pc++]; b = code[pc++];
+                    ram[0xE0] = ((ram[I8051_VR_BASE + a] & 0xFF) >
+                                  (ram[I8051_VR_BASE + b] & 0xFF)) ? 1 : 0;
+                    break;
+                case EXT_ULT:
+                    a = code[pc++]; b = code[pc++];
+                    ram[0xE0] = ((ram[I8051_VR_BASE + a] & 0xFF) <
+                                  (ram[I8051_VR_BASE + b] & 0xFF)) ? 1 : 0;
+                    break;
+                case EXT_UGE:
+                    a = code[pc++]; b = code[pc++];
+                    ram[0xE0] = ((ram[I8051_VR_BASE + a] & 0xFF) >=
+                                  (ram[I8051_VR_BASE + b] & 0xFF)) ? 1 : 0;
+                    break;
+                case EXT_ULE:
+                    a = code[pc++]; b = code[pc++];
+                    ram[0xE0] = ((ram[I8051_VR_BASE + a] & 0xFF) <=
+                                  (ram[I8051_VR_BASE + b] & 0xFF)) ? 1 : 0;
                     break;
                 case EXT_EQ:
                     a = code[pc++]; b = code[pc++];

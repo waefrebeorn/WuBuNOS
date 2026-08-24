@@ -160,6 +160,7 @@ static int64_t slot_disp(wubu_vr_t vr) { return (int64_t)(-((int64_t)(vr + 1) * 
 
 /* funct7 */
 #define FN7_DEFAULT 0x00
+#define FN7_SLTU    0x00   /* SLTU: funct7=0, funct3=3 (unsigned less-than) */
 #define FN7_MUL     0x01   /* MUL: funct7[5:0]=0x01, funct3=0x0 */
 #define FN7_DIV     0x01   /* DIV: funct7[5:0]=0x01, funct3=0x4 */
 #define FN7_DIVU    0x01   /* DIVU: funct7[5:0]=0x01, funct3=0x5 */
@@ -497,7 +498,8 @@ static int riscv_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
             break;
         }
         case MIR_EQ: case MIR_NE: case MIR_LT: case MIR_LE:
-        case MIR_GT: case MIR_GE: {
+        case MIR_GT: case MIR_GE:
+        case MIR_ULT: case MIR_ULE: case MIR_UGT: case MIR_UGE: {
             /* Compare: load a (t0), load b (t1), compute the boolean
              * 0/1 into t0, store to dst. All signed:
              *   LT:  slt t0, a, b
@@ -547,6 +549,33 @@ static int riscv_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
                  * (a REGISTER compare; putting t0's number in an
                  * immediate would compare the constant 5) */
                 op_r(&e, FN7_DEFAULT, REG_T0, REG_ZERO, FN3_SLTU, REG_T0);
+                break;
+            /* unsigned compares: SLTU is the native unsigned form.
+             *   ULT: sltu t0, a, b
+             *   ULE: sltu t0, b, a; xori  -> NOT(b < a)
+             *   UGT: sltu t0, b, a
+             *   UGE: sltu t0, a, b; xori  -> NOT(a < b) */
+            case MIR_ULT:
+                op_r(&e, FN7_SLTU, REG_T1, REG_T0, FN3_SLTU, REG_T0);
+                break;
+            case MIR_ULE:
+                op_r(&e, FN7_SLTU, REG_T0, REG_T1, FN3_SLTU, REG_T0);
+                {
+                    uint32_t inst = (1 << 20) | (REG_T0 << 15) |
+                                    (0x4 << 12) | (REG_T0 << 7) | OPC_OP_IMM;
+                    emit32(&e, inst);
+                }
+                break;
+            case MIR_UGT:
+                op_r(&e, FN7_SLTU, REG_T0, REG_T1, FN3_SLTU, REG_T0);
+                break;
+            case MIR_UGE:
+                op_r(&e, FN7_SLTU, REG_T1, REG_T0, FN3_SLTU, REG_T0);
+                {
+                    uint32_t inst = (1 << 20) | (REG_T0 << 15) |
+                                    (0x4 << 12) | (REG_T0 << 7) | OPC_OP_IMM;
+                    emit32(&e, inst);
+                }
                 break;
             default:
                 break;

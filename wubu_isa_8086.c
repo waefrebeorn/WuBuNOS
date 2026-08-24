@@ -218,6 +218,7 @@ static int i8086_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
             emit_store_ax_slot(&e, slot_disp(in->dst));
             break;
         case MIR_EQ: case MIR_NE: case MIR_LT: case MIR_LE: case MIR_GT: case MIR_GE:
+        case MIR_ULT: case MIR_ULE: case MIR_UGT: case MIR_UGE:
         {
             uint32_t l_set1 = internal_label(&e);
             uint32_t l_done = internal_label(&e);
@@ -232,6 +233,11 @@ static int i8086_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
             case MIR_LE: cc = 0x7E; break;     /* jle */
             case MIR_GT: cc = 0x7F; break;     /* jg */
             case MIR_GE: cc = 0x7D; break;     /* jge */
+            /* unsigned 16-bit: JB(<) JBE(<=) JA(>) JAE(>=) */
+            case MIR_ULT: cc = 0x72; break;
+            case MIR_ULE: cc = 0x76; break;
+            case MIR_UGT: cc = 0x77; break;
+            case MIR_UGE: cc = 0x73; break;
             default: cc = 0x74; break;
             }
             /* jcc set1 (8-bit disp, patched) */
