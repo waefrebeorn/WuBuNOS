@@ -306,7 +306,8 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
         case MIR_ADD: case MIR_SUB: case MIR_MUL: case MIR_DIV: case MIR_MOD:
         case MIR_AND: case MIR_OR: case MIR_XOR:
         case MIR_FEQ: case MIR_FNE: case MIR_FLT: case MIR_FLE:
-        case MIR_FADD: case MIR_FSUB: case MIR_FMUL: case MIR_FDIV: {
+        case MIR_FADD: case MIR_FSUB: case MIR_FMUL: case MIR_FDIV:
+        case MIR_FNEG: {
             /* Load 'a' into rax (accumulator) */
             int sa = VR_ENC(in->a);
             if (sa == 0) {
@@ -340,6 +341,23 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             case MIR_XOR: rex(&e,1,0,0,0); e8(&e, 0x31); e8(&e, 0xF8); break;
 
             /* ---- SSE single-precision float ops (values are f32 bits) ---- */
+            case MIR_FNEG: {
+                int sa4 = VR_ENC(in->a);
+                if (sa4 >= 0) emit_mov_reg(&e, 0, sa4);
+                else emit_load_rbp(&e, 0, VR_SPILL(in->a));
+                /* mov edi, 0x80000000 : BF 00 00 00 80 */
+                e8(&e, 0xBF); e8(&e, 0x00); e8(&e, 0x00); e8(&e, 0x00); e8(&e, 0x80);
+                /* movd xmm1, edi */
+                e8(&e, 0x66); e8(&e, 0x0F); e8(&e, 0x6E); e8(&e, 0xCF);
+                /* movd xmm0, eax */
+                e8(&e, 0x66); e8(&e, 0x0F); e8(&e, 0x6E); e8(&e, 0xC0);
+                /* xorps xmm0, xmm1 : 0F 57 C1 */
+                e8(&e, 0x0F); e8(&e, 0x57); e8(&e, 0xC1);
+                /* movd eax, xmm0 */
+                e8(&e, 0x66); e8(&e, 0x0F); e8(&e, 0x7E); e8(&e, 0xC0);
+                break;
+            }
+
             case MIR_FEQ: case MIR_FNE: case MIR_FLT: case MIR_FLE: {
                 /* load a -> rax, b -> rdi (same staging as arithmetic group) */
                 int sa3 = VR_ENC(in->a);
