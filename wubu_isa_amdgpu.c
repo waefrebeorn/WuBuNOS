@@ -151,6 +151,143 @@ static void emit_amdgpu_kernel(amdgpu_emitter_t *e, const wubu_mir_prog_t *p)
             amd_emit(e, "  v_sub_nc_u32 v%d, 0, v%d\n", dst, sa);
             break;
         }
+        /* ---- f32 float arithmetic (values are f32 bits in VGPR) ---- */
+        case MIR_FADD: {
+            uint32_t sa = (uint32_t)ins->a + 1;
+            uint32_t sb = (uint32_t)ins->b + 1;
+            amd_emit(e, "  v_add_f32 v%d, v%d, v%d\n", dst, sa, sb);
+            break;
+        }
+        case MIR_FSUB: {
+            uint32_t sa = (uint32_t)ins->a + 1;
+            uint32_t sb = (uint32_t)ins->b + 1;
+            amd_emit(e, "  v_sub_f32 v%d, v%d, v%d\n", dst, sa, sb);
+            break;
+        }
+        case MIR_FMUL: {
+            uint32_t sa = (uint32_t)ins->a + 1;
+            uint32_t sb = (uint32_t)ins->b + 1;
+            amd_emit(e, "  v_mul_f32 v%d, v%d, v%d\n", dst, sa, sb);
+            break;
+        }
+        case MIR_FDIV: {
+            uint32_t sa = (uint32_t)ins->a + 1;
+            uint32_t sb = (uint32_t)ins->b + 1;
+            /* v_div_fmas_f32: use div_scale + div_fmas sequence.
+             * For simplicity, emit v_div_f32_e32 (RDNA2 supports it). */
+            amd_emit(e, "  v_div_f32_e32 v%d, v%d, v%d\n", dst, sa, sb);
+            break;
+        }
+        case MIR_FNEG: {
+            uint32_t sa = (uint32_t)ins->a + 1;
+            /* v_sub_f32 vDST, 0.0, vSRC — or use v_xor with sign bit
+             * v_xor_b32 on the high byte is simpler, but v_sub_f32
+             * with literal 0.0 is cleaner. */
+            amd_emit(e, "  v_sub_f32 v%d, 0.0, v%d\n", dst, sa);
+            break;
+        }
+        /* ---- f32 comparisons: return 1.0 or 0.0 as int (0 or 1) ---- */
+        case MIR_FEQ: {
+            uint32_t sa = (uint32_t)ins->a + 1;
+            uint32_t sb = (uint32_t)ins->b + 1;
+            amd_emit(e, "  v_cmp_eq_f32_e32 vcc, v%d, v%d\n", sa, sb);
+            amd_emit(e, "  v_cndmask_b32 v%d, 0, 1, vcc\n", dst);
+            break;
+        }
+        case MIR_FNE: {
+            uint32_t sa = (uint32_t)ins->a + 1;
+            uint32_t sb = (uint32_t)ins->b + 1;
+            amd_emit(e, "  v_cmp_lg_f32_e32 vcc, v%d, v%d\n", sa, sb);
+            amd_emit(e, "  v_cndmask_b32 v%d, 0, 1, vcc\n", dst);
+            break;
+        }
+        case MIR_FLT: {
+            uint32_t sa = (uint32_t)ins->a + 1;
+            uint32_t sb = (uint32_t)ins->b + 1;
+            amd_emit(e, "  v_cmp_lt_f32_e32 vcc, v%d, v%d\n", sa, sb);
+            amd_emit(e, "  v_cndmask_b32 v%d, 0, 1, vcc\n", dst);
+            break;
+        }
+        case MIR_FLE: {
+            uint32_t sa = (uint32_t)ins->a + 1;
+            uint32_t sb = (uint32_t)ins->b + 1;
+            amd_emit(e, "  v_cmp_le_f32_e32 vcc, v%d, v%d\n", sa, sb);
+            amd_emit(e, "  v_cndmask_b32 v%d, 0, 1, vcc\n", dst);
+            break;
+        }
+        /* ---- f64 (double) arithmetic ---- */
+        case MIR_DADD: {
+            uint32_t sa = (uint32_t)ins->a + 1;
+            uint32_t sb = (uint32_t)ins->b + 1;
+            amd_emit(e, "  v_add_f64 v%d, v%d, v%d\n", dst, sa, sb);
+            break;
+        }
+        case MIR_DSUB: {
+            uint32_t sa = (uint32_t)ins->a + 1;
+            uint32_t sb = (uint32_t)ins->b + 1;
+            amd_emit(e, "  v_sub_f64 v%d, v%d, v%d\n", dst, sa, sb);
+            break;
+        }
+        case MIR_DMUL: {
+            uint32_t sa = (uint32_t)ins->a + 1;
+            uint32_t sb = (uint32_t)ins->b + 1;
+            amd_emit(e, "  v_mul_f64 v%d, v%d, v%d\n", dst, sa, sb);
+            break;
+        }
+        case MIR_DDIV: {
+            uint32_t sa = (uint32_t)ins->a + 1;
+            uint32_t sb = (uint32_t)ins->b + 1;
+            amd_emit(e, "  v_div_f64_e32 v%d, v%d, v%d\n", dst, sa, sb);
+            break;
+        }
+        case MIR_DNEG: {
+            uint32_t sa = (uint32_t)ins->a + 1;
+            amd_emit(e, "  v_sub_f64 v%d, 0.0, v%d\n", dst, sa);
+            break;
+        }
+        /* ---- int-float conversions ---- */
+        case MIR_ITOF: {
+            uint32_t sa = (uint32_t)ins->a + 1;
+            amd_emit(e, "  v_cvt_f32_i32 v%d, v%d\n", dst, sa);
+            break;
+        }
+        case MIR_FTOI: {
+            uint32_t sa = (uint32_t)ins->a + 1;
+            amd_emit(e, "  v_cvt_i32_f32 v%d, v%d\n", dst, sa);
+            break;
+        }
+        case MIR_DITOF: {
+            uint32_t sa = (uint32_t)ins->a + 1;
+            amd_emit(e, "  v_cvt_f64_i32 v%d, v%d\n", dst, sa);
+            break;
+        }
+        case MIR_DTOI: {
+            uint32_t sa = (uint32_t)ins->a + 1;
+            amd_emit(e, "  v_cvt_i32_f64 v%d, v%d\n", dst, sa);
+            break;
+        }
+        /* ---- f32<->f64 conversion ---- */
+        case MIR_F32_TO_F64: {
+            uint32_t sa = (uint32_t)ins->a + 1;
+            amd_emit(e, "  v_cvt_f64_f32 v%d, v%d\n", dst, sa);
+            break;
+        }
+        case MIR_F64_TO_F32: {
+            uint32_t sa = (uint32_t)ins->a + 1;
+            amd_emit(e, "  v_cvt_f32_f64 v%d, v%d\n", dst, sa);
+            break;
+        }
+        /* ---- bf16 conversions ---- */
+        case MIR_BF16_TO_F32: {
+            uint32_t sa = (uint32_t)ins->a + 1;
+            amd_emit(e, "  v_cvt_f32_bf16 v%d, v%d\n", dst, sa);
+            break;
+        }
+        case MIR_F32_TO_BF16: {
+            uint32_t sa = (uint32_t)ins->a + 1;
+            amd_emit(e, "  v_cvt_bf16_f32 v%d, v%d\n", dst, sa);
+            break;
+        }
         case MIR_NOT: {
             uint32_t sa = (uint32_t)ins->a + 1;
             /* v_not_b32 vDST, vSRC */
@@ -281,7 +418,11 @@ static void amdgpu_describe(void)
     printf("  Exec model:    SIMT (32-wide wavefronts)\n");
     printf("  Compile:       MIR -> AMDGPU assembly text\n");
     printf("  Run:           AMDGPU -> code object -> GPU launch\n");
-    printf("  MIR ops:       ADD SUB MUL AND OR XOR SHL SHR NEG NOT MOV RET\n");
+    printf("  MIR ops:       ADD SUB MUL AND OR XOR SHL SHR NEG NOT MOV RET\\n");
+    printf("  Float (f32):   FADD FSUB FMUL FDIV FNEG FEQ FNE FLT FLE\n");
+    printf("  Float (f64):   DADD DSUB DMUL DDIV DNEG\n");
+    printf("  Conversions:   ITOF FTOI DITOF DTOI F32_TO_F64 F64_TO_F32\n");
+    printf("  BF16:          BF16_TO_F32 F32_TO_BF16\n");
     printf("  Registers:     v0-v255 (VGPRs), s0-s103 (SGPRs)\n");
 }
 
