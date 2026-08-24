@@ -32,6 +32,8 @@ typedef struct {
     uint16_t ix, iy;
     uint8_t halted;
     uint8_t mem[Z80_MEM];
+    uint16_t call_stack[32];
+    int call_sp;
     uint8_t iflag;   /* the interrupt flag (EI/DI) — minimal */
     uint32_t fret;   /* soft-float return bits (hostcall fn=11) */
     int fret_valid;
@@ -412,6 +414,31 @@ int64_t wubu_z80_run(const uint8_t *code, size_t size, int64_t arg)
             case 26: {
                 uint16_t cell = cpu.mem[sb];   /* 1-byte cell index */
                 cpu.mem[(size_t)cell * 8u] = cpu.mem[sa];
+                r = 0;
+                break;
+            }
+            /* CALL: the 2 bytes after the prologue are the abs16 target.
+             * pc already points past dst/sa/sb (consumed by the prologue). */
+            case 27: {
+                if (cpu.call_sp < 32) {
+                    uint16_t target = cpu.mem[cpu.pc] | ((uint16_t)cpu.mem[cpu.pc+1] << 8);
+                    cpu.pc += 2;
+                    cpu.call_stack[cpu.call_sp++] = cpu.pc;
+                    cpu.pc = target;
+                }
+                r = 0;
+                break;
+            }
+            /* FUNC_RET: sa is the slot holding the return byte (2-byte LE). */
+            case 28: {
+                uint8_t v = cpu.mem[sa];
+                cpu.mem[0] = v;   /* vr0's slot = addr 0 (z80_slot_addr(0)) */
+                if (cpu.call_sp > 0) {
+                    cpu.pc = cpu.call_stack[--cpu.call_sp];
+                } else {
+                    cpu.a = v;
+                    cpu.halted = 1;
+                }
                 r = 0;
                 break;
             }

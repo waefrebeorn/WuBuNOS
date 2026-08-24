@@ -443,6 +443,14 @@ static void emit_compare(z80_emitter_t *e, int mir_op, uint16_t va,
     note_label(e, done, e->n);
 }
 
+
+/* is instruction index `idx` inside any declared function body? */
+static bool z80_in_func_body(const wubu_mir_prog_t *p, size_t idx) {
+    for (int f = 0; f < p->n_funcs; f++)
+        if (idx >= p->funcs[f].start && idx < p->funcs[f].end) return true;
+    return false;
+}
+
 static int z80_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size)
 {
     size_t max_vr = 0;
@@ -455,6 +463,22 @@ static int z80_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
 
     z80_emitter_t e;
     memset(&e, 0, sizeof(e));
+    /* CALL fixups + function offsets + entry trampoline */
+    typedef struct { size_t pos; uint32_t func_id; } zcall_fixup_t;
+    zcall_fixup_t *callps = NULL;
+    size_t ncallp = 0, ncallp_cap = 0;
+    size_t *func_off = calloc((size_t)(p->n_funcs > 0 ? p->n_funcs : 1), sizeof(size_t));
+    for (int f = 0; f < p->n_funcs; f++) func_off[f] = (size_t)-1;
+    uint32_t max_func_end = 0;
+    for (int f = 0; f < p->n_funcs; f++)
+        if (p->funcs[f].end > max_func_end) max_func_end = p->funcs[f].end;
+    size_t entry_off = (size_t)-1;
+    size_t entry_jmp_pos = 0;
+    if (p->n_funcs > 0) {
+        e8(&e, 0xC3);          /* JP nn */
+        entry_jmp_pos = e.n;
+        e.n += 2;
+    }
     e.frame = z80_frame_size(max_vr);
     e.n_labels = p->n_labels;
     e.label_offsets = calloc(e.n_labels, sizeof(size_t));
@@ -469,6 +493,11 @@ static int z80_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             note_label(&e, in->label, e.n);
             continue;
         }
+        for (int fi = 0; fi < p->n_funcs; fi++)
+            if ((size_t)p->funcs[fi].start == i && func_off[fi] == (size_t)-1)
+                func_off[fi] = e.n;
+        if ((uint32_t)i == max_func_end && entry_off == (size_t)-1)
+            entry_off = e.n;
         uint16_t va = z80_slot_addr(in->a);
         uint16_t vb = z80_slot_addr(in->b);
         uint16_t vd = z80_slot_addr(in->dst);
@@ -826,11 +855,34 @@ static int z80_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             patch_push(&e, &patches, &np, &cp, jr_disp, 1, in->label);
             break;
 
+        case MIR_CALL: {
+            /* hostcall fn=27 CALL: full prologue (dst/sa/sb unused) followed
+             * by the 16-bit absolute code offset of the callee entry. */
+            e8(&e, 0x0B); e8(&e, 27);
+            e16(&e, 0); e16(&e, 0); e16(&e, 0);
+            if (ncallp == ncallp_cap) {
+                ncallp_cap = ncallp_cap ? ncallp_cap * 2 : 8;
+                callps = realloc(callps, ncallp_cap * sizeof(*callps));
+            }
+            callps[ncallp].pos = e.n;
+            callps[ncallp].func_id = in->func_id;
+            ncallp++;
+            e.n += 2;   /* reserve abs16 target */
+            break;
+        }
+
         case MIR_RET:
-            /* LD A, (va); HALT (the interpreter reads A) */
-            e8(&e, Z80_LD_A_NN);
-            e16(&e, va);
-            e8(&e, Z80_HALT);
+            if (z80_in_func_body(p, i)) {
+                /* FUNC_RET hostcall: value slot = va */
+                e8(&e, 0x0B); e8(&e, 28);
+                e16(&e, 0); e16(&e, va); e16(&e, 0);
+                e8(&e, Z80_HALT);
+            } else {
+                /* LD A, (va); HALT (the interpreter reads A) */
+                e8(&e, Z80_LD_A_NN);
+                e16(&e, va);
+                e8(&e, Z80_HALT);
+            }
             break;
 
         default:
@@ -841,6 +893,22 @@ static int z80_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
     if (e.n == 0 || e.code[e.n - 1] != Z80_HALT) {
         e8(&e, Z80_HALT);
     }
+
+    /* CALL fixup pass */
+    for (size_t ci2 = 0; ci2 < ncallp; ci2++) {
+        size_t t = (size_t)-1;
+        for (int f = 0; f < p->n_funcs; f++)
+            if ((uint32_t)f == callps[ci2].func_id && func_off[f] != (size_t)-1) { t = func_off[f]; break; }
+        if (t == (size_t)-1 || t > 0xFFFF) continue;
+        e.code[callps[ci2].pos] = (uint8_t)(t & 0xFF);
+        e.code[callps[ci2].pos + 1] = (uint8_t)((t >> 8) & 0xFF);
+    }
+    if (p->n_funcs > 0 && entry_off != (size_t)-1 && entry_off <= 0xFFFF) {
+        e.code[entry_jmp_pos] = (uint8_t)(entry_off & 0xFF);
+        e.code[entry_jmp_pos + 1] = (uint8_t)((entry_off >> 8) & 0xFF);
+    }
+    free(callps);
+    free(func_off);
 
     /* patch pass */
     for (size_t i = 0; i < np; i++) {
