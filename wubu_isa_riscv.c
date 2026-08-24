@@ -348,6 +348,14 @@ static void not_reg(riscv_emitter_t *e, int rd, int rs1)
 
 /* ---- MIR lowering ---- */
 
+
+/* is instruction index `idx` inside any declared function body? */
+static bool riscv_in_func_body(const wubu_mir_prog_t *p, size_t idx) {
+    for (int f = 0; f < p->n_funcs; f++)
+        if (idx >= p->funcs[f].start && idx < p->funcs[f].end) return true;
+    return false;
+}
+
 static int riscv_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size)
 {
     size_t max_vr = 0;
@@ -360,6 +368,16 @@ static int riscv_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
 
     riscv_emitter_t e;
     memset(&e, 0, sizeof(e));
+    typedef struct { size_t pos; uint32_t func_id; } rv_fixup_t;
+    rv_fixup_t *callps = NULL;
+    size_t ncallp = 0, ncallp_cap = 0;
+    size_t *func_off = calloc((size_t)(p->n_funcs > 0 ? p->n_funcs : 1), sizeof(size_t));
+    for (int f = 0; f < p->n_funcs; f++) func_off[f] = (size_t)-1;
+    uint32_t max_func_end = 0;
+    for (int f = 0; f < p->n_funcs; f++)
+        if (p->funcs[f].end > max_func_end) max_func_end = p->funcs[f].end;
+    size_t entry_off = (size_t)-1;
+    size_t entry_jmp_pos = 0;
     e.frame = (max_vr + 1) * 8 + 128;  /* 64-bit slots + slack */
     e.n_labels = p->n_labels;
     e.label_offsets = calloc(e.n_labels, sizeof(size_t));
@@ -375,12 +393,24 @@ static int riscv_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
     /* set fp = sp */
     mv(&e, REG_FP, REG_SP);
 
+    /* entry trampoline: jump over function bodies to the main-line code.
+     * Must come after the prologue so fp/sp are set up before any slot access. */
+    if (p->n_funcs > 0) {
+        entry_jmp_pos = e.n;
+        e.n += 4;   /* reserve JAL x0, +off (patched below) */
+    }
+
     for (size_t i = 0; i < p->n; i++) {
         const wubu_mir_instr_t *in = &p->ins[i];
         if (in->op == MIR_LABEL) {
             note_label(&e, in->label, e.n);
             continue;
         }
+        for (int fi = 0; fi < p->n_funcs; fi++)
+            if ((size_t)p->funcs[fi].start == i && func_off[fi] == (size_t)-1)
+                func_off[fi] = e.n;
+        if ((uint32_t)i == max_func_end && entry_off == (size_t)-1)
+            entry_off = e.n;
         switch (in->op) {
         case MIR_CONST:
             /* lui + addi for large immediates, or addi for small */
@@ -664,7 +694,32 @@ static int riscv_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
                            (int32_t)slot_off(0, in->a));
             break;
 
+        case MIR_CALL: {
+            /* hostcall fn=27 CALL: prologue + abs32 BE target (patched later).
+             * emit_fhostcall writes: custom opcode, fn, dst, sa, sb words. */
+            emit_fhostcall(&e, 27, 0, 0, 0);
+            if (ncallp == ncallp_cap) {
+                ncallp_cap = ncallp_cap ? ncallp_cap * 2 : 8;
+                callps = realloc(callps, ncallp_cap * sizeof(*callps));
+            }
+            callps[ncallp].pos = e.n;
+            callps[ncallp].func_id = in->func_id;
+            ncallp++;
+            e.n += 4;
+            break;
+        }
+
         case MIR_RET:
+            if (riscv_in_func_body(p, i)) {
+                /* FUNC_RET: result slot via sa */
+                emit_fhostcall(&e, 28, 0, (int32_t)slot_off(e.frame, in->a), 0);
+                /* epilogue: restore fp, deallocate frame, ret */
+                mv(&e, REG_SP, REG_FP);
+                load_d(&e, REG_FP, REG_SP, 0);
+                addi(&e, REG_SP, REG_SP, (int32_t)e.frame);
+                ret_instr(&e);
+                break;
+            }
             load_d(&e, REG_A0, REG_FP, (int32_t)slot_off(e.frame, in->a));
             /* epilogue: restore fp, deallocate frame */
             mv(&e, REG_SP, REG_FP);
@@ -705,6 +760,35 @@ static int riscv_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
         }
         memcpy(&e.code[patches[i].pos], &inst, 4);
     }
+    /* CALL fixup pass: write abs32 BE target after each CALL prologue */
+    for (size_t ci8 = 0; ci8 < ncallp; ci8++) {
+        size_t t = (size_t)-1;
+        for (int f = 0; f < p->n_funcs; f++)
+            if ((uint32_t)f == callps[ci8].func_id && func_off[f] != (size_t)-1) { t = func_off[f]; break; }
+        if (t == (size_t)-1 || t > 0xFFFFFFFFu) continue;
+        e.code[callps[ci8].pos]     = (uint8_t)(t & 0xFF);              /* LE */
+        e.code[callps[ci8].pos + 1] = (uint8_t)((t >> 8) & 0xFF);
+        e.code[callps[ci8].pos + 2] = (uint8_t)((t >> 16) & 0xFF);
+        e.code[callps[ci8].pos + 3] = (uint8_t)((t >> 24) & 0xFF);
+    }
+    /* entry trampoline: JAL x0 (J-type) to entry_off.
+     * J-type imm layout: imm[20|10:1|11|19:12] in bits [31|30:21|20|19:12] */
+    if (p->n_funcs > 0 && entry_off != (size_t)-1) {
+        uint32_t off = (uint32_t)entry_off;
+        uint32_t inst = 0x0000006Fu
+            | ((off & 0x100000) << (31-20))
+            | (((off >> 1) & 0x3FF) << 21)
+            | (((off >> 11) & 0x1) << 20)
+            | (((off >> 12) & 0xFF) << 12);
+        e.code[entry_jmp_pos]     = (uint8_t)(inst & 0xFF);
+        e.code[entry_jmp_pos+1]   = (uint8_t)((inst >> 8) & 0xFF);
+        e.code[entry_jmp_pos+2]   = (uint8_t)((inst >> 16) & 0xFF);
+        e.code[entry_jmp_pos+3]   = (uint8_t)((inst >> 24) & 0xFF);
+    }
+    free(callps);
+    free(func_off);
+
+
     free(patches);
 
 
