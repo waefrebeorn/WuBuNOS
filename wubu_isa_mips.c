@@ -31,7 +31,7 @@ typedef struct {
 } mips_emitter_t;
 
 static void e8(mips_emitter_t *e, uint8_t b) {
-    if (e->n == e->cap) { e->cap = e->cap ? e->cap*2 : 512; e->code = realloc(e->code, e->cap); }
+    if (e->n + 1 > e->cap) { e->cap = e->cap ? e->cap*2 : 512; e->code = realloc(e->code, e->cap); }
     e->code[e->n++] = b;
 }
 static void e32(mips_emitter_t *e, uint32_t w) {
@@ -204,7 +204,8 @@ static int mips_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_siz
     size_t entry_jmp_pos = 0;
     if (p->n_funcs > 0) {
         entry_jmp_pos = e.n;
-        e.n += 4;   /* reserve BE jump: opcode byte + 3-byte offset */
+        /* reserve WUBU_JUMP: 4B opcode + 3B target + 1B pad (word align) */
+        for (int z = 0; z < 8; z++) e8(&e, 0x00);
     }
     e.frame = (max_vr + 1) * 4 + 64;
     e.n_labels = p->n_labels;
@@ -226,9 +227,9 @@ static int mips_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_siz
         if (in->op == MIR_LABEL) { note_label(&e, in->label, e.n / 4); continue; }
         for (int fi = 0; fi < p->n_funcs; fi++)
             if ((size_t)p->funcs[fi].start == i && func_off[fi] == (size_t)-1)
-                func_off[fi] = e.n / 4;   /* word-addressed like labels */
+                func_off[fi] = e.n;   /* byte offset (interp pc is byte-based) */
         if ((uint32_t)i == max_func_end && entry_off == (size_t)-1)
-            entry_off = e.n / 4;
+            entry_off = e.n;   /* byte offset */
 
         switch (in->op) {
         case MIR_CONST: {
@@ -465,15 +466,12 @@ static int mips_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_siz
 
         case MIR_RET:
             if (mips_in_func_body(p, i)) {
-                /* FUNC_RET: result slot; interp pops the call stack */
+                /* FUNC_RET: interp pops the software call stack and resumes
+                 * the caller directly — no hardware epilogue needed. */
                 e32(&e, 0xFC000000u); e32(&e, 28);
                 e32(&e, 0);
                 e32(&e, (uint32_t)slot_off(in->a));
                 e32(&e, 0);
-                /* epilogue: restore $ra, dealloc frame, jr $ra */
-                e32(&e, MIPS_LW(29, 31, (uint16_t)(e.frame - 4)));
-                e32(&e, mips_addui(29, 29, (int16_t)e.frame));
-                e32(&e, 0x03E00008);  /* jr $ra */
                 break;
             }
             e32(&e, MIPS_LW(29, MIPS_REG_T0, (uint16_t)slot_off(in->a)));
@@ -513,7 +511,11 @@ static int mips_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_siz
     }
 
     free(patches);
-    /* CALL fixup: write BE target (byte offset within code buffer? match interp) */
+    if (getenv("WUBU_CALL_DEBUG"))
+        fprintf(stderr, "[mips fixups] ncallp=%zu entry_jmp_pos=%zu entry_off=%zu func0=%zu\n",
+                ncallp, entry_jmp_pos, entry_off,
+                p->n_funcs > 0 ? func_off[0] : 0);
+    /* CALL fixup: write BE target (word offset converted to bytes for interp pc) */
     for (size_t ci9 = 0; ci9 < ncallp; ci9++) {
         size_t t = (size_t)-1;
         for (int f = 0; f < p->n_funcs; f++)
@@ -523,12 +525,16 @@ static int mips_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_siz
         e.code[callps[ci9].pos + 1] = (uint8_t)((t >> 8) & 0xFF);
         e.code[callps[ci9].pos + 2] = (uint8_t)(t & 0xFF);
     }
-    /* entry trampoline: custom BE jump opcode + 3-byte word offset */
+    /* entry trampoline: WUBU_JUMP (0xFC000001) + 3-byte BE byte target */
     if (p->n_funcs > 0 && entry_off != (size_t)-1 && entry_off <= 0xFFFFFF) {
-        e.code[entry_jmp_pos]     = 0x00;
-        e.code[entry_jmp_pos + 1] = (uint8_t)((entry_off >> 16) & 0xFF);
-        e.code[entry_jmp_pos + 2] = (uint8_t)((entry_off >> 8) & 0xFF);
-        e.code[entry_jmp_pos + 3] = (uint8_t)(entry_off & 0xFF);
+        size_t eb = entry_off;
+        e.code[entry_jmp_pos]     = 0xFC;
+        e.code[entry_jmp_pos + 1] = 0x00;
+        e.code[entry_jmp_pos + 2] = 0x00;
+        e.code[entry_jmp_pos + 3] = 0x01;
+        e.code[entry_jmp_pos + 4] = (uint8_t)((eb >> 16) & 0xFF);
+        e.code[entry_jmp_pos + 5] = (uint8_t)((eb >> 8) & 0xFF);
+        e.code[entry_jmp_pos + 6] = (uint8_t)(eb & 0xFF);
     }
     free(callps);
     free(func_off);

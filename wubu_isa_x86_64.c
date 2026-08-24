@@ -43,7 +43,7 @@ typedef struct {
     int32_t spare_off;           /* emergency spill slot below the frame */
 } x86_emitter_t;
 
-static void e8(x86_emitter_t *e, uint8_t b) { if (e->n == e->cap) { e->cap = e->cap ? e->cap*2 : 256; e->code = realloc(e->code, e->cap); } e->code[e->n++] = b; }
+static void e8(x86_emitter_t *e, uint8_t b) { if (e->n + 1 > e->cap) { e->cap = e->cap ? e->cap*2 : 256; e->code = realloc(e->code, e->cap); } e->code[e->n++] = b; }
 static void e32(x86_emitter_t *e, uint32_t v) { e8(e, v & 0xFF); e8(e, (v >> 8) & 0xFF); e8(e, (v >> 16) & 0xFF); e8(e, (v >> 24) & 0xFF); }
 static void e64(x86_emitter_t *e, uint64_t v) { for (int i = 0; i < 8; i++) e8(e, (v >> (8*i)) & 0xFF); }
 static void rex(x86_emitter_t *e, int w, int r, int x, int b) { e8(e, 0x40 | (w<<3) | (r<<2) | (x<<1) | b); }
@@ -288,7 +288,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
     /* entry trampoline: jmp rel32 over function bodies to main */
     if (p->n_funcs > 0) {
         entry_jmp_pos = e.n;
-        e.n += 5;
+        for (int z = 0; z < 5; z++) e8(&e, 0x90);   /* NOPs, patched to jmp rel32 */
     }
 
     /* Helper: get x86 encoding for vr (returns -1 if spilled) */

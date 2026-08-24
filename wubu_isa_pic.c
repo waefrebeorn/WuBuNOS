@@ -29,7 +29,7 @@ typedef struct {
 } pic_emitter_t;
 
 static void pic_ep8(pic_emitter_t *e, uint8_t b) {
-    if (e->n == e->cap) { e->cap = e->cap ? e->cap * 2 : 256; e->code = realloc(e->code, e->cap); }
+    if (e->n + 1 > e->cap) { e->cap = e->cap ? e->cap * 2 : 256; e->code = realloc(e->code, e->cap); }
     e->code[e->n++] = b;
 }
 
