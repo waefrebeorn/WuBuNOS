@@ -51,6 +51,9 @@ static void note_label(avr_emitter_t *e, uint32_t label, size_t off) {
 #define AVR_ADD  0x02
 #define AVR_FOP  0x20   /* soft-float hostcall */
 #define AVR_MEMOP 0x23   /* MIR memory LOAD/STORE */
+#define AVR_CALL 0x24
+#define AVR_FUNC_RET 0x25
+#define AVR_JMP 0x26
 #define AVR_FRET 0x21   /* soft-float return */
 #define AVR_SUB  0x03
 #define AVR_AND  0x04
@@ -77,9 +80,32 @@ static void note_label(avr_emitter_t *e, uint32_t label, size_t off) {
 #define AVR_UGE  0x18
 #define AVR_ULE  0x19
 
+
+/* is instruction index `idx` inside any declared function body? */
+static bool avr_in_func_body(const wubu_mir_prog_t *p, size_t idx) {
+    for (int f = 0; f < p->n_funcs; f++)
+        if (idx >= p->funcs[f].start && idx < p->funcs[f].end) return true;
+    return false;
+}
+
 static int avr_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size) {
     avr_emitter_t e;
     memset(&e, 0, sizeof(e));
+    typedef struct { size_t pos; uint32_t func_id; } avr_fixup_t;
+    avr_fixup_t *callps = NULL;
+    size_t ncallp = 0, ncallp_cap = 0;
+    size_t *func_off = calloc((size_t)(p->n_funcs > 0 ? p->n_funcs : 1), sizeof(size_t));
+    for (int f = 0; f < p->n_funcs; f++) func_off[f] = (size_t)-1;
+    uint32_t max_func_end = 0;
+    for (int f = 0; f < p->n_funcs; f++)
+        if (p->funcs[f].end > max_func_end) max_func_end = p->funcs[f].end;
+    size_t entry_off = (size_t)-1;
+    size_t entry_jmp_pos = 0;
+    if (p->n_funcs > 0) {
+        ep8(&e, AVR_JMP);
+        entry_jmp_pos = e.n;
+        e.n += 2;
+    }
     e.n_labels = p->n_labels;
     e.label_offsets = calloc(e.n_labels, sizeof(size_t));
     for (size_t i = 0; i < e.n_labels; i++) e.label_offsets[i] = (size_t)-1;
@@ -88,6 +114,11 @@ static int avr_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
         const wubu_mir_instr_t *in = &p->ins[i];
 
         if (in->op == MIR_LABEL) { note_label(&e, in->label, e.n); continue; }
+        for (int fi = 0; fi < p->n_funcs; fi++)
+            if ((size_t)p->funcs[fi].start == i && func_off[fi] == (size_t)-1)
+                func_off[fi] = e.n;
+        if ((uint32_t)i == max_func_end && entry_off == (size_t)-1)
+            entry_off = e.n;
 
         switch (in->op) {
         case MIR_CONST:
@@ -236,14 +267,48 @@ static int avr_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             ep8(&e, (uint8_t)in->a); ep8(&e, (uint8_t)in->b);
             break;
 
+        case MIR_CALL: {
+            /* AVR_CALL: subop, then abs16 LE target (patched later) */
+            ep8(&e, AVR_CALL);
+            if (ncallp == ncallp_cap) {
+                ncallp_cap = ncallp_cap ? ncallp_cap * 2 : 8;
+                callps = realloc(callps, ncallp_cap * sizeof(*callps));
+            }
+            callps[ncallp].pos = e.n;
+            callps[ncallp].func_id = in->func_id;
+            ncallp++;
+            e.n += 2;
+            break;
+        }
+
         case MIR_RET:
-            ep8(&e, AVR_RET);
-            ep8(&e, (uint8_t)in->a);
+            if (avr_in_func_body(p, i)) {
+                ep8(&e, AVR_FUNC_RET);
+                ep8(&e, (uint8_t)in->a);
+            } else {
+                ep8(&e, AVR_RET);
+                ep8(&e, (uint8_t)in->a);
+            }
             break;
         default:
             break;
         }
     }
+
+    for (size_t ci4 = 0; ci4 < ncallp; ci4++) {
+        size_t t = (size_t)-1;
+        for (int f = 0; f < p->n_funcs; f++)
+            if ((uint32_t)f == callps[ci4].func_id && func_off[f] != (size_t)-1) { t = func_off[f]; break; }
+        if (t == (size_t)-1 || t > 0xFFFF) continue;
+        e.code[callps[ci4].pos] = (uint8_t)(t & 0xFF);
+        e.code[callps[ci4].pos + 1] = (uint8_t)((t >> 8) & 0xFF);
+    }
+    if (p->n_funcs > 0 && entry_off != (size_t)-1 && entry_off <= 0xFFFF) {
+        e.code[entry_jmp_pos] = (uint8_t)(entry_off & 0xFF);
+        e.code[entry_jmp_pos + 1] = (uint8_t)((entry_off >> 8) & 0xFF);
+    }
+    free(callps);
+    free(func_off);
 
     free(e.label_offsets);
     *out = e.code;

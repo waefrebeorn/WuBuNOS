@@ -42,13 +42,18 @@
 #define AVR_UGE  0x18
 #define AVR_ULE  0x19
 #define AVR_FOP  0x20
-#define AVR_MEMOP 0x23   /* MIR memory LOAD/STORE */   /* soft-float hostcall */
+#define AVR_MEMOP 0x23   /* MIR memory LOAD/STORE */
+#define AVR_CALL 0x24
+#define AVR_FUNC_RET 0x25
+#define AVR_JMP 0x26   /* soft-float hostcall */
 #define AVR_FRET 0x21   /* soft-float return */
 
 int64_t wubu_avr_interp(const uint8_t *code, size_t size, int64_t arg)
 {
     int64_t vr[AVR_RAM_SIZE];
     memset(vr, 0, sizeof(vr));
+    uint16_t avr_call_stack[32];
+    int avr_call_sp = 0;
 
     /* arg → vr0 */
     vr[AVR_VR_BASE + 0] = arg;
@@ -223,6 +228,28 @@ int64_t wubu_avr_interp(const uint8_t *code, size_t size, int64_t arg)
             else if (mfn == 26) /* MEM_STORE */
                 vr[AVR_XMEM_BASE + (vr[AVR_VR_BASE + cell_slot] & 0xFF)] =
                     vr[AVR_VR_BASE + s2] & 0xFF;
+            break;
+        }
+        case AVR_JMP:
+            pc = (uint16_t)(code[pc] | ((uint16_t)code[pc+1] << 8));
+            break;
+        case AVR_CALL: {
+            if (avr_call_sp < 32) {
+                uint16_t target = (uint16_t)(code[pc] | ((uint16_t)code[pc+1] << 8));
+                pc += 2;
+                avr_call_stack[avr_call_sp++] = (uint16_t)pc;
+                pc = target;
+            }
+            break;
+        }
+        case AVR_FUNC_RET: {
+            a = code[pc++];
+            vr[AVR_VR_BASE + 0] = vr[AVR_VR_BASE + a];
+            if (avr_call_sp > 0) {
+                pc = avr_call_stack[--avr_call_sp];
+            } else {
+                return vr[AVR_VR_BASE + a];
+            }
             break;
         }
         default:

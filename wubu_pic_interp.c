@@ -49,6 +49,9 @@
 #define PIC_ULEQ  0x1F /* ULEQ fr — W = (W <= RAM[fr]) ? 1 : 0 (unsigned) */
 #define PIC_FOP   0x20
 #define PIC_MEMOP 0x23
+#define PIC_CALL 0x24
+#define PIC_FUNC_RET 0x25
+#define PIC_JMP 0x26
 #define PIC_FRET  0x21 /* XR  fr      — W = W ^ RAM[fr]  */
 
 const char *wubu_pic_interp_name = "pic";
@@ -56,6 +59,8 @@ const char *wubu_pic_interp_name = "pic";
 int64_t wubu_pic_interp(const uint8_t *code, size_t size, int64_t arg)
 {
     int64_t ram[PIC_RAM_SIZE];
+    uint16_t pic_call_stack[32];
+    int pic_call_sp = 0;
     memset(ram, 0, sizeof(ram));
 
     (void)arg;
@@ -240,6 +245,29 @@ int64_t wubu_pic_interp(const uint8_t *code, size_t size, int64_t arg)
             fr = code[pc++];
             W ^= (uint8_t)ram[PIC_VR_BASE + fr];
             break;
+        case PIC_JMP:
+            pc = (uint16_t)(code[pc] | ((uint16_t)code[pc+1] << 8));
+            break;
+        case PIC_CALL: {
+            if (pic_call_sp < 32) {
+                uint16_t target = (uint16_t)(code[pc] | ((uint16_t)code[pc+1] << 8));
+                pc += 2;
+                pic_call_stack[pic_call_sp++] = (uint16_t)pc;
+                pc = target;
+            }
+            break;
+        }
+        case PIC_FUNC_RET: {
+            uint8_t rslot = code[pc++];
+            ram[PIC_VR_BASE + 0] = ram[PIC_VR_BASE + rslot];
+            if (pic_call_sp > 0) {
+                pc = pic_call_stack[--pic_call_sp];
+            } else {
+                /* top-level return: park value in vr0 slot; main's RET reads it */
+                ram[PIC_VR_BASE + 0] = ram[rslot];
+            }
+            break;
+        }
         default:
             return 0;
         }

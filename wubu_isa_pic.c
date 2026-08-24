@@ -72,11 +72,37 @@ static void pic_note_label(pic_emitter_t *e, uint32_t label, size_t off) {
 #define PIC_RET  0x0E /* RET         — return W */
 #define PIC_FOP  0x20 /* soft-float hostcall */
 #define PIC_MEMOP 0x23 /* MIR memory LOAD/STORE */
+#define PIC_CALL 0x24
+#define PIC_FUNC_RET 0x25
+#define PIC_JMP 0x26
 #define PIC_FRET 0x21 /* soft-float return */
+
+
+/* is instruction index `idx` inside any declared function body? */
+static bool pic_in_func_body(const wubu_mir_prog_t *p, size_t idx) {
+    for (int f = 0; f < p->n_funcs; f++)
+        if (idx >= p->funcs[f].start && idx < p->funcs[f].end) return true;
+    return false;
+}
 
 static int pic_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size) {
     pic_emitter_t e;
     memset(&e, 0, sizeof(e));
+    typedef struct { size_t pos; uint32_t func_id; } pic_fixup_t;
+    pic_fixup_t *callps = NULL;
+    size_t ncallp = 0, ncallp_cap = 0;
+    size_t *func_off = calloc((size_t)(p->n_funcs > 0 ? p->n_funcs : 1), sizeof(size_t));
+    for (int f = 0; f < p->n_funcs; f++) func_off[f] = (size_t)-1;
+    uint32_t max_func_end = 0;
+    for (int f = 0; f < p->n_funcs; f++)
+        if (p->funcs[f].end > max_func_end) max_func_end = p->funcs[f].end;
+    size_t entry_off = (size_t)-1;
+    size_t entry_jmp_pos = 0;
+    if (p->n_funcs > 0) {
+        pic_ep8(&e, PIC_JMP);
+        entry_jmp_pos = e.n;
+        e.n += 2;
+    }
     e.n_labels = p->n_labels;
     e.label_offsets = calloc(e.n_labels, sizeof(size_t));
     for (size_t i = 0; i < e.n_labels; i++) e.label_offsets[i] = (size_t)-1;
@@ -85,6 +111,11 @@ static int pic_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
         const wubu_mir_instr_t *in = &p->ins[i];
 
         if (in->op == MIR_LABEL) { pic_note_label(&e, in->label, e.n); continue; }
+        for (int fi = 0; fi < p->n_funcs; fi++)
+            if ((size_t)p->funcs[fi].start == i && func_off[fi] == (size_t)-1)
+                func_off[fi] = e.n;
+        if ((uint32_t)i == max_func_end && entry_off == (size_t)-1)
+            entry_off = e.n;
 
         switch (in->op) {
         case MIR_CONST:
@@ -286,16 +317,50 @@ static int pic_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             pic_ep8(&e, (uint8_t)in->a); pic_ep8(&e, (uint8_t)in->b);
             break;
 
+        case MIR_CALL: {
+            /* PIC_CALL: subop then abs16 LE target (patched later) */
+            pic_ep8(&e, PIC_CALL);
+            if (ncallp == ncallp_cap) {
+                ncallp_cap = ncallp_cap ? ncallp_cap * 2 : 8;
+                callps = realloc(callps, ncallp_cap * sizeof(*callps));
+            }
+            callps[ncallp].pos = e.n;
+            callps[ncallp].func_id = in->func_id;
+            ncallp++;
+            e.n += 2;
+            break;
+        }
+
         case MIR_RET:
-            /* return RAM[a] */
-            pic_ep8(&e, PIC_MVW);
-            pic_ep8(&e, (uint8_t)in->a);
-            pic_ep8(&e, PIC_RET);
+            if (pic_in_func_body(p, i)) {
+                pic_ep8(&e, PIC_FUNC_RET);
+                pic_ep8(&e, (uint8_t)in->a);
+            } else {
+                /* return RAM[a] */
+                pic_ep8(&e, PIC_MVW);
+                pic_ep8(&e, (uint8_t)in->a);
+                pic_ep8(&e, PIC_RET);
+            }
             break;
         default:
             break;
         }
     }
+
+    for (size_t ci5 = 0; ci5 < ncallp; ci5++) {
+        size_t t = (size_t)-1;
+        for (int f = 0; f < p->n_funcs; f++)
+            if ((uint32_t)f == callps[ci5].func_id && func_off[f] != (size_t)-1) { t = func_off[f]; break; }
+        if (t == (size_t)-1 || t > 0xFFFF) continue;
+        e.code[callps[ci5].pos] = (uint8_t)(t & 0xFF);
+        e.code[callps[ci5].pos + 1] = (uint8_t)((t >> 8) & 0xFF);
+    }
+    if (p->n_funcs > 0 && entry_off != (size_t)-1 && entry_off <= 0xFFFF) {
+        e.code[entry_jmp_pos] = (uint8_t)(entry_off & 0xFF);
+        e.code[entry_jmp_pos + 1] = (uint8_t)((entry_off >> 8) & 0xFF);
+    }
+    free(callps);
+    free(func_off);
 
     free(e.label_offsets);
     *out = e.code;
