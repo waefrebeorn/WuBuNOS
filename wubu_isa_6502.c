@@ -155,6 +155,14 @@ static void emit_fhostcall(cpu6502_emitter_t *e, uint8_t fn,
  * returns beq_disp_pos on first call (NULL = final patch)
  */
 
+
+/* is instruction index `idx` inside any declared function body? */
+static bool in_func_body(const wubu_mir_prog_t *p, size_t idx) {
+    for (int f = 0; f < p->n_funcs; f++)
+        if (idx >= p->funcs[f].start && idx < p->funcs[f].end) return true;
+    return false;
+}
+
 static int cpu6502_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size)
 {
     size_t max_vr = 0;
@@ -171,6 +179,17 @@ static int cpu6502_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_
     e.n_labels = p->n_labels;
     e.label_offsets = calloc(e.n_labels, sizeof(size_t));
     for (size_t i = 0; i < e.n_labels; i++) e.label_offsets[i] = (size_t)-1;
+    /* MIR_CALL fixups: (code position of abs16 operand, callee func_id) */
+    typedef struct { size_t pos; uint32_t func_id; } call_fixup_t;
+    call_fixup_t *callps = NULL;
+    size_t ncallp = 0, ncallp_cap = 0;
+    /* code offset where each function's body begins (indexed by func slot order) */
+    size_t *func_off = calloc((size_t)(p->n_funcs > 0 ? p->n_funcs : 1), sizeof(size_t));
+    for (int f = 0; f < p->n_funcs; f++) func_off[f] = (size_t)-1;
+    uint32_t max_func_end = 0;
+    for (int f = 0; f < p->n_funcs; f++)
+        if (p->funcs[f].end > max_func_end) max_func_end = p->funcs[f].end;
+    size_t entry_off = (size_t)-1;   /* code offset of instr index max_func_end */
 
     cpu6502_patch_t *patches = NULL;
     size_t np = 0, cp = 0;
@@ -178,6 +197,16 @@ static int cpu6502_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_
     /* prologue: SEI; CLD */
     e8(&e, SEI);
     e8(&e, CLD);
+    /* entry trampoline: if functions are declared, jump over their bodies to
+     * the main-line code (the first instruction past the last function end).
+     * The abs16 operand is patched after func offsets are known. */
+    size_t entry_jmp_pos = 0;
+    bool has_funcs = p->n_funcs > 0;
+    if (has_funcs) {
+        e8(&e, 0x4C);          /* JMP abs */
+        entry_jmp_pos = e.n;
+        e.n += 2;              /* reserve abs16 target */
+    }
 
     for (size_t i = 0; i < p->n; i++) {
         const wubu_mir_instr_t *in = &p->ins[i];
@@ -185,7 +214,43 @@ static int cpu6502_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_
             note_label(&e, in->label, e.n);
             continue;
         }
+        /* record the code offset where each MIR function begins (CALL target) */
+        for (int fi = 0; fi < p->n_funcs; fi++)
+            if (p->funcs[fi].start == i && func_off[fi] == (size_t)-1)
+                func_off[fi] = e.n;
+        if ((uint32_t)i == max_func_end && entry_off == (size_t)-1)
+            entry_off = e.n;   /* first main-line instruction after all funcs */
         switch (in->op) {
+        case MIR_CALL: {
+            /* hostcall fn=27 CALL: full 5-byte prologue (dst/sa/sb unused)
+             * followed by the 16-bit absolute code offset of the callee,
+             * resolved in a second pass below. */
+            e8(&e, 0x02); e8(&e, 27);
+            e8(&e, 0); e8(&e, 0); e8(&e, 0);   /* unused dst/sa/sb */
+            if (ncallp == ncallp_cap) {
+                ncallp_cap = ncallp_cap ? ncallp_cap * 2 : 8;
+                callps = realloc(callps, ncallp_cap * sizeof(*callps));
+            }
+            callps[ncallp].pos = e.n;
+            callps[ncallp].func_id = in->func_id;
+            ncallp++;
+            e.n += 2;   /* reserve 2 bytes for the absolute target */
+            break;
+        }
+
+        case MIR_RET:
+            /* inside a called function? hostcall fn=28 FUNC_RET pops the call
+             * stack; main-program RET falls through to BRK as before. The
+             * interp decides based on its own stack depth, so always emit it
+             * when this instruction lives inside any function body. */
+            if (in_func_body(p, i)) {
+                emit_fhostcall(&e, 28, 0, zp_slot(in->a), ZP_SCRATCH);
+            } else {
+                e8(&e, LDA_ZP); e8(&e, zp_slot(in->a));
+                e8(&e, BRK);
+            }
+            break;
+
         case MIR_CONST:
             /* Store immediately into BOTH regions so integer (low-ZP byte 0)
              * and float (high-ZP 4-byte cell) operands read the same value. */
@@ -575,10 +640,6 @@ static int cpu6502_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_
             patches[np].pos = jz_disp; patches[np].patch_size = 1; patches[np].label = in->label; np++;
             break;
 
-        case MIR_RET:
-            e8(&e, LDA_ZP); e8(&e, zp_slot(in->a));
-            e8(&e, BRK);
-            break;
         case MIR_FRET:
             /* float return: hostcall copies the 4-byte f32 at slot in->a
              * into the float-return scratch the run() exits with. */
@@ -595,6 +656,23 @@ static int cpu6502_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_
     if (e.n == 0 || e.code[e.n - 1] != BRK) {
         e8(&e, BRK);
     }
+
+    /* CALL fixup pass: rewrite the reserved abs16 operand with the callee's offset */
+    for (size_t ci = 0; ci < ncallp; ci++) {
+        size_t t = (size_t)-1;
+        for (int f = 0; f < p->n_funcs; f++)
+            if ((uint32_t)f == callps[ci].func_id && func_off[f] != (size_t)-1) { t = func_off[f]; break; }
+        if (t == (size_t)-1 || t > 0xFFFF) continue;   /* unresolved: leave sentinel */
+        e.code[callps[ci].pos] = (uint8_t)(t & 0xFF);
+        e.code[callps[ci].pos + 1] = (uint8_t)((t >> 8) & 0xFF);
+    }
+    /* entry trampoline target: first instruction past the last function body */
+    if (has_funcs && entry_off != (size_t)-1 && entry_off <= 0xFFFF) {
+        e.code[entry_jmp_pos] = (uint8_t)(entry_off & 0xFF);
+        e.code[entry_jmp_pos + 1] = (uint8_t)((entry_off >> 8) & 0xFF);
+    }
+    free(callps);
+    free(func_off);
 
     /* patch pass */
     for (size_t i = 0; i < np; i++) {

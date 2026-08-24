@@ -416,6 +416,51 @@ static void test_memory(void)
     wubu_mir_free(&prog);
 }
 
+
+/* ---- Test: function call (CALL/RET) ----
+ * func f1(x) { return x + 5 }   -- args arrive in v1 (call convention)
+ * main: call f1 with 37 -> expect 42 */
+static void test_call(void)
+{
+    printf("-- Test: call (f(37)=37+5=42) --\n");
+    wubu_mir_prog_t prog;
+    wubu_mir_init(&prog);
+    wubu_mir_set_n_args(&prog, 1);
+
+    /* NOTE: retro targets share one flat register file across CALL (no caller-save),
+     * so this battery uses disjoint vrs: arg lives in v1, callee scratch in v8+. */
+    wubu_vr_t five;
+    {   /* emit a const whose dst we force to v9 */
+        five = wubu_mir_const_to(&prog, 9, 5);          /* idx 0: v9 = 5 */
+    }
+    wubu_vr_t sum = wubu_mir_binop(&prog, MIR_ADD, 1, five); /* idx 1: v2 = v1+v9 */
+    wubu_mir_mov_to(&prog, 2, sum);                      /* idx 2: normalize */
+    wubu_mir_ret(&prog, 2);                              /* idx 3 */
+
+    uint32_t fstart = 0, fend = prog.n;
+    wubu_mir_const_to(&prog, 1, 37);                     /* v1 = 37 (arg) */
+    wubu_mir_call(&prog, 0);
+    wubu_mir_ret(&prog, 0);
+
+    strcpy(prog.funcs[0].name, "f");
+    prog.funcs[0].start = fstart;
+    prog.funcs[0].end = fend;
+    prog.n_funcs = 1;
+
+    const char *names[] = {"6502"};
+    for (int i = 0; i < 1; i++) {
+        const wubu_isa_driver_t *d = wubu_isa_find(names[i]);
+        if (!d) continue;
+        int64_t result = 0;
+        if (run_with_driver(d, &prog, &result) == 0) {
+            CHECK(result == 42, names[i]);
+            if (result == 42) printf("  %s: %lld OK\n", names[i], (long long)result);
+            else printf("  %s: got %lld\n", names[i], (long long)result);
+        }
+    }
+    wubu_mir_free(&prog);
+}
+
 int main(void)
 {
     printf("=== ISA DRIVER SPACE TEST ===\n\n");
@@ -426,6 +471,7 @@ int main(void)
 
     test_6502_float();
     test_memory();
+    test_call();
     printf("\n");
     test_arithmetic();
     printf("\n");

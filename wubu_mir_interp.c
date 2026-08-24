@@ -225,7 +225,6 @@ int64_t wubu_mir_interp(const wubu_mir_prog_t *p)
                  * invocations), preserving vr0 as the return value. */
                 call_frame_t *f = &call_stack[--call_sp];
                 int64_t retval = vr[in->a];
-                fprintf(stderr, "RET sp=%d retval=%lld\n", call_sp, (long long)retval);
                 memcpy(vr, f->vr_save, ((size_t)max_vr + 1) * sizeof(int64_t));
                 memcpy(mem, f->mem_save, (size_t)mem_size * sizeof(int64_t));
                 vr[0] = retval;
