@@ -204,6 +204,14 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
     size_t assign_count = 0;
     wubu_reg_assign_t *assign = wubu_mir_alloc_regs(p, 10, &assign_count);
     if (!assign) return -1;
+    /* Any operand vr outside the assignment table would spill to offset 0 and
+     * corrupt the saved RBP — refuse instead. */
+    for (size_t i = 0; i < p->n; i++) {
+        const wubu_mir_instr_t *ci = &p->ins[i];
+        if (ci->dst >= (wubu_vr_t)assign_count || ci->a >= (wubu_vr_t)assign_count ||
+            ci->b >= (wubu_vr_t)assign_count) return -1;
+
+    }
 
     /* Count spilled vrs to size the frame.
      * NOTE: the regalloc stores the spill slot byte-offset in
@@ -296,7 +304,8 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             break;
         }
         case MIR_ADD: case MIR_SUB: case MIR_MUL: case MIR_DIV: case MIR_MOD:
-        case MIR_AND: case MIR_OR: case MIR_XOR: {
+        case MIR_AND: case MIR_OR: case MIR_XOR:
+        case MIR_FADD: case MIR_FSUB: case MIR_FMUL: case MIR_FDIV: {
             /* Load 'a' into rax (accumulator) */
             int sa = VR_ENC(in->a);
             if (sa == 0) {
@@ -328,6 +337,35 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             case MIR_AND: rex(&e,1,0,0,0); e8(&e, 0x21); e8(&e, 0xF8); break;
             case MIR_OR:  rex(&e,1,0,0,0); e8(&e, 0x09); e8(&e, 0xF8); break;
             case MIR_XOR: rex(&e,1,0,0,0); e8(&e, 0x31); e8(&e, 0xF8); break;
+
+            /* ---- SSE single-precision float ops (values are f32 bits) ---- */
+            case MIR_FADD: case MIR_FSUB: case MIR_FMUL: case MIR_FDIV: {
+                /* movd xmm0, eax-ish: load a into rax, then movq rax->xmm0;
+                 * simpler: use SSE directly from memory/regs via GPR staging. */
+                int sa2 = VR_ENC(in->a);
+                if (sa2 >= 0) emit_mov_reg(&e, 0, sa2);
+                else emit_load_rbp(&e, 0, VR_SPILL(in->a));
+                int sb2 = VR_ENC(in->b);
+                if (sb2 >= 0) emit_mov_reg(&e, 7, sb2);
+                else emit_load_rbp(&e, 7, VR_SPILL(in->b));
+                /* movd xmm0, eax   : 66 0F 6E C0 */
+                e8(&e, 0x66); e8(&e, 0x0F); e8(&e, 0x6E); e8(&e, 0xC0);
+                /* movd xmm1, edi   : 66 0F 6E CF */
+                e8(&e, 0x66); e8(&e, 0x0F); e8(&e, 0x6E); e8(&e, 0xCF);
+                /* opss xmm0, xmm1  : F3 0F 5x C1 (single-precision) */
+                e8(&e, 0xF3); e8(&e, 0x0F);
+                switch (in->op) {
+                case MIR_FADD: e8(&e, 0x58); break;
+                case MIR_FSUB: e8(&e, 0x5C); break;
+                case MIR_FMUL: e8(&e, 0x59); break;
+                default:       e8(&e, 0x5E); break; /* FDIV */
+                }
+                e8(&e, 0xC1);
+                /* movd eax, xmm0   : 66 0F 7E C0 */
+                e8(&e, 0x66); e8(&e, 0x0F); e8(&e, 0x7E); e8(&e, 0xC0);
+                break;
+            }
+
             default:
                 /* unimplemented op — fail loudly instead of emitting broken code */
                 free(assign);
@@ -494,7 +532,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             e8(&e,0x48); e8(&e,0x83); e8(&e,0xC4); e8(&e,0x08);
             break;
         }
-        case MIR_RET: {
+        case MIR_RET: case MIR_FRET: {
             /* If result is already in rax (lookahead skip), don't reload */
             if (!result_in_rax) {
                 int sa = VR_ENC(in->a);

@@ -41,6 +41,9 @@ static int op_has_dst(wubu_mir_op_t op)
     case MIR_MOV:
     case MIR_LOAD:    /* dst = mem[addr] */
     case MIR_ALLOC:   /* dst = base address of a fresh cell */
+    case MIR_FADD: case MIR_FSUB: case MIR_FMUL: case MIR_FDIV:
+    case MIR_FNEG:
+    case MIR_FEQ: case MIR_FNE: case MIR_FLT: case MIR_FLE:
         return 1;
     default:
         return 0;
