@@ -90,7 +90,7 @@ gauntlet: $(FRONT) $(MIR) $(ISA) $(INTERP) $(OS_INTERP) $(JIT_SRC) $(GAUN)
 
 # ---- Run targets ----
 
-test: test_isa_driver test_softfloat test_peephole test_elf_cubin test_mir_float test_fuzz_diff test_tgemm
+test: test_isa_driver test_softfloat test_peephole test_elf_cubin test_mir_float test_fuzz_diff test_tgemm test_gap_audit test_selfhost_battery
 	@echo "=== ISA Driver Test ==="
 	./test_isa_driver
 
@@ -132,6 +132,16 @@ test_tgemm: tools/test_tgemm.c $(MIR) $(filter-out wubu_isa_jit_stubs.c,$(ISA)) 
             jit_stub_arm64.c
 	$(CC) $(CFLAGS) -I. -I$(OS_ROOT) -o $@ $^
 	./$@ 24 24 24
+# Gap audit: adversarial 9P frame fuzzer (2000 inputs across 20 categories)
+test_gap_audit: isa-test/gap_audit.c $(MIR)
+	$(CC) $(CFLAGS) -I. -o $@ isa-test/gap_audit.c $(MIR)
+	./$@
+
+# Self-hosting battery: every C11 construct the compiler must support
+test_selfhost_battery: isa-test/selfhost_battery.c $(FRONT) $(MIR) $(ISA) $(INTERP) $(OS_INTERP) jit_stub.c
+	$(CC) $(CFLAGS) -I. -I$(OS_ROOT) $^ -o $@ -lm
+	./$@
+
 
 clean:
 	rm -f test_isa_driver test_mir_opt gauntlet_runner

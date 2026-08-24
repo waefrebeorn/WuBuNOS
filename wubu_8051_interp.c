@@ -211,17 +211,20 @@ int64_t wubu_8051_interp_exec(const uint8_t *code, size_t size, int64_t arg)
                     uint8_t sd = code[pc++];
                     uint32_t r = 0;
                     switch (fn) {
-                    case 0:  r = wubu_sf_f32_add((uint32_t)fa, (uint32_t)fb); break;
-                    case 1:  r = wubu_sf_f32_sub((uint32_t)fa, (uint32_t)fb); break;
-                    case 2:  r = wubu_sf_f32_mul((uint32_t)fa, (uint32_t)fb); break;
-                    case 3:  r = wubu_sf_f32_div((uint32_t)fa, (uint32_t)fb); break;
-                    case 10: r = (uint32_t)fa ^ 0x80000000u; break;
-                    case 6:  r = (wubu_sf_f32_cmp((uint32_t)fa,(uint32_t)fb)==0)?0xFFFFFFFFu:0; break;
-                    case 7:  r = (wubu_sf_f32_cmp((uint32_t)fa,(uint32_t)fb)!=0)?0xFFFFFFFFu:0; break;
-                    case 8:  r = (wubu_sf_f32_cmp((uint32_t)fa,(uint32_t)fb) <0)?0xFFFFFFFFu:0; break;
-                    case 9:  r = (wubu_sf_f32_cmp((uint32_t)fa,(uint32_t)fb)<=0)?0xFFFFFFFFu:0; break;
-                    default: break;
-                    }
+            case 0:  r = wubu_sf_f32_add((uint32_t)fa, (uint32_t)fb); break;
+            case 1:  r = wubu_sf_f32_sub((uint32_t)fa, (uint32_t)fb); break;
+            case 2:  r = wubu_sf_f32_mul((uint32_t)fa, (uint32_t)fb); break;
+            case 3:  r = wubu_sf_f32_div((uint32_t)fa, (uint32_t)fb); break;
+            case 4:  r = (uint32_t)wubu_sf_i64_to_f32(fa); break;
+            case 5:  r = (uint32_t)wubu_sf_f32_to_i64((uint32_t)fa); break;
+            case 6:  r = (wubu_sf_f32_cmp((uint32_t)fa,(uint32_t)fb)==0)?0xFFFFFFFFu:0; break;
+            case 7:  r = (wubu_sf_f32_cmp((uint32_t)fa,(uint32_t)fb)!=0)?0xFFFFFFFFu:0; break;
+            case 8:  r = (wubu_sf_f32_cmp((uint32_t)fa,(uint32_t)fb) <0)?0xFFFFFFFFu:0; break;
+            case 9:  r = (wubu_sf_f32_cmp((uint32_t)fa,(uint32_t)fb)<=0)?0xFFFFFFFFu:0; break;
+            case 10: r = fa ^ 0x80000000u; break;
+            case 11: /* FRET handled by EXT_FRET case */ break;
+            default: break;
+            }
                     ram[sd] = (int64_t)r;   /* zero-extend into cell */
                     break;
                 }

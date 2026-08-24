@@ -191,17 +191,18 @@ int64_t wubu_mir_interp(const wubu_mir_prog_t *p)
                          vr[in->dst] = (c == -1 || c == 0); } pc++; break;
         /* f64: bits fill the full int64 register */
         case MIR_DADD: vr[in->dst] = (int64_t)wubu_sf_f64_add((uint64_t)vr[in->a], (uint64_t)vr[in->b]); pc++; break;
+
         case MIR_DSUB: vr[in->dst] = (int64_t)wubu_sf_f64_sub((uint64_t)vr[in->a], (uint64_t)vr[in->b]); pc++; break;
         case MIR_DMUL: vr[in->dst] = (int64_t)wubu_sf_f64_mul((uint64_t)vr[in->a], (uint64_t)vr[in->b]); pc++; break;
         case MIR_DDIV: vr[in->dst] = (int64_t)wubu_sf_f64_div((uint64_t)vr[in->a], (uint64_t)vr[in->b]); pc++; break;
-        case MIR_DNEG: vr[in->dst] = vr[in->a] ^ (int64_t)0x8000000000000000ULL; pc++; break;
+        case MIR_DNEG: vr[in->dst] = (int64_t)wubu_sf_f64_neg((uint64_t)vr[in->a]); pc++; break;
         case MIR_DITOF: vr[in->dst] = (int64_t)wubu_sf_i64_to_f64(vr[in->a]); pc++; break;
-        case MIR_DTOI:  vr[in->dst] = wubu_sf_f64_to_i64((uint64_t)vr[in->a]); pc++; break;
+        case MIR_DTOI: vr[in->dst] = wubu_sf_f64_to_i64((uint64_t)vr[in->a]); pc++; break;
         case MIR_F32_TO_F64: vr[in->dst] = (int64_t)wubu_sf_f32_to_f64((uint32_t)vr[in->a]); pc++; break;
-        case MIR_F64_TO_F32: vr[in->dst] = wubu_sf_f64_to_f32((uint64_t)vr[in->a]); pc++; break;
-        /* bfloat16 */
-        case MIR_BF16_TO_F32: vr[in->dst] = wubu_sf_bf16_to_f32((uint16_t)vr[in->a]); pc++; break;
-        case MIR_F32_TO_BF16: vr[in->dst] = wubu_sf_f32_to_bf16((uint32_t)vr[in->a]); pc++; break;
+        case MIR_F64_TO_F32: vr[in->dst] = (int32_t)wubu_sf_f64_to_f32((uint64_t)vr[in->a]); pc++; break;
+        case MIR_BF16_TO_F32: vr[in->dst] = (int32_t)wubu_sf_bf16_to_f32((uint16_t)vr[in->a]); pc++; break;
+        case MIR_F32_TO_BF16: vr[in->dst] = (int16_t)wubu_sf_f32_to_bf16((uint32_t)vr[in->a]); pc++; break;
+        case MIR_FRET: return vr[0];
         case MIR_T_GEMM: {
             /* C += A*B, int64, row-major, packed M/N/K in imm */
             int M = (int)(in->imm >> 22);

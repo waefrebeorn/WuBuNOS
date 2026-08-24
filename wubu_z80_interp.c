@@ -396,6 +396,8 @@ int64_t wubu_z80_run(const uint8_t *code, size_t size, int64_t arg)
             case 7:  r = (wubu_sf_f32_cmp(fa,fb)!=0)?0xFFFFFFFFu:0; break;
             case 8:  r = (wubu_sf_f32_cmp(fa,fb) <0)?0xFFFFFFFFu:0; break;
             case 9:  r = (wubu_sf_f32_cmp(fa,fb)<=0)?0xFFFFFFFFu:0; break;
+            case 4:  r = (uint32_t)wubu_sf_i64_to_f32(fa); break;  /* ITOF */
+            case 5:  r = (uint32_t)wubu_sf_f32_to_i64((uint32_t)fa); break;  /* FTOI */
             case 11: r = fa; cpu.fret = fa; cpu.fret_valid = 1; break;
             default: break;
             }

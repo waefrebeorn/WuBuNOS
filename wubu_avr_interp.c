@@ -183,24 +183,28 @@ int64_t wubu_avr_interp(const uint8_t *code, size_t size, int64_t arg)
             a = code[pc++]; b = code[pc++];
             vr[AVR_VR_BASE + a] = ((vr[AVR_VR_BASE + a] & 0xFF) <=
                                     (vr[AVR_VR_BASE + b] & 0xFF)) ? 1 : 0;
-            break;        case AVR_FOP: /* fn, sa, sb, sd (vr slots) */
+            break;
+        case AVR_FOP: /* fn, sa, sb, sd (vr slots) */
             fn = code[pc++]; sa = code[pc++]; sb = code[pc++]; sd = code[pc++];
             {
                 uint32_t fa = (uint32_t)(vr[AVR_VR_BASE + sa] & 0xFFFFFFFF);
                 uint32_t fb = (uint32_t)(vr[AVR_VR_BASE + sb] & 0xFFFFFFFF);
                 uint32_t r = 0;
                 switch (fn) {
-                case 0: r = wubu_sf_f32_add(fa,fb); break;
-                case 1: r = wubu_sf_f32_sub(fa,fb); break;
-                case 2: r = wubu_sf_f32_mul(fa,fb); break;
-                case 3: r = wubu_sf_f32_div(fa,fb); break;
-                case 10: r = fa ^ 0x80000000u; break;
-                case 6:  r = (wubu_sf_f32_cmp(fa,fb)==0)?0xFFFFFFFFu:0; break;
-                case 7:  r = (wubu_sf_f32_cmp(fa,fb)!=0)?0xFFFFFFFFu:0; break;
-                case 8:  r = (wubu_sf_f32_cmp(fa,fb) <0)?0xFFFFFFFFu:0; break;
-                case 9:  r = (wubu_sf_f32_cmp(fa,fb)<=0)?0xFFFFFFFFu:0; break;
-                default: break;
-                }
+            case 0:  r = wubu_sf_f32_add((uint32_t)fa, (uint32_t)fb); break;
+            case 1:  r = wubu_sf_f32_sub((uint32_t)fa, (uint32_t)fb); break;
+            case 2:  r = wubu_sf_f32_mul((uint32_t)fa, (uint32_t)fb); break;
+            case 3:  r = wubu_sf_f32_div((uint32_t)fa, (uint32_t)fb); break;
+            case 4:  r = (uint32_t)wubu_sf_i64_to_f32(fa); break;
+            case 5:  r = (uint32_t)wubu_sf_f32_to_i64((uint32_t)fa); break;
+            case 6:  r = (wubu_sf_f32_cmp((uint32_t)fa,(uint32_t)fb)==0)?0xFFFFFFFFu:0; break;
+            case 7:  r = (wubu_sf_f32_cmp((uint32_t)fa,(uint32_t)fb)!=0)?0xFFFFFFFFu:0; break;
+            case 8:  r = (wubu_sf_f32_cmp((uint32_t)fa,(uint32_t)fb) <0)?0xFFFFFFFFu:0; break;
+            case 9:  r = (wubu_sf_f32_cmp((uint32_t)fa,(uint32_t)fb)<=0)?0xFFFFFFFFu:0; break;
+            case 10: r = fa ^ 0x80000000u; break;
+            case 11: /* FRET: result already in r (fa); driver emits AVR_FRET after */ break;
+            default: break;
+            }
                 vr[AVR_VR_BASE + sd] = (int64_t)r;
             }
             break;
