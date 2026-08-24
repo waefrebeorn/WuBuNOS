@@ -4,9 +4,84 @@
  * C18 pure, no external deps. */
 #include "wubu_tgemm.h"
 
+
+/* ---- AVX2 fast path (x86-64 only) ------------------------------------
+ * 4 columns of B are broadcast; each j-iteration accumulates 4 int64
+ * products per row via vpmullq+vpaddd-style 64-bit lanes. Requires
+ * AVX2 (vpmullq is really AVX512DQ! — so use scalar mul into vectors:
+ * we instead vectorize the j dimension with vpaddq after scalar muls).
+ * Simpler correct approach: keep k-loop scalar but process 4 j's at
+ * once with gathered B values. Actually int64 mul needs AVX512DQ for
+ * full-width vpmullq; on plain AVX2 we emulate with 32-bit halves.
+ * For correctness-first: vectorize the N dimension accumulation using
+ * vpbroadcastq of a-products and 64-bit integer mul via two 32-bit
+ * multiplies (mulx emulation). */
+#if defined(__x86_64__)
+#include <immintrin.h>
+
+__attribute__((target("avx2")))
+static void tgemm_avx2(int64_t *mem, int64_t A, int64_t B,
+                       int64_t C, int M, int N, int K)
+{
+    const __m256i zero = _mm256_setzero_si256();
+    for (int i = 0; i < M; i++) {
+        const int64_t *a = &mem[A + (int64_t)i * K];
+        int64_t       *c = &mem[C + (int64_t)i * N];
+        int j = 0;
+        for (; j + 4 <= N; j += 4) {
+            __m256i acc = _mm256_loadu_si256((const __m256i *)&c[j]);
+            for (int k = 0; k < K; k++) {
+                /* broadcast a[k], multiply by 4 b-lanes, accumulate.
+                 * 64x64->64 low-half multiply = _mm256_mullo_epi64
+                 * (AVX512DQ only). Emulate: split into hi/lo 32-bit. */
+                __m256i bv = _mm256_loadu_si256((const __m256i *)&mem[B + (int64_t)k * N + j]);
+                __m256i av = _mm256_set1_epi64x(a[k]);
+                /* lo32 parts */
+                __m256i alo = _mm256_and_si256(av, _mm256_set1_epi64x(0xFFFFFFFFLL));
+                __m256i blo = _mm256_and_si256(bv, _mm256_set1_epi64x(0xFFFFFFFFLL));
+                __m256i plo = _mm256_mul_epu32(alo, blo);
+                __m256i phi = _mm256_mul_epu32(_mm256_srli_epi64(av, 32),
+                                               _mm256_srli_epi64(bv, 32));
+                /* combine: (phi << 32) + ((alo*bhi + blo*ahi) << 32)? Full
+                 * 64-bit product needs cross terms. Standard trick: */
+                __m256i ahi = _mm256_srli_epi64(av, 32);
+                __m256i bhi = _mm256_srli_epi64(bv, 32);
+                __m256i mid1 = _mm256_mul_epu32(alo, bhi);
+                __m256i mid2 = _mm256_mul_epu32(ahi, blo);
+                /* result low 64 = plo + ((mid1+mid2) << 32) */
+                __m256i mid  = _mm256_add_epi64(mid1, mid2);
+                mid = _mm256_slli_epi64(mid, 32);
+                __m256i prod = _mm256_add_epi64(plo, mid);
+                acc = _mm256_add_epi64(acc, prod);
+            }
+            _mm256_storeu_si256((__m256i *)&c[j], acc);
+        }
+        for (; j < N; j++) {
+            int64_t s = c[j];
+            const int64_t *bk = &mem[B] + j;
+            for (int k = 0; k < K; k++)
+                s += a[k] * bk[(size_t)k * N];
+            c[j] = s;
+        }
+    }
+}
+
+static int avx2_ok = -1;
+static int have_avx2(void) {
+    if (avx2_ok < 0) {
+        __builtin_cpu_init();
+        avx2_ok = __builtin_cpu_supports("avx2") ? 1 : 0;
+    }
+    return avx2_ok;
+}
+#endif /* __x86_64__ */
+
 void wubu_tgemm(int64_t *mem, int64_t A, int64_t B,
                 int64_t C, int M, int N, int K)
 {
+#if defined(__x86_64__)
+    if (have_avx2()) { tgemm_avx2(mem, A, B, C, M, N, K); return; }
+#endif
     int i = 0;
     for (; i + 3 < M; i += 4) {
         const int64_t *a0 = &mem[A + (int64_t)(i+0) * K];
