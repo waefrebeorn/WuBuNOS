@@ -157,6 +157,14 @@ static size_t label_off(const i8086_emitter_t *e, uint32_t label)
     return (label < e->n_labels) ? e->label_offsets[label] : (size_t)-1;
 }
 
+
+/* is instruction index `idx` inside any declared function body? */
+static bool i8086_in_func_body(const wubu_mir_prog_t *p, size_t idx) {
+    for (int f = 0; f < p->n_funcs; f++)
+        if (idx >= p->funcs[f].start && idx < p->funcs[f].end) return true;
+    return false;
+}
+
 static int i8086_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size)
 {
     size_t max_vr = 0;
@@ -169,6 +177,21 @@ static int i8086_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
 
     i8086_emitter_t e;
     memset(&e, 0, sizeof(e));
+    typedef struct { size_t pos; uint32_t func_id; } i86_fixup_t;
+    i86_fixup_t *callps = NULL;
+    size_t ncallp = 0, ncallp_cap = 0;
+    size_t *func_off = calloc((size_t)(p->n_funcs > 0 ? p->n_funcs : 1), sizeof(size_t));
+    for (int f = 0; f < p->n_funcs; f++) func_off[f] = (size_t)-1;
+    uint32_t max_func_end = 0;
+    for (int f = 0; f < p->n_funcs; f++)
+        if (p->funcs[f].end > max_func_end) max_func_end = p->funcs[f].end;
+    size_t entry_off = (size_t)-1;
+    size_t entry_jmp_pos = 0;
+    if (p->n_funcs > 0) {
+        e8(&e, 0xE9);          /* jmp rel16 — patched below */
+        entry_jmp_pos = e.n;
+        e.n += 2;
+    }
     size_t frame = i8086_frame_size(max_vr);
     e.n_labels = p->n_labels;
     e.label_offsets = calloc(e.n_labels, sizeof(size_t));
@@ -185,7 +208,12 @@ static int i8086_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
     for (size_t i = 0; i < p->n; i++) {
         const wubu_mir_instr_t *in = &p->ins[i];
         if (in->op == MIR_LABEL) { note_label(&e, in->label, e.n); continue; }
-        switch (in->op) {
+
+        for (int fi = 0; fi < p->n_funcs; fi++)
+            if ((size_t)p->funcs[fi].start == i && func_off[fi] == (size_t)-1)
+                func_off[fi] = e.n;
+        if ((uint32_t)i == max_func_end && entry_off == (size_t)-1)
+            entry_off = e.n;        switch (in->op) {
         case MIR_CONST:
             emit_mov_ax_imm(&e, (int16_t)in->imm);
             emit_store_ax_slot(&e, slot_disp(in->dst));
@@ -329,11 +357,34 @@ static int i8086_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
             e16(&e, (uint16_t)(int16_t)slot_disp(in->a));
             break;
 
+        case MIR_CALL: {
+            /* hostcall fn=27 CALL: prologue (5B) + abs16 BE target */
+            e8(&e, 0xF1); e8(&e, 27);
+            e16(&e, 0); e16(&e, 0); e16(&e, 0);
+            if (ncallp == ncallp_cap) {
+                ncallp_cap = ncallp_cap ? ncallp_cap * 2 : 8;
+                callps = realloc(callps, ncallp_cap * sizeof(*callps));
+            }
+            callps[ncallp].pos = e.n;
+            callps[ncallp].func_id = in->func_id;
+            ncallp++;
+            e.n += 2;
+            break;
+        }
+
         case MIR_RET:
-            emit_load_ax_slot(&e, slot_disp(in->a));   /* ax = result */
-            e8(&e, 0x89); e8(&e, 0xEC);        /* mov sp,bp */
-            e8(&e, 0x5D);                      /* pop bp */
-            e8(&e, 0xC3);                      /* ret */
+            if (i8086_in_func_body(p, i)) {
+                /* FUNC_RET: value slot in sa; interp pops the call stack */
+                e8(&e, 0xF1); e8(&e, 28);
+                e16(&e, 0);
+                e16(&e, (uint16_t)(int16_t)slot_disp(in->a));
+                e16(&e, 0);
+            } else {
+                emit_load_ax_slot(&e, slot_disp(in->a));   /* ax = result */
+                e8(&e, 0x89); e8(&e, 0xEC);        /* mov sp,bp */
+                e8(&e, 0x5D);                      /* pop bp */
+                e8(&e, 0xC3);                      /* ret */
+            }
             break;
         default:
             break;
@@ -347,6 +398,26 @@ static int i8086_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
         e8(&e, 0x5D);
         e8(&e, 0xC3);
     }
+
+    /* CALL fixup pass + entry trampoline (rel16 from after operand) */
+    for (size_t ci7 = 0; ci7 < ncallp; ci7++) {
+        size_t t = (size_t)-1;
+        for (int f = 0; f < p->n_funcs; f++)
+            if ((uint32_t)f == callps[ci7].func_id && func_off[f] != (size_t)-1) { t = func_off[f]; break; }
+        if (t == (size_t)-1 || t > 0xFFFF) continue;
+        /* dos_emu EXT_CALL reads target big-endian */
+        e.code[callps[ci7].pos] = (uint8_t)((t >> 8) & 0xFF);
+        e.code[callps[ci7].pos + 1] = (uint8_t)(t & 0xFF);
+    }
+    if (p->n_funcs > 0 && entry_off != (size_t)-1) {
+        int64_t rel = (int64_t)entry_off - (entry_jmp_pos + 2);
+        if (rel >= -32768 && rel <= 32767) {
+            e.code[entry_jmp_pos] = (uint8_t)(rel & 0xFF);
+            e.code[entry_jmp_pos + 1] = (uint8_t)((rel >> 8) & 0xFF);
+        }
+    }
+    free(callps);
+    free(func_off);
 
     /* patch pass: fix every jump to its label. 8086 conditional jumps
      * are rel8 (74/75/7C/7D/7F/7E/EB — ONE disp byte); only JMP E9 is

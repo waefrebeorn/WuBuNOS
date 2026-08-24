@@ -203,6 +203,14 @@ static void emit_m68k_hostcall(m68k_emitter_t *e, uint16_t fn,
     e16(e, (uint16_t)(uint16_t)sb);
 }
 
+
+/* is instruction index `idx` inside any declared function body? */
+static bool m68k_in_func_body(const wubu_mir_prog_t *p, size_t idx) {
+    for (int f = 0; f < p->n_funcs; f++)
+        if (idx >= p->funcs[f].start && idx < p->funcs[f].end) return true;
+    return false;
+}
+
 static int m68k_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size)
 {
     size_t max_vr = 0;
@@ -215,6 +223,16 @@ static int m68k_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_siz
 
     m68k_emitter_t e;
     memset(&e, 0, sizeof(e));
+    typedef struct { size_t pos; uint32_t func_id; } m68k_fixup_t;
+    m68k_fixup_t *callps = NULL;
+    size_t ncallp = 0, ncallp_cap = 0;
+    size_t *func_off = calloc((size_t)(p->n_funcs > 0 ? p->n_funcs : 1), sizeof(size_t));
+    for (int f = 0; f < p->n_funcs; f++) func_off[f] = (size_t)-1;
+    uint32_t max_func_end = 0;
+    for (int f = 0; f < p->n_funcs; f++)
+        if (p->funcs[f].end > max_func_end) max_func_end = p->funcs[f].end;
+    size_t entry_off = (size_t)-1;
+    size_t entry_jmp_pos = 0;
     e.frame = (max_vr + 1) * 4 + 64;      /* .L slots + slack */
     e.n_labels = p->n_labels;
     e.label_offsets = calloc(e.n_labels, sizeof(size_t));
@@ -229,10 +247,21 @@ static int m68k_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_siz
     /* prologue: LINK A6,#-frame  (0x4E56 + s16) */
     e16(&e, 0x4E56);
     e16(&e, (uint16_t)(-(int16_t)e.frame));
+    /* entry trampoline: jump over function bodies to the main-line code */
+    if (p->n_funcs > 0) {
+        e16(&e, 0x4EF9);   /* JMP abs16 */
+        entry_jmp_pos = e.n;
+        e.n += 2;
+    }
 
     for (size_t i = 0; i < p->n; i++) {
         const wubu_mir_instr_t *in = &p->ins[i];
         if (in->op == MIR_LABEL) { note_label(&e, in->label, e.n); continue; }
+        for (int fi = 0; fi < p->n_funcs; fi++)
+            if ((size_t)p->funcs[fi].start == i && func_off[fi] == (size_t)-1)
+                func_off[fi] = e.n;
+        if ((uint32_t)i == max_func_end && entry_off == (size_t)-1)
+            entry_off = e.n;
         switch (in->op) {
         case MIR_CONST:
             move_imm(&e, in->imm, 0);
@@ -369,10 +398,30 @@ static int m68k_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_siz
             emit_m68k_hostcall(&e, 26, 0, slot_disp(in->b), slot_disp(in->a));
             break;
 
+        case MIR_CALL: {
+            /* hostcall fn=27 CALL: prologue + abs16 BE target (patched later) */
+            emit_m68k_hostcall(&e, 27, 0, 0, 0);
+            if (ncallp == ncallp_cap) {
+                ncallp_cap = ncallp_cap ? ncallp_cap * 2 : 8;
+                callps = realloc(callps, ncallp_cap * sizeof(*callps));
+            }
+            callps[ncallp].pos = e.n;
+            callps[ncallp].func_id = in->func_id;
+            ncallp++;
+            e16(&e, 0x0000);   /* reserve abs16 target */
+            break;
+        }
+
         case MIR_RET:
-            move_a6_d(&e, slot_disp(in->a), 0);  /* D0 = result */
-            e16(&e, 0x4E5E);   /* UNLK A6 */
-            e16(&e, 0x4E75);   /* RTS */
+            if (m68k_in_func_body(p, i)) {
+                /* FUNC_RET hostcall: result in D0 via slot load, no UNLK/RTS */
+                move_a6_d(&e, slot_disp(in->a), 0);
+                emit_m68k_hostcall(&e, 28, 0, (int16_t)slot_disp(in->a), 0);
+            } else {
+                move_a6_d(&e, slot_disp(in->a), 0);  /* D0 = result */
+                e16(&e, 0x4E5E);   /* UNLK A6 */
+                e16(&e, 0x4E75);   /* RTS */
+            }
             break;
         default:
             break;
@@ -385,6 +434,22 @@ static int m68k_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_siz
         e16(&e, 0x4E5E);
         e16(&e, 0x4E75);
     }
+
+    /* CALL fixup pass + entry trampoline */
+    for (size_t ci6 = 0; ci6 < ncallp; ci6++) {
+        size_t t = (size_t)-1;
+        for (int f = 0; f < p->n_funcs; f++)
+            if ((uint32_t)f == callps[ci6].func_id && func_off[f] != (size_t)-1) { t = func_off[f]; break; }
+        if (t == (size_t)-1 || t > 0xFFFF) continue;
+        e.code[callps[ci6].pos] = (uint8_t)((t >> 8) & 0xFF);      /* m68k BE */
+        e.code[callps[ci6].pos + 1] = (uint8_t)(t & 0xFF);
+    }
+    if (p->n_funcs > 0 && entry_off != (size_t)-1 && entry_off <= 0xFFFF) {
+        e.code[entry_jmp_pos] = (uint8_t)((entry_off >> 8) & 0xFF);   /* BE */
+        e.code[entry_jmp_pos + 1] = (uint8_t)(entry_off & 0xFF);
+    }
+    free(callps);
+    free(func_off);
 
     /* patch pass: fix every branch to its label */
     for (size_t i = 0; i < np; i++) {

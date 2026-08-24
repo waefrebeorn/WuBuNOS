@@ -28,6 +28,8 @@ typedef struct {
     uint64_t steps;           /* non-termination guard counter */
     uint8_t n, z, v, c, x;    /* condition codes */
     uint8_t mem[M68K_MEM];
+    uint16_t call_stack[32];
+    int call_sp;
     int fret_valid;
     uint32_t fret;
 } m68k_cpu_t;
@@ -130,6 +132,10 @@ int64_t wubu_m68k_run(const uint8_t *code, size_t size, int64_t arg)
         }
         if (w == 0x4E75) { /* RTS */
             return (int64_t)cpu.d[0];        /* result in D0 */
+        }
+        if (w == 0x4EF9) { /* JMP abs16 — compiler entry trampoline / long jumps */
+            cpu.pc = ((uint32_t)code[cpu.pc] << 8) | code[cpu.pc + 1];
+            continue;
         }
 
         /* MOVE.L Dn,Dm : 0x2000 | (m<<9) | n  (dest mode 000, src mode 000) */
@@ -344,6 +350,30 @@ int64_t wubu_m68k_run(const uint8_t *code, size_t size, int64_t arg)
                     cpu.mem[cell * 8u] = cpu.mem[va + 3];   /* LSB lane of BE word */
                 r = 0;
                 break;
+            }
+            case 27: { /* CALL: the next 2 bytes (BE) are the abs target. */
+                if (cpu.call_sp < 32) {
+                    uint16_t target = ((uint16_t)code[cpu.pc] << 8) | code[cpu.pc+1];
+                    cpu.pc += 2;
+                    cpu.call_stack[cpu.call_sp++] = cpu.pc;
+                    cpu.pc = target;
+                }
+                continue;   /* skip the slot write-back */
+            }
+            case 28: { /* FUNC_RET: result byte in slot wsa (LSB lane of BE). */
+                uint32_t va = base + (int16_t)wsa;
+                uint8_t v = cpu.mem[va + 3];   /* LSB lane */
+                /* vr0's slot displacement is slot_disp(0); write it back there */
+                uint32_t v0a = base + (int16_t)(-4);   /* slot_disp(0) */
+                cpu.mem[v0a]   = 0; cpu.mem[v0a+1] = 0;
+                cpu.mem[v0a+2] = 0; cpu.mem[v0a+3] = v;
+                if (cpu.call_sp > 0) {
+                    cpu.pc = cpu.call_stack[--cpu.call_sp];
+                } else {
+                    cpu.d[0] = v;   /* top-level return: park in D0, stop loop */
+                    cpu.pc = size;   /* exceed loop condition -> exit */
+                }
+                continue;
             }
             default: break;
             }
