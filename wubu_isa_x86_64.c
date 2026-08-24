@@ -305,6 +305,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
         }
         case MIR_ADD: case MIR_SUB: case MIR_MUL: case MIR_DIV: case MIR_MOD:
         case MIR_AND: case MIR_OR: case MIR_XOR:
+        case MIR_FEQ: case MIR_FNE: case MIR_FLT: case MIR_FLE:
         case MIR_FADD: case MIR_FSUB: case MIR_FMUL: case MIR_FDIV: {
             /* Load 'a' into rax (accumulator) */
             int sa = VR_ENC(in->a);
@@ -339,7 +340,47 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             case MIR_XOR: rex(&e,1,0,0,0); e8(&e, 0x31); e8(&e, 0xF8); break;
 
             /* ---- SSE single-precision float ops (values are f32 bits) ---- */
-            case MIR_FADD: case MIR_FSUB: case MIR_FMUL: case MIR_FDIV: {
+            case MIR_FEQ: case MIR_FNE: case MIR_FLT: case MIR_FLE: {
+                /* load a -> rax, b -> rdi (same staging as arithmetic group) */
+                int sa3 = VR_ENC(in->a);
+                if (sa3 >= 0) emit_mov_reg(&e, 0, sa3);
+                else emit_load_rbp(&e, 0, VR_SPILL(in->a));
+                int sb3 = VR_ENC(in->b);
+                if (sb3 >= 0) emit_mov_reg(&e, 7, sb3);
+                else emit_load_rbp(&e, 7, VR_SPILL(in->b));
+                /* movd xmm0, eax ; movd xmm1, edi */
+                e8(&e, 0x66); e8(&e, 0x0F); e8(&e, 0x6E); e8(&e, 0xC0);
+                e8(&e, 0x66); e8(&e, 0x0F); e8(&e, 0x6E); e8(&e, 0xCF);
+                /* ucomiss xmm0, xmm1 : 0F 2E C1 */
+                e8(&e, 0x0F); e8(&e, 0x2E); e8(&e, 0xC1);
+                switch (in->op) {
+                case MIR_FEQ:
+                    /* sete al ; setnp cl ; and al,cl  (excludes unordered) */
+                    e8(&e, 0x0F); e8(&e, 0x94); e8(&e, 0xC0);
+                    e8(&e, 0x0F); e8(&e, 0x9B); e8(&e, 0xC1);
+                    e8(&e, 0x20); e8(&e, 0xC8);
+                    break;
+                case MIR_FNE:
+                    /* setne al ; setnp cl ; and al,cl */
+                    e8(&e, 0x0F); e8(&e, 0x95); e8(&e, 0xC0);
+                    e8(&e, 0x0F); e8(&e, 0x9B); e8(&e, 0xC1);
+                    e8(&e, 0x20); e8(&e, 0xC8);
+                    break;
+                case MIR_FLT:
+                    /* setb al (CF=1 => a<b); movzx eax, al */
+                    e8(&e, 0x0F); e8(&e, 0x92); e8(&e, 0xC0);
+                    break;
+                default:
+                    /* setbe al (CF=1 or ZF=1 => a<=b) */
+                    e8(&e, 0x0F); e8(&e, 0x96); e8(&e, 0xC0);
+                    break;
+                }
+                /* movzx eax, al : 0F B6 C0 (for FEQ/FNE after AND) */
+                e8(&e, 0x0F); e8(&e, 0xB6); e8(&e, 0xC0);
+                break;
+            }
+
+                    case MIR_FADD: case MIR_FSUB: case MIR_FMUL: case MIR_FDIV: {
                 /* movd xmm0, eax-ish: load a into rax, then movq rax->xmm0;
                  * simpler: use SSE directly from memory/regs via GPR staging. */
                 int sa2 = VR_ENC(in->a);
