@@ -105,6 +105,14 @@ static int32_t spill_off(const wubu_reg_assign_t *assign, size_t assign_count,
     return off;
 }
 
+
+/* is instruction index `idx` inside any declared function body? */
+static int x86_in_func_body(const wubu_mir_prog_t *p, size_t idx) {
+    for (int f = 0; f < p->n_funcs; f++)
+        if (idx >= p->funcs[f].start && idx < p->funcs[f].end) return 1;
+    return 0;
+}
+
 static int32_t spill_offset(int spill_slot) {
     return -(int32_t)((spill_slot + 1) * 8);
 }
@@ -254,6 +262,18 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
     e.label_offsets = calloc(e.n_labels, sizeof(size_t));
     for (size_t i = 0; i < e.n_labels; i++) e.label_offsets[i] = (size_t)-1;
 
+    /* ---- function-call support state ---- */
+    size_t *func_off = calloc((size_t)(p->n_funcs > 0 ? p->n_funcs : 1), sizeof(size_t));
+    for (int f = 0; f < p->n_funcs; f++) func_off[f] = (size_t)-1;
+    uint32_t max_func_end = 0;
+    for (int f = 0; f < p->n_funcs; f++)
+        if (p->funcs[f].end > max_func_end) max_func_end = p->funcs[f].end;
+    size_t entry_off = (size_t)-1;
+    size_t entry_jmp_pos = 0;
+    typedef struct { size_t pos; uint32_t func_id; } x86_call_fixup_t;
+    x86_call_fixup_t *callps = NULL;
+    size_t ncallp = 0, ccap = 0;
+
     x86_patch_t *patches = NULL;
     size_t n_patches = 0, cap_patches = 0;
 #define PATCH_PUSH(pos, lbl) x86_patch_push(&patches, &n_patches, &cap_patches, (pos), (lbl))
@@ -263,6 +283,12 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
     rex(&e,1,0,0,0); e8(&e, 0x89); e8(&e, 0xE5);  /* mov rbp, rsp */
     if (e.frame > 0) {
         e8(&e, 0x48); e8(&e, 0x81); e8(&e, 0xEC); e32(&e, (uint32_t)e.frame);
+    }
+
+    /* entry trampoline: jmp rel32 over function bodies to main */
+    if (p->n_funcs > 0) {
+        entry_jmp_pos = e.n;
+        e.n += 5;
     }
 
     /* Helper: get x86 encoding for vr (returns -1 if spilled) */
@@ -280,6 +306,12 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
         const wubu_mir_instr_t *in = &p->ins[i];
         if (in->op == MIR_LABEL) { note_label(&e, in->label, e.n); result_in_rax = 0; continue; }
         if (in->op != MIR_RET) result_in_rax = 0;  /* reset unless RET handles it */
+
+        for (int f = 0; f < p->n_funcs; f++)
+            if ((size_t)p->funcs[f].start == i && func_off[f] == (size_t)-1)
+                func_off[f] = e.n;
+        if ((uint32_t)i == max_func_end && entry_off == (size_t)-1)
+            entry_off = e.n;
 
         switch (in->op) {
         case MIR_CONST: {
@@ -734,7 +766,41 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             e8(&e,0x48); e8(&e,0x83); e8(&e,0xC4); e8(&e,0x08);
             break;
         }
+        case MIR_CALL: {
+            /* native call rel32 to the callee body (patched after emission).
+             * Flat-register model matches the retro backends: args in v1..vN,
+             * result in v0, no caller-save. */
+            e8(&e, 0xE8);                       /* call rel32 */
+            if (ncallp == ccap) {
+                ccap = ccap ? ccap * 2 : 8;
+                callps = realloc(callps, ccap * sizeof(*callps));
+            }
+            callps[ncallp].pos = e.n;
+            callps[ncallp].func_id = in->func_id;
+            ncallp++;
+            e.n += 4;
+            break;
+        }
+
         case MIR_RET: case MIR_FRET: {
+            if (x86_in_func_body(p, i)) {
+                /* callee return under the flat-register model: park the value
+                 * in vr0's home (v0 == the call result), then hardware `ret`
+                 * pops the call-pushed return address. rsp untouched. */
+                int sret = VR_ENC(in->a);
+                int v0h  = VR_ENC(0);
+                if (sret >= 0 && v0h >= 0) {
+                    if (sret != v0h) emit_mov_reg(&e, v0h, sret);
+                } else if (sret >= 0) {
+                    emit_store_rbp(&e, spill_off(assign, assign_count, &e, 0), sret);
+                } else {
+                    emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
+                    if (v0h >= 0) emit_mov_reg(&e, v0h, 0);
+                    else emit_store_rbp(&e, spill_off(assign, assign_count, &e, 0), 0);
+                }
+                e8(&e, 0xC3);   /* ret */
+                break;
+            }
             /* If result is already in rax (lookahead skip), don't reload */
             if (!result_in_rax) {
                 int sa = VR_ENC(in->a);
@@ -790,6 +856,10 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
     if (e.n == 0 || e.code[e.n-1] != 0xC3) { e8(&e, 0xC9); e8(&e, 0xC3); }
 
     /* patch jumps */
+    if (getenv("WUBU_CALL_DEBUG"))
+        fprintf(stderr, "[fixups] ncallp=%zu entry_jmp_pos=%zu entry_off=%zu func0=%zu\n",
+                ncallp, entry_jmp_pos, entry_off,
+                p->n_funcs > 0 ? func_off[0] : 0);
     for (size_t i = 0; i < n_patches; i++) {
         size_t t = label_off(&e, patches[i].label);
         if (t == (size_t)-1) continue;
@@ -804,8 +874,37 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
     free(e.label_offsets);
     wubu_mir_free_alloc(assign);
 
-    /* Peephole: wire up the real optimizer (x86_peephole.c). */
-    e.n = x86_peephole_optimize(e.code, e.n);
+    /* CALL target fixups (MUST run before peephole — it shifts offsets) */
+    for (size_t fi2 = 0; fi2 < ncallp; fi2++) {
+        size_t t = (size_t)-1;
+        for (int f = 0; f < p->n_funcs; f++)
+            if ((uint32_t)f == callps[fi2].func_id && func_off[f] != (size_t)-1) { t = func_off[f]; break; }
+        if (t == (size_t)-1) continue;
+        size_t pos = callps[fi2].pos;
+        int32_t rel = (int32_t)(t - (pos + 4));
+        e.code[pos]   = (uint8_t)(rel & 0xFF);
+        e.code[pos+1] = (uint8_t)((rel >> 8) & 0xFF);
+        e.code[pos+2] = (uint8_t)((rel >> 16) & 0xFF);
+        e.code[pos+3] = (uint8_t)((rel >> 24) & 0xFF);
+    }
+    /* entry trampoline patch: jmp rel32 from entry_jmp_pos to entry_off */
+    if (p->n_funcs > 0 && entry_off != (size_t)-1 && entry_jmp_pos) {
+        int32_t rel = (int32_t)(entry_off - (entry_jmp_pos + 5));
+        e.code[entry_jmp_pos]     = 0xE9;
+        e.code[entry_jmp_pos + 1] = (uint8_t)(rel & 0xFF);
+        e.code[entry_jmp_pos + 2] = (uint8_t)((rel >> 8) & 0xFF);
+        e.code[entry_jmp_pos + 3] = (uint8_t)((rel >> 16) & 0xFF);
+        e.code[entry_jmp_pos + 4] = (uint8_t)((rel >> 24) & 0xFF);
+    }
+    free(callps);
+    free(func_off);
+
+    /* Peephole: wire up the real optimizer (x86_peephole.c).
+     * Skipped for multi-function programs: shrinking movabs shifts byte
+     * offsets and would invalidate the already-applied CALL/trampoline
+     * rel32 fixups. */
+    if (p->n_funcs == 0)
+        e.n = x86_peephole_optimize(e.code, e.n);
 
     *out = e.code;
     *out_size = e.n;
@@ -819,6 +918,11 @@ static int64_t x86_run(const uint8_t *code, size_t size, int64_t arg) {
     memcpy(exec, code, size);
     wubu_clear_cache(exec, size);
     int64_t (*fn)(void) = (int64_t (*)(void))exec;
+    if (getenv("WUBU_CALL_DEBUG") && size > 40) {
+        fprintf(stderr, "[run] size=%zu code:", size);
+        for (size_t q = 0; q < size && q < 90; q++) fprintf(stderr, " %02X", ((const uint8_t*)code)[q]);
+        fprintf(stderr, "\n");
+    }
     int64_t r = fn();
     jit_free_exec(exec, size);
     return r;

@@ -459,7 +459,7 @@ static int mips_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_siz
             callps[ncallp].pos = e.n;
             callps[ncallp].func_id = in->func_id;
             ncallp++;
-            e.n += 4;
+            e32(&e, 0);          /* reserve target word (patched in fixup pass) */
             break;
         }
 
