@@ -77,9 +77,7 @@ GAUN    = test_gauntlet/wubu_test_gauntlet.c test_gauntlet_runner.c \
 all: test_isa_driver test_mir_opt
 
 # ISA driver differential test (10 interpreter-based drivers)
-# NOTE: real x86_64 JIT driver links but its frame setup corrupts the caller stack
-# (discovered 2026-08-24, needs WUBU-ABI-v1 prologue fix in OS repo before enabling).
-test_isa_driver: $(MIR) $(ISA) $(INTERP) $(OS_INTERP) test_isa_driver.c
+test_isa_driver: $(MIR) $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c $(INTERP) $(OS_INTERP) test_isa_driver.c jit_stub.c jit_stubs_arm64.c
 	$(CC) $(CFLAGS) -I. $^ $(LDFLAGS) -o $@
 
 # MIR optimizer test

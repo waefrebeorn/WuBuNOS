@@ -40,6 +40,7 @@ typedef struct {
     int32_t mem_off;             /* byte offset from rbp to mem[0] (var memory) */
     size_t *label_offsets;       /* label id -> byte offset */
     size_t n_labels;
+    int32_t spare_off;           /* emergency spill slot below the frame */
 } x86_emitter_t;
 
 static void e8(x86_emitter_t *e, uint8_t b) { if (e->n == e->cap) { e->cap = e->cap ? e->cap*2 : 256; e->code = realloc(e->code, e->cap); } e->code[e->n++] = b; }
@@ -92,6 +93,18 @@ static void emit_store_rbp(x86_emitter_t *e, int32_t off, int src) {
 }
 
 /* Spilled vr slot: slot N -> [rbp - (N+1)*8] */
+
+/* Safe spill offset: if the allocator marked a vr spilled but never gave it a
+ * slot (split bug), fall back to the emitter's emergency slot below the frame. */
+static int32_t spill_off(const wubu_reg_assign_t *assign, size_t assign_count,
+                         const x86_emitter_t *e, wubu_vr_t vr) {
+    /* mirrors VR_SPILL: spilled vrs hold a negative byte offset */
+    int32_t off = (vr < (wubu_vr_t)assign_count && assign[vr].reg < 0)
+                    ? (int32_t)assign[vr].stack : 0;
+    if (off == 0) return e->spare_off;
+    return off;
+}
+
 static int32_t spill_offset(int spill_slot) {
     return -(int32_t)((spill_slot + 1) * 8);
 }
@@ -234,7 +247,8 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
 
     x86_emitter_t e;
     memset(&e, 0, sizeof(e));
-    e.frame = n_spilled * 8 + mem_bytes;          /* spills + var mem */
+    e.frame = n_spilled * 8 + mem_bytes + 8;      /* spills + var mem + spare */
+    e.spare_off = -(int32_t)(n_spilled * 8 + mem_bytes + 8);
     e.mem_off = (int32_t)(n_spilled * 8 + mem_bytes); /* offset to mem[0] */
     e.n_labels = p->n_labels;
     e.label_offsets = calloc(e.n_labels, sizeof(size_t));
@@ -256,6 +270,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
     /* The regalloc stores the spill slot byte-offset in assign[v].stack
      * (already a negative value: -(slot+1)*8). Use it directly. */
     #define VR_SPILL(vr) ((vr) < (wubu_vr_t)assign_count && assign[(vr)].reg < 0 ? assign[(vr)].stack : 0)
+
     /* Lookahead: is the next instruction a RET that reads this vr? */
     #define NEXT_IS_RET(vr) (i + 1 < p->n && p->ins[i+1].op == MIR_RET && p->ins[i+1].a == (wubu_vr_t)(vr))
 
@@ -279,7 +294,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             } else {
                 /* spilled: mov rax, imm; mov [rbp+off], rax. Uses movabs too. */
                 e8(&e, 0x48); e8(&e, 0xB8); e64(&e, (uint64_t)imm);
-                emit_store_rbp(&e, VR_SPILL(in->dst), 0);
+                emit_store_rbp(&e, spill_off(assign, assign_count, &e, in->dst), 0);
             }
             break;
         }
@@ -290,15 +305,15 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
                 if (sa >= 0) {
                     emit_mov_reg(&e, sd, sa);  /* mov dst_reg, src_reg */
                 } else {
-                    emit_load_rbp(&e, sd, VR_SPILL(in->a));  /* mov dst_reg, [rbp+off] */
+                    emit_load_rbp(&e, sd, spill_off(assign, assign_count, &e, in->a));  /* mov dst_reg, [rbp+off] */
                 }
             } else {
                 /* dest is spilled */
                 if (sa >= 0) {
-                    emit_store_rbp(&e, VR_SPILL(in->dst), sa);
+                    emit_store_rbp(&e, spill_off(assign, assign_count, &e, in->dst), sa);
                 } else {
-                    emit_load_rbp(&e, 0, VR_SPILL(in->a));  /* mov rax, [rbp+off_a] */
-                    emit_store_rbp(&e, VR_SPILL(in->dst), 0);  /* mov [rbp+off_dst], rax */
+                    emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));  /* mov rax, [rbp+off_a] */
+                    emit_store_rbp(&e, spill_off(assign, assign_count, &e, in->dst), 0);  /* mov [rbp+off_dst], rax */
                 }
             }
             break;
@@ -317,7 +332,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             } else if (sa >= 0) {
                 emit_mov_reg(&e, 0, sa);  /* mov rax, src_reg */
             } else {
-                emit_load_rbp(&e, 0, VR_SPILL(in->a));
+                emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
             }
             /* Load 'b' into rdi (second operand) */
             int sb = VR_ENC(in->b);
@@ -330,7 +345,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             if (sb >= 0) {
                 emit_mov_reg(&e, 7, sb);  /* mov rdi, b_reg */
             } else {
-                emit_load_rbp(&e, 7, VR_SPILL(in->b));
+                emit_load_rbp(&e, 7, spill_off(assign, assign_count, &e, in->b));
             }
             switch (in->op) {
             case MIR_ADD: rex(&e,1,0,0,0); e8(&e, 0x01); e8(&e, 0xF8); break; /* add rax,rdi */
@@ -346,10 +361,10 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             case MIR_DADD: case MIR_DSUB: case MIR_DMUL: case MIR_DDIV: {
                 int da = VR_ENC(in->a);
                 if (da >= 0) emit_mov_reg(&e, 0, da);
-                else emit_load_rbp(&e, 0, VR_SPILL(in->a));
+                else emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
                 int db = VR_ENC(in->b);
                 if (db >= 0) emit_mov_reg(&e, 7, db);
-                else emit_load_rbp(&e, 7, VR_SPILL(in->b));
+                else emit_load_rbp(&e, 7, spill_off(assign, assign_count, &e, in->b));
                 /* movq xmm0, rax : 66 48 0F 6E C0 */
                 e8(&e, 0x66); e8(&e, 0x48); e8(&e, 0x0F); e8(&e, 0x6E); e8(&e, 0xC0);
                 /* movq xmm1, rdi : 66 48 0F 6E CF */
@@ -371,7 +386,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             case MIR_DNEG: {
                 int da = VR_ENC(in->a);
                 if (da >= 0) emit_mov_reg(&e, 0, da);
-                else emit_load_rbp(&e, 0, VR_SPILL(in->a));
+                else emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
                 /* movq xmm0, rax */
                 e8(&e, 0x66); e8(&e, 0x48); e8(&e, 0x0F); e8(&e, 0x6E); e8(&e, 0xC0);
                 /* mov rdi, 0x8000000000000000 : 48 BF + imm64 */
@@ -389,7 +404,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             case MIR_ITOF: case MIR_FTOI: {
                 int sc = VR_ENC(in->a);
                 if (sc >= 0) emit_mov_reg(&e, 0, sc);
-                else emit_load_rbp(&e, 0, VR_SPILL(in->a));
+                else emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
                 if (in->op == MIR_ITOF) {
                     /* cvtsi2ss xmm0, eax : F3 0F 2A C0 */
                     e8(&e, 0xF3); e8(&e, 0x0F); e8(&e, 0x2A); e8(&e, 0xC0);
@@ -407,7 +422,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             case MIR_FNEG: {
                 int sa4 = VR_ENC(in->a);
                 if (sa4 >= 0) emit_mov_reg(&e, 0, sa4);
-                else emit_load_rbp(&e, 0, VR_SPILL(in->a));
+                else emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
                 /* mov edi, 0x80000000 : BF 00 00 00 80 */
                 e8(&e, 0xBF); e8(&e, 0x00); e8(&e, 0x00); e8(&e, 0x00); e8(&e, 0x80);
                 /* movd xmm1, edi */
@@ -425,10 +440,10 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
                 /* load a -> rax, b -> rdi (same staging as arithmetic group) */
                 int sa3 = VR_ENC(in->a);
                 if (sa3 >= 0) emit_mov_reg(&e, 0, sa3);
-                else emit_load_rbp(&e, 0, VR_SPILL(in->a));
+                else emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
                 int sb3 = VR_ENC(in->b);
                 if (sb3 >= 0) emit_mov_reg(&e, 7, sb3);
-                else emit_load_rbp(&e, 7, VR_SPILL(in->b));
+                else emit_load_rbp(&e, 7, spill_off(assign, assign_count, &e, in->b));
                 /* movd xmm0, eax ; movd xmm1, edi */
                 e8(&e, 0x66); e8(&e, 0x0F); e8(&e, 0x6E); e8(&e, 0xC0);
                 e8(&e, 0x66); e8(&e, 0x0F); e8(&e, 0x6E); e8(&e, 0xCF);
@@ -466,10 +481,10 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
                  * simpler: use SSE directly from memory/regs via GPR staging. */
                 int sa2 = VR_ENC(in->a);
                 if (sa2 >= 0) emit_mov_reg(&e, 0, sa2);
-                else emit_load_rbp(&e, 0, VR_SPILL(in->a));
+                else emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
                 int sb2 = VR_ENC(in->b);
                 if (sb2 >= 0) emit_mov_reg(&e, 7, sb2);
-                else emit_load_rbp(&e, 7, VR_SPILL(in->b));
+                else emit_load_rbp(&e, 7, spill_off(assign, assign_count, &e, in->b));
                 /* movd xmm0, eax   : 66 0F 6E C0 */
                 e8(&e, 0x66); e8(&e, 0x0F); e8(&e, 0x6E); e8(&e, 0xC0);
                 /* movd xmm1, edi   : 66 0F 6E CF */
@@ -504,7 +519,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
                     result_in_rax = 0;
                 }
             } else {
-                emit_store_rbp(&e, VR_SPILL(in->dst), 0);
+                emit_store_rbp(&e, spill_off(assign, assign_count, &e, in->dst), 0);
                 result_in_rax = 0;
             }
             break;
@@ -513,7 +528,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             /* shifts need rcx */
             int sa = VR_ENC(in->a);
             if (sa >= 0) emit_mov_reg(&e, 0, sa);
-            else emit_load_rbp(&e, 0, VR_SPILL(in->a));
+            else emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
 
             int sb = VR_ENC(in->b);
             /* mov rcx, b */
@@ -521,7 +536,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
                 rex(&e,1,reg_needs_rex(sb),0,0); e8(&e, 0x89); e8(&e, (uint8_t)(0xC0 | ((sb & 7) << 3) | 1));
             } else {
                 /* mov rcx, [rbp+off] */
-                int32_t off = VR_SPILL(in->b);
+                int32_t off = spill_off(assign, assign_count, &e, in->b);
                 if (off >= -128 && off <= 127) { rex(&e,1,0,0,0); e8(&e, 0x8B); e8(&e, 0x4D); e8(&e, (uint8_t)off); }
                 else { rex(&e,1,0,0,0); e8(&e, 0x8B); e8(&e, 0x8D); e32(&e, (uint32_t)off); }
             }
@@ -530,18 +545,18 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
 
             int sd = VR_ENC(in->dst);
             if (sd >= 0) { if (sd != 0) emit_mov_reg(&e, sd, 0); }
-            else emit_store_rbp(&e, VR_SPILL(in->dst), 0);
+            else emit_store_rbp(&e, spill_off(assign, assign_count, &e, in->dst), 0);
             break;
         }
         case MIR_EQ: case MIR_NE: case MIR_LT: case MIR_LE: case MIR_GT: case MIR_GE:
         case MIR_ULT: case MIR_ULE: case MIR_UGT: case MIR_UGE: {
             int sa = VR_ENC(in->a);
             if (sa >= 0) emit_mov_reg(&e, 0, sa);
-            else emit_load_rbp(&e, 0, VR_SPILL(in->a));
+            else emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
 
             int sb = VR_ENC(in->b);
             if (sb >= 0) emit_mov_reg(&e, 7, sb);
-            else emit_load_rbp(&e, 7, VR_SPILL(in->b));
+            else emit_load_rbp(&e, 7, spill_off(assign, assign_count, &e, in->b));
 
             rex(&e,1,0,0,0); e8(&e, 0x39); e8(&e, 0xF8);  /* cmp rax, rdi */
             uint8_t cc;
@@ -564,27 +579,27 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
 
             int sd = VR_ENC(in->dst);
             if (sd >= 0) { if (sd != 0) emit_mov_reg(&e, sd, 0); }
-            else emit_store_rbp(&e, VR_SPILL(in->dst), 0);
+            else emit_store_rbp(&e, spill_off(assign, assign_count, &e, in->dst), 0);
             break;
         }
         case MIR_NEG: {
             int sa = VR_ENC(in->a);
             if (sa >= 0) emit_mov_reg(&e, 0, sa);
-            else emit_load_rbp(&e, 0, VR_SPILL(in->a));
+            else emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
             rex(&e,1,0,0,0); e8(&e, 0xF7); e8(&e, 0xD8);  /* neg rax */
             int sd = VR_ENC(in->dst);
             if (sd >= 0) { if (sd != 0) emit_mov_reg(&e, sd, 0); }
-            else emit_store_rbp(&e, VR_SPILL(in->dst), 0);
+            else emit_store_rbp(&e, spill_off(assign, assign_count, &e, in->dst), 0);
             break;
         }
         case MIR_NOT: {
             int sa = VR_ENC(in->a);
             if (sa >= 0) emit_mov_reg(&e, 0, sa);
-            else emit_load_rbp(&e, 0, VR_SPILL(in->a));
+            else emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
             rex(&e,1,0,0,0); e8(&e, 0xF7); e8(&e, 0xD0);  /* not rax */
             int sd = VR_ENC(in->dst);
             if (sd >= 0) { if (sd != 0) emit_mov_reg(&e, sd, 0); }
-            else emit_store_rbp(&e, VR_SPILL(in->dst), 0);
+            else emit_store_rbp(&e, spill_off(assign, assign_count, &e, in->dst), 0);
             break;
         }
         case MIR_JMP:
@@ -595,7 +610,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
         case MIR_JZ: {
             int sa = VR_ENC(in->a);
             if (sa >= 0) emit_mov_reg(&e, 0, sa);
-            else emit_load_rbp(&e, 0, VR_SPILL(in->a));
+            else emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
             rex(&e,1,0,0,0); e8(&e, 0x85); e8(&e, 0xC0);  /* test rax,rax */
             e8(&e, 0x0F); e8(&e, 0x84);                     /* jz rel32 */
             PATCH_PUSH(e.n, in->label);
@@ -605,7 +620,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
         case MIR_JNZ: {
             int sa = VR_ENC(in->a);
             if (sa >= 0) emit_mov_reg(&e, 0, sa);
-            else emit_load_rbp(&e, 0, VR_SPILL(in->a));
+            else emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
             rex(&e,1,0,0,0); e8(&e, 0x85); e8(&e, 0xC0);  /* test rax,rax */
             e8(&e, 0x0F); e8(&e, 0x85);                     /* jnz rel32 */
             PATCH_PUSH(e.n, in->label);
@@ -630,11 +645,11 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
              * 0x3D (mod00 rm101) would wrongly encode [rip+disp32]. */
             rex(&e,1,0,0,0); e8(&e,0x8D); e8(&e,0xBD); e32(&e,(uint32_t)(-(int32_t)e.mem_off));
             /* rsi = A (vr value / slot index) */
-            if (sa>=0) emit_mov_reg(&e,6,sa);            else emit_load_rbp(&e,6,VR_SPILL(in->a));
+            if (sa>=0) emit_mov_reg(&e,6,sa);            else emit_load_rbp(&e,6,spill_off(assign, assign_count, &e, in->a));
             /* rdx = B */
-            if (sb>=0) emit_mov_reg(&e,2,sb);            else emit_load_rbp(&e,2,VR_SPILL(in->b));
+            if (sb>=0) emit_mov_reg(&e,2,sb);            else emit_load_rbp(&e,2,spill_off(assign, assign_count, &e, in->b));
             /* rcx = C */
-            if (sd>=0) emit_mov_reg(&e,1,sd);            else emit_load_rbp(&e,1,VR_SPILL(in->dst));
+            if (sd>=0) emit_mov_reg(&e,1,sd);            else emit_load_rbp(&e,1,spill_off(assign, assign_count, &e, in->dst));
             /* r8d = M (41 B8)  — but 41 B8 matches shrink_movabs? No, B8 here is
              * a reg-load not movabs: shrink checks `code[i]==0x48` for the plain
              * case. 41 B8 is the `need_rex_b` (0x49) branch ONLY. 41 != 49, so
@@ -659,7 +674,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             if (!result_in_rax) {
                 int sa = VR_ENC(in->a);
                 if (sa >= 0) emit_mov_reg(&e, 0, sa);
-                else emit_load_rbp(&e, 0, VR_SPILL(in->a));
+                else emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
             }
             result_in_rax = 0;
             e8(&e, 0xC9);  /* leave */
@@ -673,7 +688,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
              * Mirror the interpreter's flat int64[] array on the stack. */
             int sa = VR_ENC(in->a);
             if (sa >= 0) emit_mov_reg(&e, 0, sa);          /* rax = addr */
-            else emit_load_rbp(&e, 0, VR_SPILL(in->a));
+            else emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
             rex(&e,1,0,0,0); e8(&e, 0xC1); e8(&e, 0xE0); e8(&e, 0x03); /* shl rax,3 */
             rex(&e,1,0,0,0); e8(&e, 0x8D); e8(&e, 0xB5);   /* lea rsi,[rbp-mem_off] */
             e32(&e, (uint32_t)(-(int32_t)e.mem_off));
@@ -684,7 +699,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
                 e8(&e, (uint8_t)(0x06 | ((sd & 7) << 3))); /* mov dstreg,[rsi] */
             } else {
                 rex(&e,1,0,0,0); e8(&e, 0x8B); e8(&e, 0x06); /* mov rax,[rsi] */
-                emit_store_rbp(&e, VR_SPILL(in->dst), 0);
+                emit_store_rbp(&e, spill_off(assign, assign_count, &e, in->dst), 0);
             }
             break;
         }
@@ -692,10 +707,10 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             /* mem[addr] = val */
             int sa = VR_ENC(in->a);
             if (sa >= 0) emit_mov_reg(&e, 0, sa);          /* rax = addr */
-            else emit_load_rbp(&e, 0, VR_SPILL(in->a));
+            else emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
             int sb = VR_ENC(in->b);
             if (sb >= 0) emit_mov_reg(&e, 7, sb);          /* rdi = val */
-            else emit_load_rbp(&e, 7, VR_SPILL(in->b));
+            else emit_load_rbp(&e, 7, spill_off(assign, assign_count, &e, in->b));
             rex(&e,1,0,0,0); e8(&e, 0xC1); e8(&e, 0xE0); e8(&e, 0x03); /* shl rax,3 */
             rex(&e,1,0,0,0); e8(&e, 0x8D); e8(&e, 0xB5);   /* lea rsi,[rbp-mem_off] */
             e32(&e, (uint32_t)(-(int32_t)e.mem_off));
@@ -714,7 +729,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
         size_t t = label_off(&e, patches[i].label);
         if (t == (size_t)-1) continue;
         size_t pos = patches[i].pos;
-        int32_t rel = (int32_t)(t - (pos + 4));
+        int32_t rel = (int32_t)(t - (pos + 5));   /* E9 rel32: next insn at pos+5 */
         e.code[pos] = (uint8_t)(rel & 0xFF);
         e.code[pos+1] = (uint8_t)((rel >> 8) & 0xFF);
         e.code[pos+2] = (uint8_t)((rel >> 16) & 0xFF);
