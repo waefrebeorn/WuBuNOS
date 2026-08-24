@@ -308,6 +308,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
         case MIR_FEQ: case MIR_FNE: case MIR_FLT: case MIR_FLE:
         case MIR_FADD: case MIR_FSUB: case MIR_FMUL: case MIR_FDIV:
         case MIR_ITOF: case MIR_FTOI:
+        case MIR_DADD: case MIR_DSUB: case MIR_DMUL: case MIR_DDIV: case MIR_DNEG:
         case MIR_FNEG: {
             /* Load 'a' into rax (accumulator) */
             int sa = VR_ENC(in->a);
@@ -342,6 +343,49 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             case MIR_XOR: rex(&e,1,0,0,0); e8(&e, 0x31); e8(&e, 0xF8); break;
 
             /* ---- SSE single-precision float ops (values are f32 bits) ---- */
+            case MIR_DADD: case MIR_DSUB: case MIR_DMUL: case MIR_DDIV: {
+                int da = VR_ENC(in->a);
+                if (da >= 0) emit_mov_reg(&e, 0, da);
+                else emit_load_rbp(&e, 0, VR_SPILL(in->a));
+                int db = VR_ENC(in->b);
+                if (db >= 0) emit_mov_reg(&e, 7, db);
+                else emit_load_rbp(&e, 7, VR_SPILL(in->b));
+                /* movq xmm0, rax : 66 48 0F 6E C0 */
+                e8(&e, 0x66); e8(&e, 0x48); e8(&e, 0x0F); e8(&e, 0x6E); e8(&e, 0xC0);
+                /* movq xmm1, rdi : 66 48 0F 6E CF */
+                e8(&e, 0x66); e8(&e, 0x48); e8(&e, 0x0F); e8(&e, 0x6E); e8(&e, 0xCF);
+                /* addsd/subsd/mulsd/divsd xmm0, xmm1 : F2 0F 5x C1 */
+                e8(&e, 0xF2); e8(&e, 0x0F);
+                switch (in->op) {
+                case MIR_DADD: e8(&e, 0x58); break;
+                case MIR_DSUB: e8(&e, 0x5C); break;
+                case MIR_DMUL: e8(&e, 0x59); break;
+                default:       e8(&e, 0x5E); break;
+                }
+                e8(&e, 0xC1);
+                /* movq rax, xmm0 : 66 48 0F 7E C0 */
+                e8(&e, 0x66); e8(&e, 0x48); e8(&e, 0x0F); e8(&e, 0x7E); e8(&e, 0xC0);
+                break;
+            }
+
+            case MIR_DNEG: {
+                int da = VR_ENC(in->a);
+                if (da >= 0) emit_mov_reg(&e, 0, da);
+                else emit_load_rbp(&e, 0, VR_SPILL(in->a));
+                /* movq xmm0, rax */
+                e8(&e, 0x66); e8(&e, 0x48); e8(&e, 0x0F); e8(&e, 0x6E); e8(&e, 0xC0);
+                /* mov rdi, 0x8000000000000000 : 48 BF + imm64 */
+                e8(&e, 0x48); e8(&e, 0xBF);
+                e32(&e, 0x00000000); e32(&e, 0x80000000);
+                /* movq xmm1, rdi */
+                e8(&e, 0x66); e8(&e, 0x48); e8(&e, 0x0F); e8(&e, 0x6E); e8(&e, 0xCF);
+                /* xorps xmm0, xmm1 */
+                e8(&e, 0x0F); e8(&e, 0x57); e8(&e, 0xC1);
+                /* movq rax, xmm0 */
+                e8(&e, 0x66); e8(&e, 0x48); e8(&e, 0x0F); e8(&e, 0x7E); e8(&e, 0xC0);
+                break;
+            }
+
             case MIR_ITOF: case MIR_FTOI: {
                 int sc = VR_ENC(in->a);
                 if (sc >= 0) emit_mov_reg(&e, 0, sc);
