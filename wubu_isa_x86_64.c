@@ -307,6 +307,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
         case MIR_AND: case MIR_OR: case MIR_XOR:
         case MIR_FEQ: case MIR_FNE: case MIR_FLT: case MIR_FLE:
         case MIR_FADD: case MIR_FSUB: case MIR_FMUL: case MIR_FDIV:
+        case MIR_ITOF: case MIR_FTOI:
         case MIR_FNEG: {
             /* Load 'a' into rax (accumulator) */
             int sa = VR_ENC(in->a);
@@ -341,6 +342,24 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             case MIR_XOR: rex(&e,1,0,0,0); e8(&e, 0x31); e8(&e, 0xF8); break;
 
             /* ---- SSE single-precision float ops (values are f32 bits) ---- */
+            case MIR_ITOF: case MIR_FTOI: {
+                int sc = VR_ENC(in->a);
+                if (sc >= 0) emit_mov_reg(&e, 0, sc);
+                else emit_load_rbp(&e, 0, VR_SPILL(in->a));
+                if (in->op == MIR_ITOF) {
+                    /* cvtsi2ss xmm0, eax : F3 0F 2A C0 */
+                    e8(&e, 0xF3); e8(&e, 0x0F); e8(&e, 0x2A); e8(&e, 0xC0);
+                    /* movd eax, xmm0 */
+                    e8(&e, 0x66); e8(&e, 0x0F); e8(&e, 0x7E); e8(&e, 0xC0);
+                } else {
+                    /* movd xmm0, eax */
+                    e8(&e, 0x66); e8(&e, 0x0F); e8(&e, 0x6E); e8(&e, 0xC0);
+                    /* cvttss2si eax, xmm0 : F3 0F 2C C0 */
+                    e8(&e, 0xF3); e8(&e, 0x0F); e8(&e, 0x2C); e8(&e, 0xC0);
+                }
+                break;
+            }
+
             case MIR_FNEG: {
                 int sa4 = VR_ENC(in->a);
                 if (sa4 >= 0) emit_mov_reg(&e, 0, sa4);
