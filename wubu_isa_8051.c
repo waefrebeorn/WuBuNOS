@@ -41,6 +41,9 @@
 #define EXT_FRET     0x21
 #define EXT_FCONST   0x22
 #define EXT_MEMOP    0x23
+#define EXT_CALL     0x24
+#define EXT_JMP      0x26
+#define EXT_FUNC_RET 0x25
 
 typedef struct {
     uint8_t *code;
@@ -64,9 +67,32 @@ static void note_label(i8051_emitter_t *e, uint32_t label, size_t off) {
     e->label_offsets[label] = off;
 }
 
+
+/* is instruction index `idx` inside any declared function body? */
+static bool i8051_in_func_body(const wubu_mir_prog_t *p, size_t idx) {
+    for (int f = 0; f < p->n_funcs; f++)
+        if (idx >= p->funcs[f].start && idx < p->funcs[f].end) return true;
+    return false;
+}
+
 static int i8051_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size) {
     i8051_emitter_t e;
     memset(&e, 0, sizeof(e));
+    typedef struct { size_t pos; uint32_t func_id; } i51_fixup_t;
+    i51_fixup_t *callps = NULL;
+    size_t ncallp = 0, ncallp_cap = 0;
+    size_t *func_off = calloc((size_t)(p->n_funcs > 0 ? p->n_funcs : 1), sizeof(size_t));
+    for (int f = 0; f < p->n_funcs; f++) func_off[f] = (size_t)-1;
+    uint32_t max_func_end = 0;
+    for (int f = 0; f < p->n_funcs; f++)
+        if (p->funcs[f].end > max_func_end) max_func_end = p->funcs[f].end;
+    size_t entry_off = (size_t)-1;
+    size_t entry_jmp_pos = 0;
+    if (p->n_funcs > 0) {
+        e8(&e, I8051_EXT); e8(&e, EXT_JMP);   /* abs16 BE target patched below */
+        entry_jmp_pos = e.n;
+        e.n += 2;
+    }
     e.n_labels = p->n_labels;
     e.label_offsets = calloc(e.n_labels, sizeof(size_t));
     for (size_t i = 0; i < e.n_labels; i++) e.label_offsets[i] = (size_t)-1;
@@ -77,6 +103,12 @@ static int i8051_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
         uint8_t sa, sb;
 
         if (in->op == MIR_LABEL) { note_label(&e, in->label, e.n); continue; }
+
+        for (int fi = 0; fi < p->n_funcs; fi++)
+            if ((size_t)p->funcs[fi].start == i && func_off[fi] == (size_t)-1)
+                func_off[fi] = e.n;
+        if ((uint32_t)i == max_func_end && entry_off == (size_t)-1)
+            entry_off = e.n;
 
         switch (in->op) {
         case MIR_CONST:
@@ -259,15 +291,49 @@ static int i8051_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
             e8(&e, (uint8_t)(I8051_VR_BASE + in->b));   /* val slot */
             break;
 
+        case MIR_CALL: {
+            /* EXT_CALL: subop, then abs16 target (patched later) */
+            e8(&e, I8051_EXT); e8(&e, EXT_CALL);
+            if (ncallp == ncallp_cap) {
+                ncallp_cap = ncallp_cap ? ncallp_cap * 2 : 8;
+                callps = realloc(callps, ncallp_cap * sizeof(*callps));
+            }
+            callps[ncallp].pos = e.n;
+            callps[ncallp].func_id = in->func_id;
+            ncallp++;
+            e.n += 2;
+            break;
+        }
+
         case MIR_RET:
             sa = (uint8_t)(I8051_VR_BASE + in->a);
-            e8(&e, 0xE5); e8(&e, sa);   /* MOV A, [sa] */
-            e8(&e, 0x22);               /* RET */
+            if (i8051_in_func_body(p, i)) {
+                e8(&e, I8051_EXT); e8(&e, EXT_FUNC_RET); e8(&e, sa);
+            } else {
+                e8(&e, 0xE5); e8(&e, sa);   /* MOV A, [sa] */
+                e8(&e, 0x22);               /* RET */
+            }
             break;
         default:
             break;
         }
     }
+
+    /* CALL fixup pass + entry trampoline patch */
+    for (size_t ci3 = 0; ci3 < ncallp; ci3++) {
+        size_t t = (size_t)-1;
+        for (int f = 0; f < p->n_funcs; f++)
+            if ((uint32_t)f == callps[ci3].func_id && func_off[f] != (size_t)-1) { t = func_off[f]; break; }
+        if (t == (size_t)-1 || t > 0xFFFF) continue;
+        e.code[callps[ci3].pos] = (uint8_t)((t >> 8) & 0xFF);      /* 8051 BE */
+        e.code[callps[ci3].pos + 1] = (uint8_t)(t & 0xFF);
+    }
+    if (p->n_funcs > 0 && entry_off != (size_t)-1 && entry_off <= 0xFFFF) {
+        e.code[entry_jmp_pos] = (uint8_t)((entry_off >> 8) & 0xFF);   /* 8051 BE */
+        e.code[entry_jmp_pos + 1] = (uint8_t)(entry_off & 0xFF);
+    }
+    free(callps);
+    free(func_off);
 
     free(e.label_offsets);
     *out = e.code;

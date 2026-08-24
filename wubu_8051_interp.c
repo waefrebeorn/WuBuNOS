@@ -51,11 +51,16 @@
 #define EXT_FRET 0x21
 #define EXT_FCONST 0x22   /* soft-float return: slot */
 #define EXT_MEMOP 0x23   /* MIR memory LOAD/STORE */
+#define EXT_CALL 0x24   /* abs16 target follows */
+#define EXT_JMP 0x26   /* abs16 BE target, no push */
+#define EXT_FUNC_RET 0x25 /* result slot */
 
 int64_t wubu_8051_interp_exec(const uint8_t *code, size_t size, int64_t arg)
 {
     int64_t ram[I8051_RAM_SIZE];
     memset(ram, 0, sizeof(ram));
+    uint16_t call_stack[32];
+    int call_sp = 0;
     ram[I8051_VR_BASE] = arg;
 
     size_t pc = 0;
@@ -248,6 +253,29 @@ int64_t wubu_8051_interp_exec(const uint8_t *code, size_t size, int64_t arg)
                         ram[s2] = ram[I8051_XMEM_BASE + (ram[cell_slot] & 0xFF)] & 0xFF;
                     else if (fn == 26) /* MEM_STORE */
                         ram[I8051_XMEM_BASE + (ram[cell_slot] & 0xFF)] = ram[s2] & 0xFF;
+                    break;
+                }
+                case EXT_CALL: {
+                    if (call_sp < 32) {
+                        uint16_t target = (uint16_t)((code[pc] << 8) | code[pc+1]);  /* 8051 BE */
+                        pc += 2;
+                        call_stack[call_sp++] = (uint16_t)pc;
+                        pc = target;
+                    }
+                    break;
+                }
+                case EXT_JMP: {
+                    pc = (uint16_t)((code[pc] << 8) | code[pc+1]);
+                    break;
+                }
+                case EXT_FUNC_RET: {
+                    uint8_t rslot = code[pc++];
+                    ram[I8051_VR_BASE] = ram[rslot];   /* vr0 = return register */
+                    if (call_sp > 0) {
+                        pc = call_stack[--call_sp];
+                    } else {
+                        return ram[rslot] & 0xFF;   /* top-level: sign-extended below anyway */
+                    }
                     break;
                 }
                 case EXT_FRET: {

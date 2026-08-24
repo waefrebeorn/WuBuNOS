@@ -447,8 +447,8 @@ static void test_call(void)
     prog.funcs[0].end = fend;
     prog.n_funcs = 1;
 
-    const char *names[] = {"6502", "z80"};
-    for (int i = 0; i < 2; i++) {
+    const char *names[] = {"6502", "z80", "8051"};
+    for (int i = 0; i < 3; i++) {
         const wubu_isa_driver_t *d = wubu_isa_find(names[i]);
         if (!d) continue;
         int64_t result = 0;
