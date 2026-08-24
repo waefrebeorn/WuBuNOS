@@ -299,15 +299,39 @@ static void emit_kernel_body(ptx_emitter_t *e, const wubu_mir_prog_t *p)
          * VR registers are .b64; f32 values live in low 32 bits (upper 32
          * are zero per softfloat return type). PTX mov.b32 cannot truncate
          * b64->b32 (width mismatch), so use shared-mem bridge helpers.
-         * Scratch .f32 reg at index n_vregs for dst-src aliasing. */
+         * Scratch .f32 reg at index n_vregs for dst-src aliasing.
+         *
+         * FMA fusion: if MIR_FMUL(d1, a, b) is immediately followed by
+         * MIR_FADD(d2, d1, c), emit fma.rn.f32(d2, a, b, c) instead of two
+         * separate instructions. This matches the research finding that
+         * fused multiply-add avoids double-rounding and improves throughput. */
         case MIR_FADD: case MIR_FSUB: case MIR_FMUL: case MIR_FDIV: {
             uint32_t rd = ptx_vr(e, ins->dst);
             uint32_t ra = ptx_vr(e, ins->a);
             uint32_t rb = ptx_vr(e, ins->b);
             uint32_t fs = e->n_vregs;            /* scratch .f32 reg */
+            /* Check for FMUL -> FADD fusion pattern */
+            if (ins->op == MIR_FMUL && i + 1 < p->n &&
+                p->ins[i+1].op == MIR_FADD &&
+                p->ins[i+1].a == ins->dst) {
+                uint32_t rd2 = ptx_vr(e, p->ins[i+1].dst);
+                uint32_t c = ptx_vr(e, p->ins[i+1].b);
+                uint32_t fd = (rd2 == ra || rd2 == rb) ? fs : rd2;
+                uint32_t fa = (rd2 == ra) ? fs : ra;
+                uint32_t fb = (rd2 == rb) ? fs : rb;
+                uint32_t fc = (rd2 == c) ? fs : c;
+                ptx_vr_to_f32(e, fa, ra);
+                if (fb != fa) ptx_vr_to_f32(e, fb, rb);
+                if (fc != fa && fc != fb) ptx_vr_to_f32(e, fc, c);
+                ptx_emit(e, "    fma.rn.f32 %%f%u, %%f%u, %%f%u, %%f%u;\\n",
+                         fd, fa, fb, fc);
+                ptx_f32_to_vr(e, rd2, fd);
+                i++;  /* consume the FADD */
+                break;
+            }
             uint32_t fd = (ra == rd) ? fs : rd;  /* .f32 dst (scratch if aliased) */
             uint32_t fa = (ra == rd) ? fs : ra;  /* .f32 src-a */
-            uint32_t fb = (rb == rd) ? fs : rb;  /* .f32 src-b */
+            uint32_t fb = (rb == rd || rb == ra) ? fs : rb;  /* .f32 src-b */
             const char *opn;
             switch (ins->op) {
                 case MIR_FADD: opn = "add.f32"; break;
