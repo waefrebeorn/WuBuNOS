@@ -328,7 +328,10 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             case MIR_AND: rex(&e,1,0,0,0); e8(&e, 0x21); e8(&e, 0xF8); break;
             case MIR_OR:  rex(&e,1,0,0,0); e8(&e, 0x09); e8(&e, 0xF8); break;
             case MIR_XOR: rex(&e,1,0,0,0); e8(&e, 0x31); e8(&e, 0xF8); break;
-            default: break;
+            default:
+                /* unimplemented op — fail loudly instead of emitting broken code */
+                free(assign);
+                return -1;
             }
             /* Store result — skip if next instr is RET consuming this dst */
             int sd = VR_ENC(in->dst);

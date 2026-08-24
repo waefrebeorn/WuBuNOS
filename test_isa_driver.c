@@ -34,6 +34,7 @@ static int run_with_driver(const wubu_isa_driver_t *d, const wubu_mir_prog_t *pr
         printf("    %s: COMPILE FAIL\n", d->name);
         return -1;
     }
+    fflush(stdout);
     *result = d->run(code, csize, 0);
     free(code);
     return 0;
