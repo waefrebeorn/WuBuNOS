@@ -49,7 +49,9 @@ static int64_t wrap32(int64_t v){ return v; }
 
 static const wubu_mir_op_t ARITH_OPS[] = {
     MIR_ADD, MIR_SUB, MIR_MUL, MIR_DIV, MIR_MOD,
-    MIR_AND, MIR_OR,  MIR_XOR, MIR_SHL, MIR_SHR
+    MIR_AND, MIR_OR,  MIR_XOR, MIR_SHL, MIR_SHR,
+    MIR_NEG, MIR_NOT, MIR_ULT, MIR_UGT, MIR_ULE, MIR_UGE,
+    MIR_EQ,  MIR_NE,  MIR_LT,  MIR_GT,  MIR_LE,  MIR_GE
 };
 static const int N_ARITH = (int)(sizeof(ARITH_OPS)/sizeof(ARITH_OPS[0]));
 
@@ -102,6 +104,18 @@ static wubu_vr_t build_random(wubu_mir_prog_t *pg, int nstmts,
             case MIR_XOR: v = v ^ cv; break;
             case MIR_SHL: v = (int64_t)((uint64_t)v << ((unsigned)cv & 63u)); break;
             case MIR_SHR: v = v >> ((unsigned)cv & 63u); break;
+            case MIR_NEG: v = -v; break;
+            case MIR_NOT: v = ~v; break;
+            case MIR_ULT: v = ((uint32_t)v <  (uint32_t)cv) ? 1 : 0; break;
+            case MIR_UGT: v = ((uint32_t)v >  (uint32_t)cv) ? 1 : 0; break;
+            case MIR_ULE: v = ((uint32_t)v <= (uint32_t)cv) ? 1 : 0; break;
+            case MIR_UGE: v = ((uint32_t)v >= (uint32_t)cv) ? 1 : 0; break;
+            case MIR_EQ:  v = (v == cv) ? 1 : 0; break;
+            case MIR_NE:  v = (v != cv) ? 1 : 0; break;
+            case MIR_LT:  v = (v <  cv) ? 1 : 0; break;
+            case MIR_GT:  v = (v >  cv) ? 1 : 0; break;
+            case MIR_LE:  v = (v <= cv) ? 1 : 0; break;
+            case MIR_GE:  v = (v >= cv) ? 1 : 0; break;
             default: break;
         }
                 if (v < -32768 || v > 32767) *fits16 = 0;
