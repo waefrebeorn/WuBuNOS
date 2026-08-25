@@ -232,6 +232,7 @@ size_t x86_peephole_optimize(uint8_t *code, size_t n) {
         n = shrink_movabs(code, n);
         n = eliminate_self_mov_reg(code, n);
         n = eliminate_store_reload(code, n);
+        n = eliminate_zero_sub(code, n);
         if (n == 0) break;
     } while (n < prev_n && --max_passes > 0);
 
