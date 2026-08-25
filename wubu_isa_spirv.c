@@ -281,9 +281,37 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
     #define VRMAP_SET(k,id_) do{ if((size_t)(k) < maxvr) vrmap[(k)]=(id_); }while(0)
     VRMAP_SET(0, id_gid);   /* arg/thread register */
 
-    /* per-vr phi-less labels: we emit straight-line ops; labels for branches */
+    /* ---- control flow pre-pass ----
+     * Map each MIR label id to an SSA label id, and classify jumps:
+     * forward (target pc > jump pc) or backward (loop). Backward jumps
+     * need SPIR-V structured loops (OpLoopMerge); wave A handles
+     * forward-only control flow. */
     uint32_t lbl_ctr = 5000;
+    int just_terminator = 0;
     uint32_t last_ret_src = s.c_zero64;
+
+    /* Pre-assign SSA block ids to every MIR label so forward jumps can
+     * reference blocks before they are emitted. */
+    #define MAXLBL 256
+    uint32_t lbl_ssa[MAXLBL];
+    for (int z = 0; z < MAXLBL; z++) lbl_ssa[z] = 0;
+    int has_backward = 0;
+    for (size_t q = 0; q < p->n; q++) {
+        const wubu_mir_instr_t *in2 = &p->ins[q];
+        if (in2->op == MIR_LABEL && in2->label < MAXLBL && !lbl_ssa[in2->label])
+            lbl_ssa[in2->label] = nid(&s);
+    }
+    /* detect backward branches (need structured loops — later wave) */
+    for (size_t q = 0; q < p->n; q++) {
+        const wubu_mir_instr_t *in2 = &p->ins[q];
+        if (in2->op == MIR_JZ || in2->op == MIR_JNZ || in2->op == MIR_JMP) {
+            size_t t;
+            for (t = 0; t < p->n; t++)
+                if (p->ins[t].op == MIR_LABEL && p->ins[t].label == in2->label)
+                    break;
+            if (t < q) { has_backward = 1; break; }
+        }
+    }
 
     for (size_t pc = 0; pc < p->n; pc++) {
         const wubu_mir_instr_t *in = &p->ins[pc];
@@ -339,6 +367,54 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
             }
             break;
         }
+        case MIR_LABEL: {
+            if (lbl_ssa[in->label]) {
+                /* if current block doesn't already end with a branch,
+                 * add an explicit fall-through branch to keep SPIR-V legal */
+                if (!just_terminator) {
+                    uint32_t o[]={lbl_ssa[in->label]};
+                    spv_ins(&s.bin,OPCODE_BRANCH,o,1);
+                }
+                just_terminator = 0;
+                uint32_t o[]={lbl_ssa[in->label]};
+                spv_ins(&s.bin,OP_LABEL,o,1);
+            }
+            break;
+        }
+        case MIR_JMP: {
+            if (in->label < MAXLBL && lbl_ssa[in->label]) {
+                uint32_t o[]={lbl_ssa[in->label]};
+                spv_ins(&s.bin,OPCODE_BRANCH,o,1);
+                just_terminator = 1;
+            }
+            break;
+        }
+        case MIR_JZ: case MIR_JNZ: {
+            if (in->label < MAXLBL && lbl_ssa[in->label]) {
+                /* cond = (a == 0) for JZ, (a != 0) for JNZ */
+                uint32_t cond = nid(&s);
+                uint16_t opc = in->op == MIR_JZ ? 170 /*INotEqual: a!=0 -> taken*/ :
+                                                  170;
+                /* JZ: branch if zero => INotEqual(a, 0); JNZ: IEqual? No:
+                 * JZ taken when a==0 -> OpIEqual; JNZ taken when a!=0 ->
+                 * OpINotEqual. */
+                opc = in->op == MIR_JZ ? OPCODE_I_EQ : OPCODE_I_NE;
+                { uint32_t o[]={s.t_bool,cond,VRMAP_GET(in->a),s.c_zero64};
+                  spv_ins(&s.bin,opc,o,4); }
+                uint32_t fall = nid(&s);
+                uint32_t true_tgt  = in->op == MIR_JZ ? fall : lbl_ssa[in->label];
+                uint32_t false_tgt = in->op == MIR_JZ ? lbl_ssa[in->label] : fall;
+                /* structured selection: merge block is the true target when
+                 * jumping to a later label, else the fall-through */
+                uint32_t merge = in->op == MIR_JZ ? lbl_ssa[in->label] : fall;
+                { uint32_t o3[]={merge,0 /*None*/}; spv_ins(&s.bin,OPCODE_SELECTION_MERGE,o3,2); }
+                uint32_t o2[]={cond,true_tgt,false_tgt};
+                spv_ins(&s.bin,OPCODE_BRANCH_COND,o2,3);
+                just_terminator = 0;  /* fall-through block is now current */
+                { uint32_t o[]={fall}; spv_ins(&s.bin,OP_LABEL,o,1); }
+            }
+            break;
+        }
         case MIR_FEQ: case MIR_FLT: {
             /* unpack both to f32, FOrdEqual(180)/FOrdLessThan(184) -> bool,
              * OpSelect(169) u64 1/0. MIR semantics: FEQ/FLT return 0/1. */
@@ -362,6 +438,7 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
         }
         case MIR_RET:
             last_ret_src = VRMAP_GET(in->a);
+            just_terminator = 1;
             break;
         default: break; /* branches/loads/stores land next wave */
         }
