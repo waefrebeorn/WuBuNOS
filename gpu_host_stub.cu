@@ -35,10 +35,61 @@
         }                                                              \
     } while (0)
 
+/* Hardware probe: query the REAL device so the compiler can generate
+ * hardware-aware code. Prints machine-readable key=value lines on stdout.
+ * This is how wubu_isa_ptx.c learns SM count, block limits, shared memory,
+ * and warp size — no hardcoding anywhere. */
+static int probe_device(void)
+{
+    CUDA_CHECK(cuInit(0));
+    CUdevice dev;
+    CUDA_CHECK(cuDeviceGet(&dev, 0));
+    CUcontext ctx;
+    CUDA_CHECK(cuCtxCreate(&ctx, 0, dev));
+
+    char name[256] = {0};
+    cuDeviceGetName(name, sizeof(name), dev);
+    int cc_major = 0, cc_minor = 0;
+    cuDeviceGetAttribute(&cc_major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, dev);
+    cuDeviceGetAttribute(&cc_minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, dev);
+    int sm_count   = 0;
+    cuDeviceGetAttribute(&sm_count, CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT, dev);
+    int max_thds   = 0;
+    cuDeviceGetAttribute(&max_thds, CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK, dev);
+    int shmem_blk  = 0;
+    cuDeviceGetAttribute(&shmem_blk, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN, dev);
+    int warp_size  = 0;
+    cuDeviceGetAttribute(&warp_size, CU_DEVICE_ATTRIBUTE_WARP_SIZE, dev);
+    int regs_blk   = 0;
+    cuDeviceGetAttribute(&regs_blk, CU_DEVICE_ATTRIBUTE_MAX_REGISTERS_PER_BLOCK, dev);
+    int l2_size    = 0;
+    cuDeviceGetAttribute(&l2_size, CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE, dev);
+    size_t total_mem = 0;
+    cuDeviceTotalMem(&total_mem, dev);
+
+    printf("name=%s\n", name);
+    printf("cc=%d.%d\n", cc_major, cc_minor);
+    printf("sm_count=%d\n", sm_count);
+    printf("max_threads_per_block=%d\n", max_thds);
+    printf("shared_mem_per_block=%d\n", shmem_blk);
+    printf("warp_size=%d\n", warp_size);
+    printf("registers_per_block=%d\n", regs_blk);
+    printf("l2_cache_bytes=%d\n", l2_size);
+    printf("total_mem_bytes=%zu\n", total_mem);
+
+    cuCtxDestroy(ctx);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
+    /* Probe mode: dump hardware profile and exit. */
+    if (argc == 2 && strcmp(argv[1], "--probe") == 0)
+        return probe_device();
+
     if (argc < 3) {
-        fprintf(stderr, "Usage: %s <cubin_path> <int64_arg>\n", argv[0]);
+        fprintf(stderr, "Usage: %s <cubin_path> <int64_arg>\n"
+                        "       %s --probe\n", argv[0], argv[0]);
         return 1;
     }
 
@@ -89,8 +140,12 @@ int main(int argc, char **argv)
     params[0] = (void *)&d_result;   /* pointer to device memory */
     params[1] = (void *)&arg;         /* the scalar argument */
 
-    /* Launch: 1 block of 1 thread — this is a scalar kernel */
-    int block_x = 1;
+    /* Launch: ONE block of max threads. bar.sync semantics require the
+     * cooperating T_GEMM threads to share a block, so parallelism is
+     * bounded by max_threads_per_block (queried from the device:
+     * 1024 on this GPU). Single-block also keeps the redundant scalar
+     * execution coherent across the whole launch. */
+    int block_x = 1024;
     int grid_x = 1;
     CUDA_CHECK(cuLaunchKernel(kernel,
                               grid_x, 1, 1,       /* grid dim */

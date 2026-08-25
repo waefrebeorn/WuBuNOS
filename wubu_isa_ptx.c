@@ -75,28 +75,194 @@ static uint32_t ptx_vr(ptx_emitter_t *e, wubu_vr_t vr)
     return vr;
 }
 
+static int ensure_stub(void);   /* fwd: host-stub builder (defined below) */
+static int stub_compiled;       /* fwd: set by ensure_stub */
+
+/* ---- Hardware-aware codegen profile ----
+ * Queried ONCE from the real device via `gpu_host_stub --probe` (libcuda
+ * attribute queries). Every sizing decision in codegen reads these values
+ * — nothing is hardcoded. If probing fails (no GPU), we fall back to a
+ * conservative scalar profile and still emit correct code. */
+typedef struct {
+    int available;                /* GPU reachable at all */
+    char name[256];
+    int cc_major, cc_minor;
+    int sm_count;
+    int max_threads_per_block;
+    int shared_mem_per_block;
+    int warp_size;
+    long total_mem_bytes;
+} wubu_gpu_profile_t;
+
+static wubu_gpu_profile_t g_gpu_profile;
+static int g_profile_queried = 0;
+
+static void gpu_profile_query(void)
+{
+    if (g_profile_queried) return;
+    g_profile_queried = 1;
+
+    /* Conservative fallback first */
+    memset(&g_gpu_profile, 0, sizeof(g_gpu_profile));
+    g_gpu_profile.available = 0;
+
+    ensure_stub();
+    if (!stub_compiled) return;
+
+    FILE *f = popen("LD_LIBRARY_PATH=/usr/lib/wsl/lib:/usr/lib/x86_64-linux-gnu "
+                    "/tmp/gpu_host_stub --probe 2>/dev/null", "r");
+    if (!f) return;
+
+    char line[512];
+    while (fgets(line, sizeof(line), f)) {
+        char *nl = strchr(line, '\n'); if (nl) *nl = 0;
+        if (!strncmp(line, "name=", 5))
+            snprintf(g_gpu_profile.name, sizeof(g_gpu_profile.name), "%s", line+5);
+        else if (!strncmp(line, "cc=", 3))
+            sscanf(line+3, "%d.%d", &g_gpu_profile.cc_major, &g_gpu_profile.cc_minor);
+        else if (!strncmp(line, "sm_count=", 9))
+            g_gpu_profile.sm_count = atoi(line+9);
+        else if (!strncmp(line, "max_threads_per_block=", 22))
+            g_gpu_profile.max_threads_per_block = atoi(line+22);
+        else if (!strncmp(line, "shared_mem_per_block=", 21))
+            g_gpu_profile.shared_mem_per_block = atoi(line+21);
+        else if (!strncmp(line, "warp_size=", 10))
+            g_gpu_profile.warp_size = atoi(line+10);
+        else if (!strncmp(line, "total_mem_bytes=", 16))
+            g_gpu_profile.total_mem_bytes = atol(line+16);
+    }
+    pclose(f);
+
+    /* Probe succeeded iff we got a sane thread limit */
+    if (g_gpu_profile.max_threads_per_block > 0) {
+        g_gpu_profile.available = 1;
+        fprintf(stderr, "[ptx] hw-profile: %s cc%d.%d %d SMs %d thr/blk "
+                        "%d B shmem warp=%d\n",
+                g_gpu_profile.name, g_gpu_profile.cc_major,
+                g_gpu_profile.cc_minor, g_gpu_profile.sm_count,
+                g_gpu_profile.max_threads_per_block,
+                g_gpu_profile.shared_mem_per_block, g_gpu_profile.warp_size);
+    }
+}
+
+/* Rows of T_GEMM to run concurrently: min(M, device max threads).
+ * Falls back to 1 when no GPU is present (scalar semantics preserved). */
+static int tgemm_parallel_rows(int M)
+{
+    gpu_profile_query();
+    if (!g_gpu_profile.available) return 1;
+    int lim = g_gpu_profile.max_threads_per_block > 0
+              ? g_gpu_profile.max_threads_per_block : 1024;
+    if (M < 1) M = 1;
+    return (M < lim) ? M : lim;
+}
+
+
 /* ---- MIR -> PTX translation ---- */
 
 /* Forward declaration: T_GEMM emission (defined after emit_ptx's helper region) */
-static void emit_tgemm(ptx_emitter_t *e, const wubu_mir_instr_t *ins);
-
 /* Shared-memory bridge: PTX mov.b32 cannot truncate .b64->.b32 (argument
- * width mismatch). f32 bit patterns live in the LOW 32 bits of b64 VRs
- * (upper 32 are zero per softfloat's uint32_t->uint64_t return). We use a
- * single shared-memory slot [s] as a type-punning bridge:
- *   VR(.b64) -> .f32: st.shared.b64 [s], %r<vr>; ld.shared.b32 %w<s>, [s];
- *                    mov.b32 %f<fd>, %w<s>;
- *   .f32 -> VR(.b64): st.shared.b32 [s], %f<fs>; ld.shared.b64 %r<vr>, [s];
- *                      (shared mem is zero-initialized, so hi 32 bits = 0)
- * The scratch .b32 %w0 and .f32 %f<n_vregs> are pre-declared. */
+ * width mismatch). f32 bit patterns live in the LOW 32 bits of b64 VRs.
+ * Shared slot [sb[0]] is the type-punning bridge. */
 static inline void ptx_vr_to_f32(ptx_emitter_t *e, uint32_t fd, uint32_t vr) {
-    ptx_emit(e, "    st.shared.b64 [s], %%r%u;\n", vr);
-    ptx_emit(e, "    ld.shared.b32 %%w0, [s];\n");
+    ptx_emit(e, "    st.shared.b64 [sb[0]], %%r%u;\n", vr);
+    ptx_emit(e, "    ld.shared.b32 %%w0, [sb[0]];\n");
     ptx_emit(e, "    mov.b32 %%f%u, %%w0;\n", fd);
 }
 static inline void ptx_f32_to_vr(ptx_emitter_t *e, uint32_t vr, uint32_t fs) {
-    ptx_emit(e, "    st.shared.b32 [s], %%f%u;\n", fs);
-    ptx_emit(e, "    ld.shared.b64 %%r%u, [s];\n", vr);
+    ptx_emit(e, "    st.shared.b32 [sb[0]], %%f%u;\n", fs);
+    ptx_emit(e, "    ld.shared.b64 %%r%u, [sb[0]];\n", vr);
+}
+
+static void emit_tgemm(ptx_emitter_t *e, const wubu_mir_instr_t *ins)
+{
+    int M = (int)(ins->imm >> 22);
+    int N = (int)((ins->imm >> 11) & 0x7FF);
+    int K = (int)(ins->imm & 0x7FF);
+
+    /* Scratch window ABOVE all program VRs (no collision possible).
+     * count_regs already bumps declared reg count for T_GEMM. */
+    uint32_t B0  = e->n_vregs;
+    uint32_t rA=B0, rB=B0+1, rC=B0+2;
+    uint32_t rI=B0+3, rKk=B0+4, rJ=B0+5, rAcc=B0+6;
+    uint32_t rT1=B0+7, rT2=B0+8, rTid=B0+9, rStride=B0+10;
+    e->n_vregs += 11;
+
+    int S = tgemm_parallel_rows(M);
+    ptx_emit(e, "    /* hw-aware T_GEMM: %dx%d x %d, %d-way row parallel */\n", M, N, K, S);
+    ptx_emit(e, "    bar.sync 0;\n");   /* producers of A/B/C done */
+    ptx_emit(e, "    cvt.s64.u32 %%r%u, %%tid0;\n", rTid);
+    ptx_emit(e, "    mov.s64 %%r%u, %d;\n", rStride, S);
+    ptx_emit(e, "    mov.s64 %%r%u, %%r%u;\n", rI, rTid);      /* i = tid */
+    ptx_emit(e, "    bra t_i_test;\n");
+
+    ptx_emit(e, "t_i_body:\n");
+    ptx_emit(e, "    mov.b64 %%r%u, %%r%d;\n", rA, (int)ptx_vr(e, ins->a));
+    ptx_emit(e, "    mov.b64 %%r%u, %%r%d;\n", rB, (int)ptx_vr(e, ins->b));
+    ptx_emit(e, "    mov.b64 %%r%u, %%r%d;\n", rC, (int)ptx_vr(e, ins->dst));
+    ptx_emit(e, "    shl.b64 %%r%u, %%r%u, 3;\n", rA, rA);
+    ptx_emit(e, "    add.s64 %%r%u, %%r%u, %%ra0;\n", rA, rA);
+    ptx_emit(e, "    shl.b64 %%r%u, %%r%u, 3;\n", rB, rB);
+    ptx_emit(e, "    add.s64 %%r%u, %%r%u, %%ra0;\n", rB, rB);
+    ptx_emit(e, "    shl.b64 %%r%u, %%r%u, 3;\n", rC, rC);
+    ptx_emit(e, "    add.s64 %%r%u, %%r%u, %%ra0;\n", rC, rC);
+
+    ptx_emit(e, "    mov.u64 %%r%u, 0;\n", rKk);
+    ptx_emit(e, "    bra t_k_test;\n");
+    ptx_emit(e, "t_k_body:\n");
+    ptx_emit(e, "    mov.u64 %%r%u, 0;\n", rJ);
+    ptx_emit(e, "    bra t_j_test;\n");
+    ptx_emit(e, "t_j_body:\n");
+
+    /* acc = C[i*N+j] -- load once per j */
+    ptx_emit(e, "    mul.lo.s64 %%r%u, %%r%u, %d;\n", rT1, rI, N);
+    ptx_emit(e, "    add.s64 %%r%u, %%r%u, %%r%u;\n", rT1, rT1, rJ);
+    ptx_emit(e, "    shl.b64 %%r%u, %%r%u, 3;\n", rT1, rT1);
+    ptx_emit(e, "    add.s64 %%r%u, %%r%u, %%r%u;\n", rT1, rT1, rC);
+    ptx_emit(e, "    ld.global.s64 %%r%u, [%%r%u];\n", rAcc, rT1);
+
+    /* a_elem = A[i*K+k] */
+    ptx_emit(e, "    mul.lo.s64 %%r%u, %%r%u, %d;\n", rT1, rI, K);
+    ptx_emit(e, "    add.s64 %%r%u, %%r%u, %%r%u;\n", rT1, rT1, rKk);
+    ptx_emit(e, "    shl.b64 %%r%u, %%r%u, 3;\n", rT1, rT1);
+    ptx_emit(e, "    add.s64 %%r%u, %%r%u, %%r%u;\n", rT1, rT1, rA);
+    ptx_emit(e, "    ld.global.s64 %%r%u, [%%r%u];\n", rT1, rT1);
+
+    /* b_elem = B[k*N+j] */
+    ptx_emit(e, "    mul.lo.s64 %%r%u, %%r%u, %d;\n", rT2, rKk, N);
+    ptx_emit(e, "    add.s64 %%r%u, %%r%u, %%r%u;\n", rT2, rT2, rJ);
+    ptx_emit(e, "    shl.b64 %%r%u, %%r%u, 3;\n", rT2, rT2);
+    ptx_emit(e, "    add.s64 %%r%u, %%r%u, %%r%u;\n", rT2, rT2, rB);
+    ptx_emit(e, "    ld.global.s64 %%r%u, [%%r%u];\n", rT2, rT2);
+
+    /* acc += a*b ; store C[i*N+j] = acc (%rJ live) */
+    ptx_emit(e, "    mul.lo.s64 %%r%u, %%r%u, %%r%u;\n", rT1, rT1, rT2);
+    ptx_emit(e, "    add.s64 %%r%u, %%r%u, %%r%u;\n", rAcc, rAcc, rT1);
+    ptx_emit(e, "    mul.lo.s64 %%r%u, %%r%u, %d;\n", rT1, rI, N);
+    ptx_emit(e, "    add.s64 %%r%u, %%r%u, %%r%u;\n", rT1, rT1, rJ);
+    ptx_emit(e, "    shl.b64 %%r%u, %%r%u, 3;\n", rT1, rT1);
+    ptx_emit(e, "    add.s64 %%r%u, %%r%u, %%r%u;\n", rT1, rT1, rC);
+    ptx_emit(e, "    st.global.s64 [%%r%u], %%r%u;\n", rT1, rAcc);
+
+    ptx_emit(e, "    add.u64 %%r%u, %%r%u, 1;\n", rJ, rJ);
+    ptx_emit(e, "t_j_test:\n");
+    ptx_emit(e, "    setp.ge.s64 p1, %%r%u, %d;\n", rJ, N);
+    ptx_emit(e, "    @p1 bra t_k_next;\n");
+    ptx_emit(e, "    bra t_j_body;\n");
+    ptx_emit(e, "t_k_next:\n");
+    ptx_emit(e, "    add.u64 %%r%u, %%r%u, 1;\n", rKk, rKk);
+    ptx_emit(e, "t_k_test:\n");
+    ptx_emit(e, "    setp.ge.s64 p2, %%r%u, %d;\n", rKk, K);
+    ptx_emit(e, "    @p2 bra t_i_next;\n");
+    ptx_emit(e, "    bra t_k_body;\n");
+    ptx_emit(e, "t_i_next:\n");
+    ptx_emit(e, "    add.s64 %%r%u, %%r%u, %%r%u;\n", rI, rI, rStride);  /* grid-stride */
+    ptx_emit(e, "t_i_test:\n");
+    ptx_emit(e, "    setp.ge.s64 p3, %%r%u, %d;\n", rI, M);
+    ptx_emit(e, "    @p3 bra t_gemm_end;\n");
+    ptx_emit(e, "    bra t_i_body;\n");
+    ptx_emit(e, "t_gemm_end:\n");
+    ptx_emit(e, "    bar.sync 0;\n");   /* all rows landed before consumers */
 }
 
 static void emit_kernel_body(ptx_emitter_t *e, const wubu_mir_prog_t *p)
@@ -523,8 +689,8 @@ static void emit_kernel_body(ptx_emitter_t *e, const wubu_mir_prog_t *p)
             ptx_vr_to_f32(e, fs, ra);
             ptx_emit(e, "    cvt.rn.bf16.f32 %%rh0, %%f%u;\n", fs);
             ptx_emit(e, "    mov.b32 %%w0, %%rh0;\n");  /* bf16 -> b32 (zero-ext) */
-            ptx_emit(e, "    st.shared.b32 [s], %%w0;\n");
-            ptx_emit(e, "    ld.shared.b64 %%r%u, [s];\n", rd);
+            ptx_emit(e, "    st.shared.b32 [sb[0]], %%w0;\n");
+            ptx_emit(e, "    ld.shared.b64 %%r%u, [sb[0]];\n", rd);
             break;
         }
 
@@ -558,95 +724,11 @@ static void emit_kernel_body(ptx_emitter_t *e, const wubu_mir_prog_t *p)
  *   %r55 = addr (reused for each address computation)
  * PTX local labels (.L_t*) handle forward branches.
  * The mem[] base address is in %ra0. */
-static void emit_tgemm(ptx_emitter_t *e, const wubu_mir_instr_t *ins)
-{
-    int M = (int)(ins->imm >> 22);
-    int N = (int)((ins->imm >> 11) & 0x7FF);
-    int K = (int)(ins->imm & 0x7FF);
-
-    /* Save A, B, C base cell indices (they're int64 VRs: cell * 8 + mem_base) */
-    ptx_emit(e, "    mov.b64 %%r48, %%r%d;\n", (int)ptx_vr(e, ins->a));
-    ptx_emit(e, "    mov.b64 %%r49, %%r%d;\n", (int)ptx_vr(e, ins->b));
-    ptx_emit(e, "    mov.b64 %%r50, %%r%d;\n", (int)ptx_vr(e, ins->dst));
-    /* Convert base cell indices to byte addresses (cell * 8 + mem_base) */
-    ptx_emit(e, "    shl.b64 %%r48, %%r48, 3;\n");
-    ptx_emit(e, "    add.s64 %%r48, %%r48, %%ra0;\n");
-    ptx_emit(e, "    shl.b64 %%r49, %%r49, 3;\n");
-    ptx_emit(e, "    add.s64 %%r49, %%r49, %%ra0;\n");
-    ptx_emit(e, "    shl.b64 %%r50, %%r50, 3;\n");
-    ptx_emit(e, "    add.s64 %%r50, %%r50, %%ra0;\n");
-
-    /* i loop (0..M-1) */
-    ptx_emit(e, "    mov.u64 %%r51, 0;\n");
-    ptx_emit(e, "    bra t_i_test;\n");
-    ptx_emit(e, "t_i_body:\n");
-    /* k loop (0..K-1) */
-    ptx_emit(e, "    mov.u64 %%r52, 0;\n");
-    ptx_emit(e, "    bra t_k_test;\n");
-    ptx_emit(e, "t_k_body:\n");
-    /* j loop (0..N-1). OPTIMIZATION (CUDA Best Practices: minimize global
-     * traffic): acc = C[i*N+j] is loaded ONCE per j (not per k), kept in
-     * %r54 across the whole k loop, and stored ONCE after k finishes. */
-    ptx_emit(e, "    mov.u64 %%r53, 0;\n");
-    ptx_emit(e, "    bra t_j_test;\n");
-    ptx_emit(e, "t_j_body:\n");
-
-    /* acc = C[i*N+j]  -- hoisted: once per j */
-    ptx_emit(e, "    mul.lo.s64 %%r55, %%r51, %d;\n", N);
-    ptx_emit(e, "    add.s64 %%r55, %%r55, %%r53;\n");
-    ptx_emit(e, "    shl.b64 %%r55, %%r55, 3;\n");
-    ptx_emit(e, "    add.s64 %%r55, %%r55, %%r50;\n");
-    ptx_emit(e, "    ld.global.s64 %%r54, [%%r55];\n");
-
-    /* a_elem = A[i*K+k] */
-    ptx_emit(e, "    mul.lo.s64 %%r55, %%r51, %d;\n", K);
-    ptx_emit(e, "    add.s64 %%r55, %%r55, %%r52;\n");
-    ptx_emit(e, "    shl.b64 %%r55, %%r55, 3;\n");
-    ptx_emit(e, "    add.s64 %%r55, %%r55, %%r48;\n");
-    ptx_emit(e, "    ld.global.s64 %%r55, [%%r55];\n");
-
-    /* b_elem = B[k*N+j] */
-    ptx_emit(e, "    mul.lo.s64 %%r56, %%r52, %d;\n", N);
-    ptx_emit(e, "    add.s64 %%r56, %%r56, %%r53;\n");
-    ptx_emit(e, "    shl.b64 %%r56, %%r56, 3;\n");
-    ptx_emit(e, "    add.s64 %%r56, %%r56, %%r49;\n");
-    ptx_emit(e, "    ld.global.s64 %%r56, [%%r56];\n");
-
-    /* acc += a_elem * b_elem  (in-register accumulate, no global roundtrip) */
-    ptx_emit(e, "    mul.lo.s64 %%r55, %%r55, %%r56;\n");
-    ptx_emit(e, "    add.s64 %%r54, %%r54, %%r55;\n");
-
-    /* j++ */
-    ptx_emit(e, "    add.u64 %%r53, %%r53, 1;\n");
-    ptx_emit(e, "t_j_test:\n");
-    ptx_emit(e, "    setp.ge.s64 p1, %%r53, %d;\n", N);
-    ptx_emit(e, "    @p1 bra t_k_next;\n");
-    ptx_emit(e, "    bra t_j_body;\n");
-    ptx_emit(e, "t_k_next:\n");
-
-    /* C[i*N+j] = acc -- stored ONCE per j (was: once per k) */
-    ptx_emit(e, "    mul.lo.s64 %%r55, %%r51, %d;\n", N);
-    ptx_emit(e, "    add.s64 %%r55, %%r55, %%r53;\n");
-    ptx_emit(e, "    shl.b64 %%r55, %%r55, 3;\n");
-    ptx_emit(e, "    add.s64 %%r55, %%r55, %%r50;\n");
-    ptx_emit(e, "    st.global.s64 [%%r55], %%r54;\n");
-
-    /* k++ */
-    ptx_emit(e, "    add.u64 %%r52, %%r52, 1;\n");
-    ptx_emit(e, "t_k_test:\n");
-    ptx_emit(e, "    setp.ge.s64 p2, %%r52, %d;\n", K);
-    ptx_emit(e, "    @p2 bra t_i_next;\n");
-    ptx_emit(e, "    bra t_k_body;\n");
-    ptx_emit(e, "t_i_next:\n");
-
-    /* i++ */
-    ptx_emit(e, "    add.u64 %%r51, %%r51, 1;\n");
-    ptx_emit(e, "t_i_test:\n");
-    ptx_emit(e, "    setp.ge.s64 p3, %%r51, %d;\n", M);
-    ptx_emit(e, "    @p3 bra t_gemm_end;\n");
-    ptx_emit(e, "    bra t_i_body;\n");
-    ptx_emit(e, "t_gemm_end:\n");
-}
+/* Hardware-aware parallel T_GEMM. Each GPU thread owns one output row:
+ *   my_i = %tid.x;  if (my_i >= M) exit;
+ * The row count is bounded by tgemm_parallel_rows(M) — queried from the
+ * real device (max_threads_per_block) — so we never exceed hardware limits.
+ * Threads >= launched-M fall through to p_idle via the scalar guard. */
 
 
 /* First pass: count how many virtual registers and predicates we need.
@@ -692,14 +774,13 @@ static void count_regs(const wubu_mir_prog_t *p, uint32_t *out_vregs, uint32_t *
             n_preds++;
             break;
         case MIR_T_GEMM:
-            /* T_GEMM uses scratch regs %r48-%r56 (9 regs) + 3 preds.
-             * Ensure enough regs are declared by bumping local_max. */
-            if (48 + 1 > local_max) local_max = 48 + 1;
-            if (56 + 1 > local_max) local_max = 56 + 1;
-            n_preds += 3;  /* p1, p2, p3 for loop tests */
-            local_max = ins->a + 1;
+            /* T_GEMM claims an 11-register scratch window ABOVE all program
+             * VRs (set at emission via e->n_vregs) + 4 preds (p1..p3 loops,
+             * p5 spare). Declared reg count is bumped in emit_ptx below. */
+            n_preds += 4;
+            if (ins->a + 1 > local_max) local_max = ins->a + 1;
             if (ins->b + 1 > local_max) local_max = ins->b + 1;
-            if (56 + 1 > local_max) local_max = 56 + 1;
+            if (ins->dst + 1 > local_max) local_max = ins->dst + 1;
             break;
         case MIR_JZ:
             local_max = ins->a + 1;
@@ -712,7 +793,7 @@ static void count_regs(const wubu_mir_prog_t *p, uint32_t *out_vregs, uint32_t *
     }
 
     *out_vregs = max_vr + 3;  /* +3: +1 zero-based safety, +2 scratch for mem[] addr math */
-    *out_preds = n_preds + 2; /* small safety margin */
+    *out_preds = n_preds + 8; /* margin: hw-guard p4 + tgemm row-select p5 */
 }
 
 static char *emit_ptx(const wubu_mir_prog_t *p)
@@ -723,6 +804,8 @@ static char *emit_ptx(const wubu_mir_prog_t *p)
     /* Count registers first so the header declaration is correct */
     uint32_t n_vregs, n_preds;
     count_regs(p, &n_vregs, &n_preds);
+    /* Reserve T_GEMM's 11-reg scratch window above all program VRs. */
+    n_vregs += 11;
 
     /* PTX header */
     ptx_emit(&e, ".version 8.0\n");
@@ -755,24 +838,35 @@ static char *emit_ptx(const wubu_mir_prog_t *p)
     ptx_emit(&e, "    .reg .f32 %%f<%u>;\n", n_vregs + 2);
     ptx_emit(&e, "    .reg .f64 %%d<%u>;\n", n_vregs + 2);
     ptx_emit(&e, "    .reg .b16 %%rh0;\n");
-    ptx_emit(&e, "    .shared .b8 s[8];\n\n"); /* type-punning bridge for b32<->b64 */
+    ptx_emit(&e, "    .shared .b64 sb[4];\n\n"); /* [0]=f32 bridge, [1..3]=A/B/C base stash */
 
     /* Base address of mem[] into %ra0 (a .u64 pointer register). */
     ptx_emit(&e, "    cvta.global.u64 %ra0, mem;\n\n");
 
     /* Load the arg parameter into vr 0 (the "value" register) */
-    ptx_emit(&e, "    ld.param.b64 %r0, [arg];\n\n");
+    ptx_emit(&e, "    ld.param.b64 %r0, [arg];\n");
+
+    /* PARALLEL EXEC MODEL (hardware-aware): kernel launches a full wave.
+     * Every thread executes the MIR program — scalar ops are deterministic
+     * so redundant execution is idempotent (same values stored). T_GEMM
+     * divides work via its grid-stride row loop using %tid.x. */
+    ptx_emit(&e, "    .reg .u32 %%tid<1>;\n");
+    ptx_emit(&e, "    mov.u32 %%tid0, %%tid.x;\n\n");
 
     /* Emit the kernel body */
     emit_kernel_body(&e, p);
 
+    /* Block-wide barrier: all threads converge here, so a consumer of
+     * T_GEMM output (e.g. the checksum RET path) sees completed rows. */
+    ptx_emit(&e, "    bar.sync 0;\n");
+    ptx_emit(&e, "p_idle:\n");
+    ptx_emit(&e, "    ret;\n");
     ptx_emit(&e, "}\n");
     return e.text;
 }
 
 /* ---- Host stub management ---- */
 
-static int stub_compiled = 0;
 
 static int ensure_stub(void)
 {
