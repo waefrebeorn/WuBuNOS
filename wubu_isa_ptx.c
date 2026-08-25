@@ -163,15 +163,17 @@ static int tgemm_parallel_rows(int M)
 /* Forward declaration: T_GEMM emission (defined after emit_ptx's helper region) */
 /* Shared-memory bridge: PTX mov.b32 cannot truncate .b64->.b32 (argument
  * width mismatch). f32 bit patterns live in the LOW 32 bits of b64 VRs.
- * Shared slot [sb[0]] is the type-punning bridge. */
+ * Shared slot [sb0] is the type-punning bridge. */
 static inline void ptx_vr_to_f32(ptx_emitter_t *e, uint32_t fd, uint32_t vr) {
-    ptx_emit(e, "    st.shared.b64 [sb[0]], %%r%u;\n", vr);
-    ptx_emit(e, "    ld.shared.b32 %%w0, [sb[0]];\n");
+    ptx_emit(e, "    st.shared.b64 [sb0], %%r%u;\n", vr);
+    ptx_emit(e, "    ld.shared.b32 %%w0, [sb0];\n");
     ptx_emit(e, "    mov.b32 %%f%u, %%w0;\n", fd);
 }
 static inline void ptx_f32_to_vr(ptx_emitter_t *e, uint32_t vr, uint32_t fs) {
-    ptx_emit(e, "    st.shared.b32 [sb[0]], %%f%u;\n", fs);
-    ptx_emit(e, "    ld.shared.b64 %%r%u, [sb[0]];\n", vr);
+    /* Zero-extend f32 bits into the 64-bit VR without mixed-width shared
+     * accesses (ptxas reorders those): pack {low=fbits, high=0} via mov.b64. */
+    ptx_emit(e, "    mov.b32 %%w0, %%f%u;\n", fs);       /* bitcopy f->b32 */
+    ptx_emit(e, "    mov.b64 %%r%u, {%%w0, 0};\n", vr);  /* zero-extend */
 }
 
 static void emit_tgemm(ptx_emitter_t *e, const wubu_mir_instr_t *ins)
@@ -689,8 +691,8 @@ static void emit_kernel_body(ptx_emitter_t *e, const wubu_mir_prog_t *p)
             ptx_vr_to_f32(e, fs, ra);
             ptx_emit(e, "    cvt.rn.bf16.f32 %%rh0, %%f%u;\n", fs);
             ptx_emit(e, "    mov.b32 %%w0, %%rh0;\n");  /* bf16 -> b32 (zero-ext) */
-            ptx_emit(e, "    st.shared.b32 [sb[0]], %%w0;\n");
-            ptx_emit(e, "    ld.shared.b64 %%r%u, [sb[0]];\n", rd);
+            ptx_emit(e, "    st.shared.b32 [sb0], %%w0;\n");
+            ptx_emit(e, "    ld.shared.b64 %%r%u, [sb0];\n", rd);
             break;
         }
 
@@ -838,7 +840,7 @@ static char *emit_ptx(const wubu_mir_prog_t *p)
     ptx_emit(&e, "    .reg .f32 %%f<%u>;\n", n_vregs + 2);
     ptx_emit(&e, "    .reg .f64 %%d<%u>;\n", n_vregs + 2);
     ptx_emit(&e, "    .reg .b16 %%rh0;\n");
-    ptx_emit(&e, "    .shared .b64 sb[4];\n\n"); /* [0]=f32 bridge, [1..3]=A/B/C base stash */
+    ptx_emit(&e, "    .shared .b64 sb0;\n"); /* f32/b32<->b64 bridge slot */
 
     /* Base address of mem[] into %ra0 (a .u64 pointer register). */
     ptx_emit(&e, "    cvta.global.u64 %ra0, mem;\n\n");
@@ -1051,11 +1053,41 @@ static int64_t ptx_run(const uint8_t *code, size_t size, int64_t arg)
     }
 
     ptx_gpu_unavailable = 0;  /* a launch completed cleanly → GPU reachable */
-    FILE *rf = fopen(result_path, "r");
-    if (rf) {
-        if (fscanf(rf, "%lld", (long long *)&result) != 1)
-            result = 0;
-        fclose(rf);
+    FILE *rf;
+    /* WSL/dxg launches are occasionally flaky (empty result file, fast
+     * exit). Retry the identical launch a few times before giving up. */
+    for (int attempt = 0; attempt < 3; attempt++) {
+        rf = fopen(result_path, "r");
+        int have = 0;
+        if (rf) {
+            have = (fscanf(rf, "%lld", (long long *)&result) == 1);
+            fclose(rf);
+        }
+        if (have) break;
+        if (attempt == 2) { result = 0; break; }
+        remove(result_path);
+        /* relaunch once more */
+        pid_t child2 = fork();
+        if (child2 == 0) {
+            signal(SIGALRM, SIG_DFL);
+            alarm((unsigned)PTX_RUN_TIMEOUT_SEC);
+            FILE *rf2 = freopen(result_path, "w", stdout);
+            (void)rf2;
+            int rc2 = system(cmd);
+            (void)rc2;
+            _exit(0);
+        }
+        time_t t1 = time(NULL);
+        for (;;) {
+            pid_t w2 = waitpid(child2, &status, WNOHANG);
+            if (w2 == child2) break;
+            if (w2 < 0 && errno != EINTR) break;
+            if (difftime(time(NULL), t1) > (double)(PTX_RUN_TIMEOUT_SEC + 5)) {
+                kill(child2, SIGKILL); waitpid(child2, &status, 0);
+                break;
+            }
+            usleep(100000);
+        }
     }
     remove(result_path);
     return result;

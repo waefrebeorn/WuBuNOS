@@ -25,6 +25,7 @@ extern const wubu_isa_driver_t wubu_isa_avr;   /* Atmel AVR (Arduino Uno) */
 extern const wubu_isa_driver_t wubu_isa_pic;   /* Microchip PIC (PIC16F877A) */
 extern const wubu_isa_driver_t wubu_isa_amdgpu; /* AMD GPU (RDNA2/gfx1030) */
 extern const wubu_isa_driver_t wubu_isa_ptx;  /* NVIDIA GPU (PTX/SM89) */
+extern const wubu_isa_driver_t wubu_isa_vulkan; /* ANY Vulkan card (SPIR-V) */
 
 /* Portable cache clear for JIT'd code.
  * x86-64: hardware maintains i/d cache coherency — compiler barrier only.
@@ -85,5 +86,9 @@ const wubu_isa_driver_t *wubu_isa_find(const char *name)
     if (!strcmp(name, "ptx") || !strcmp(name, "nvidia") ||
         !strcmp(name, "gpu") || !strcmp(name, "cuda"))
         return &wubu_isa_ptx;
+    if (!strcmp(name, "vulkan") || !strcmp(name, "vk") ||
+        !strcmp(name, "spirv") || !strcmp(name, "radv") ||
+        !strcmp(name, "igpu") || !strcmp(name, "740m"))
+        return &wubu_isa_vulkan;
     return NULL;
 }

@@ -92,54 +92,73 @@ int main(int argc, char **argv)
     VkQueue queue;
     vkGetDeviceQueue(dev, (uint32_t)qfam, 0, &queue);
 
-    /* buffers: SSBO layout = u64 mem[mem_cells] where cell0 = result */
-    VkBuffer buf;
-    VkMemoryRequirements mr;
+/* Two-buffer design (dzn-safe):
+ *   buf     -- DEVICE_LOCAL storage buffer the shader writes to
+ *   stage   -- HOST_VISIBLE staging buffer for upload + readback
+ *   cmd: copy stage->buf, dispatch, copy buf->stage
+ * This avoids relying on dzn making compute stores visible to host mappings. */
     VkDeviceSize bufsz = (VkDeviceSize)mem_cells * 8;
+    VkPhysicalDeviceMemoryProperties mp;
+    vkGetPhysicalDeviceMemoryProperties(pd, &mp);
+
     VkBufferCreateInfo bci = {0};
     bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     bci.size = bufsz;
-    bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
     bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    CHECK(vkCreateBuffer(dev, &bci, NULL, &buf));
-    vkGetBufferMemoryRequirements(dev, buf, &mr);
 
-    /* find HOST_VISIBLE | HOST_COHERENT memory */
-    VkPhysicalDeviceMemoryProperties mp;
-    vkGetPhysicalDeviceMemoryProperties(pd, &mp);
-    int memi = -1;
-    /* prefer DEVICE_LOCAL|HOST_VISIBLE|HOST_COHERENT (ReBAR style) then any
-     * HOST_VISIBLE|HOST_COHERENT */
-    for (uint32_t pass = 0; pass < 2 && memi < 0; pass++) {
+    /* device buffer: STORAGE + SRC + DST (for copies both ways) */
+    bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    VkBuffer buf;
+    CHECK(vkCreateBuffer(dev, &bci, NULL, &buf));
+    VkMemoryRequirements mr;
+    vkGetBufferMemoryRequirements(dev, buf, &mr);
+    int dev_memi = -1;
+    for (uint32_t i = 0; i < mp.memoryTypeCount; i++) {
+        if ((mr.memoryTypeBits & (1u << i)) &&
+            (mp.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT))
+        { dev_memi = (int)i; break; }
+    }
+    if (dev_memi < 0) dev_memi = 0;
+
+    /* staging buffer: TRANSFER_SRC + DST, host visible */
+    bci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    VkBuffer stage_buf;
+    CHECK(vkCreateBuffer(dev, &bci, NULL, &stage_buf));
+    VkMemoryRequirements mr2;
+    vkGetBufferMemoryRequirements(dev, stage_buf, &mr2);
+    int host_memi = -1;
+    for (uint32_t pass = 0; pass < 2 && host_memi < 0; pass++) {
         for (uint32_t i = 0; i < mp.memoryTypeCount; i++) {
             VkMemoryPropertyFlags want = pass == 0
-                ? (VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
-                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                ? (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                    VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
-                : (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                   VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-            if ((mr.memoryTypeBits & (1u << i)) &&
+                : VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+            if ((mr2.memoryTypeBits & (1u << i)) &&
                 (mp.memoryTypes[i].propertyFlags & want) == want)
-            { memi = (int)i; break; }
+            { host_memi = (int)i; break; }
         }
     }
-    if (memi < 0) { fprintf(stderr, "no host-visible mem\n"); return 1; }
+    if (host_memi < 0) { fprintf(stderr, "no host-visible mem\n"); return 1; }
 
-    VkDeviceMemory memh;
-    VkMemoryDedicatedAllocateInfo dai = {0};
-    dai.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO;
-    dai.buffer = buf;
+    /* Two separate allocations, same HOST_VISIBLE heap. dzn rejects some
+     * multi-bind patterns; keep it simple and symmetric. */
+    VkDeviceMemory dev_mem, stage_mem;
     VkMemoryAllocateInfo mai = {0};
     mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    mai.pNext = &dai;
     mai.allocationSize = mr.size;
-    mai.memoryTypeIndex = (uint32_t)memi;
-    CHECK(vkAllocateMemory(dev, &mai, NULL, &memh));
-    CHECK(vkBindBufferMemory(dev, &buf, memh, 0));
+    mai.memoryTypeIndex = (uint32_t)host_memi;
+    CHECK(vkAllocateMemory(dev, &mai, NULL, &dev_mem));
+    CHECK(vkBindBufferMemory(dev, buf, dev_mem, 0));
+    mai.allocationSize = mr2.size;
+    CHECK(vkAllocateMemory(dev, &mai, NULL, &stage_mem));
+    CHECK(vkBindBufferMemory(dev, stage_buf, stage_mem, 0));
 
-    /* map + init: cell0=0 result, cell1=arg */
+    /* map staging: cell0=0 result slot, cell1=arg input */
     int64_t *host;
-    CHECK(vkMapMemory(dev, memh, 0, bufsz, 0, (void **)&host));
+    CHECK(vkMapMemory(dev, stage_mem, 0, bufsz, 0, (void **)&host));
     memset(host, 0, (size_t)bufsz);
     host[0] = 0;
     host[1] = arg;
@@ -242,7 +261,26 @@ int main(int argc, char **argv)
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
                             layout, 0, 1, &dset, 0, NULL);
     vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, 8, &arg);
+    /* stage -> device (upload inputs) */
+    VkBufferCopy up = {0, 0, bufsz};
+    vkCmdCopyBuffer(cmd, stage_buf, buf, 1, &up);
+    VkMemoryBarrier mb = {0};
+    mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         0, 1, &mb, 0, NULL, 0, NULL);
     vkCmdDispatch(cmd, 1, 1, 1);
+    VkMemoryBarrier mb2 = {0};
+    mb2.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    mb2.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    mb2.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         0, 1, &mb2, 0, NULL, 0, NULL);
+    /* device -> stage (download results) */
+    vkCmdCopyBuffer(cmd, buf, stage_buf, 1, &up);
     CHECK(vkEndCommandBuffer(cmd));
 
     VkSubmitInfo si = {0};
@@ -254,7 +292,7 @@ int main(int argc, char **argv)
     {
         VkMappedMemoryRange rng = {0};
         rng.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
-        rng.memory = memh;
+        rng.memory = stage_mem;
         rng.size = VK_WHOLE_SIZE;
         vkInvalidateMappedMemoryRanges(dev, 1, &rng);
     }
@@ -266,9 +304,11 @@ int main(int argc, char **argv)
 #endif
 
     /* cleanup */
-    vkUnmapMemory(dev, memh);
-    vkFreeMemory(dev, memh, NULL);
+    vkUnmapMemory(dev, stage_mem);
     vkDestroyBuffer(dev, buf, NULL);
+    vkDestroyBuffer(dev, stage_buf, NULL);
+    vkFreeMemory(dev, dev_mem, NULL);
+    vkFreeMemory(dev, stage_mem, NULL);
     vkFreeDescriptorSets(dev, pool, 1, &dset);
     vkDestroyDescriptorPool(dev, pool, NULL);
     vkDestroyPipeline(dev, pipe, NULL);
