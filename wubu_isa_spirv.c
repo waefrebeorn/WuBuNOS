@@ -214,16 +214,16 @@ static void emit_tgemm_spirv(S *s, const wubu_mir_instr_t *in,
         uint32_t u1=nid(s), u2=nid(s), u4=nid(s), u5=nid(s), bptr=nid(s), bval=nid(s);
         { uint32_t o[]={s->t_u64,u1,bBase,s->c_zero64}; spv_ins(&s->bin,128,o,4);}
         { uint32_t o[]={s->t_u64,u2,kk,cN};            spv_ins(&s->bin,132,o,4);}
-        { uint32_t o[]={s->t_u64,u4,u2,jN};            spv_ins(&s->bin,128,o,4);}
+        { uint32_t o[]={s->t_u64,u4,u2,jj};            spv_ins(&s->bin,128,o,4);}
         { uint32_t o[]={s->t_u64,u5,u4,u1};            spv_ins(&s->bin,128,o,4);}
         TG_AC(bptr, u5); TG_LD(bval, bptr);
 
         uint32_t v1=nid(s), w1=nid(s), w2=nid(s), w3=nid(s);
         uint32_t cptr=nid(s), oldc=nid(s), newc=nid(s), prod=nid(s);
         { uint32_t o[]={s->t_u64,v1,cBase,s->c_zero64}; spv_ins(&s->bin,128,o,4);}
-        { uint32_t o[]={s->t_u64,w1,iv_,cN};           spv_ins(&s->bin,132,o,4);}
-        { uint32_t o[]={s->t_u64,w2,w1,jN};            spv_ins(&s->bin,132,o,4);}
-        { uint32_t o[]={s->t_u64,w3,w2,v1};            spv_ins(&s->bin,128,o,4);}
+        { uint32_t o[]={s->t_u64,w1,iv_,cKN};          spv_ins(&s->bin,132,o,4);}
+        { uint32_t o[]={s->t_u64,w2,kk,cN};            spv_ins(&s->bin,132,o,4);}
+        { uint32_t o[]={s->t_u64,w3,w1,w2};            spv_ins(&s->bin,128,o,4);}
         { uint32_t o[]={s->t_u64,prod,aval,bval};      spv_ins(&s->bin,132,o,4);}
         TG_AC(cptr, w3); TG_LD(oldc, cptr);
         { uint32_t o[]={s->t_u64,newc,oldc,prod};      spv_ins(&s->bin,128,o,4);}
