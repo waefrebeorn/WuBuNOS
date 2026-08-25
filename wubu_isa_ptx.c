@@ -134,12 +134,35 @@ static void emit_kernel_body(ptx_emitter_t *e, const wubu_mir_prog_t *p)
                      (int)rd, (int)ptx_vr(e, ins->a), (int)ptx_vr(e, ins->b));
             break;
 
-        case MIR_MUL:
+        case MIR_MUL: {
             rd = ptx_vr(e, ins->dst);
-            /* mul.lo.s64 gives the low 64 bits of the product */
+            /* MAD fusion: MUL(d1,a,b) immediately followed by ADD/SUB(d2,d1,c)
+             * -> single mad.lo.s64 (one instruction, one rounding-free fuse). */
+            if (i + 1 < p->n &&
+                (p->ins[i+1].op == MIR_ADD || p->ins[i+1].op == MIR_SUB) &&
+                p->ins[i+1].a == ins->dst) {
+                const wubu_mir_instr_t *nx = &p->ins[i+1];
+                uint32_t rd2 = ptx_vr(e, nx->dst);
+                uint32_t c   = ptx_vr(e, nx->b);
+                uint32_t ra  = ptx_vr(e, ins->a);
+                uint32_t rb  = ptx_vr(e, ins->b);
+                if (nx->op == MIR_SUB) {
+                    /* PTX has no msub.lo.s64: negate the addend into rd2's
+                     * slot first. Safe because rd2 is dead until this op. */
+                    ptx_emit(e, "    neg.s64 %%r%d, %%r%d;\n", (int)rd2, (int)c);
+                    ptx_emit(e, "    mad.lo.s64 %%r%d, %%r%d, %%r%d, %%r%d;\n",
+                             (int)rd2, (int)ra, (int)rb, (int)rd2);
+                } else {
+                    ptx_emit(e, "    mad.lo.s64 %%r%d, %%r%d, %%r%d, %%r%d;\n",
+                             (int)rd2, (int)ra, (int)rb, (int)c);
+                }
+                i++;  /* consume the ADD/SUB */
+                break;
+            }
             ptx_emit(e, "    mul.lo.s64 %%r%d, %%r%d, %%r%d;\n",
                      (int)rd, (int)ptx_vr(e, ins->a), (int)ptx_vr(e, ins->b));
             break;
+        }
 
         case MIR_DIV:
             rd = ptx_vr(e, ins->dst);
@@ -561,12 +584,14 @@ static void emit_tgemm(ptx_emitter_t *e, const wubu_mir_instr_t *ins)
     ptx_emit(e, "    mov.u64 %%r52, 0;\n");
     ptx_emit(e, "    bra t_k_test;\n");
     ptx_emit(e, "t_k_body:\n");
-    /* j loop (0..N-1) */
+    /* j loop (0..N-1). OPTIMIZATION (CUDA Best Practices: minimize global
+     * traffic): acc = C[i*N+j] is loaded ONCE per j (not per k), kept in
+     * %r54 across the whole k loop, and stored ONCE after k finishes. */
     ptx_emit(e, "    mov.u64 %%r53, 0;\n");
     ptx_emit(e, "    bra t_j_test;\n");
     ptx_emit(e, "t_j_body:\n");
 
-    /* acc = C[i*N+j] */
+    /* acc = C[i*N+j]  -- hoisted: once per j */
     ptx_emit(e, "    mul.lo.s64 %%r55, %%r51, %d;\n", N);
     ptx_emit(e, "    add.s64 %%r55, %%r55, %%r53;\n");
     ptx_emit(e, "    shl.b64 %%r55, %%r55, 3;\n");
@@ -587,16 +612,9 @@ static void emit_tgemm(ptx_emitter_t *e, const wubu_mir_instr_t *ins)
     ptx_emit(e, "    add.s64 %%r56, %%r56, %%r49;\n");
     ptx_emit(e, "    ld.global.s64 %%r56, [%%r56];\n");
 
-    /* acc += a_elem * b_elem */
+    /* acc += a_elem * b_elem  (in-register accumulate, no global roundtrip) */
     ptx_emit(e, "    mul.lo.s64 %%r55, %%r55, %%r56;\n");
     ptx_emit(e, "    add.s64 %%r54, %%r54, %%r55;\n");
-
-    /* C[i*N+j] = acc */
-    ptx_emit(e, "    mul.lo.s64 %%r55, %%r51, %d;\n", N);
-    ptx_emit(e, "    add.s64 %%r55, %%r55, %%r53;\n");
-    ptx_emit(e, "    shl.b64 %%r55, %%r55, 3;\n");
-    ptx_emit(e, "    add.s64 %%r55, %%r55, %%r50;\n");
-    ptx_emit(e, "    st.global.s64 [%%r55], %%r54;\n");
 
     /* j++ */
     ptx_emit(e, "    add.u64 %%r53, %%r53, 1;\n");
@@ -605,6 +623,13 @@ static void emit_tgemm(ptx_emitter_t *e, const wubu_mir_instr_t *ins)
     ptx_emit(e, "    @p1 bra t_k_next;\n");
     ptx_emit(e, "    bra t_j_body;\n");
     ptx_emit(e, "t_k_next:\n");
+
+    /* C[i*N+j] = acc -- stored ONCE per j (was: once per k) */
+    ptx_emit(e, "    mul.lo.s64 %%r55, %%r51, %d;\n", N);
+    ptx_emit(e, "    add.s64 %%r55, %%r55, %%r53;\n");
+    ptx_emit(e, "    shl.b64 %%r55, %%r55, 3;\n");
+    ptx_emit(e, "    add.s64 %%r55, %%r55, %%r50;\n");
+    ptx_emit(e, "    st.global.s64 [%%r55], %%r54;\n");
 
     /* k++ */
     ptx_emit(e, "    add.u64 %%r52, %%r52, 1;\n");
