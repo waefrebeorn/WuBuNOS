@@ -301,15 +301,26 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
         if (in2->op == MIR_LABEL && in2->label < MAXLBL && !lbl_ssa[in2->label])
             lbl_ssa[in2->label] = nid(&s);
     }
-    /* detect backward branches (need structured loops — later wave) */
+    /* Loop analysis: find labels that are targets of backward jumps.
+     * For each loop header label we pre-assign exit + continue blocks. */
+    int lbl_is_loop_header[MAXLBL];
+    uint32_t lbl_exit[MAXLBL], lbl_cont[MAXLBL];
+    for (int z = 0; z < MAXLBL; z++) { lbl_is_loop_header[z] = 0; lbl_exit[z] = 0; lbl_cont[z] = 0; }
     for (size_t q = 0; q < p->n; q++) {
         const wubu_mir_instr_t *in2 = &p->ins[q];
-        if (in2->op == MIR_JZ || in2->op == MIR_JNZ || in2->op == MIR_JMP) {
-            size_t t;
-            for (t = 0; t < p->n; t++)
-                if (p->ins[t].op == MIR_LABEL && p->ins[t].label == in2->label)
-                    break;
-            if (t < q) { has_backward = 1; break; }
+        if (in2->op != MIR_JZ && in2->op != MIR_JNZ && in2->op != MIR_JMP)
+            continue;
+        size_t t;
+        for (t = 0; t < p->n; t++)
+            if (p->ins[t].op == MIR_LABEL && p->ins[t].label == in2->label)
+                break;
+        if (t < q && in2->label < MAXLBL) {
+            has_backward = 1;
+            if (!lbl_is_loop_header[in2->label]) {
+                lbl_is_loop_header[in2->label] = 1;
+                lbl_exit[in2->label] = nid(&s);
+                lbl_cont[in2->label] = nid(&s);
+            }
         }
     }
 
@@ -369,8 +380,6 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
         }
         case MIR_LABEL: {
             if (lbl_ssa[in->label]) {
-                /* if current block doesn't already end with a branch,
-                 * add an explicit fall-through branch to keep SPIR-V legal */
                 if (!just_terminator) {
                     uint32_t o[]={lbl_ssa[in->label]};
                     spv_ins(&s.bin,OPCODE_BRANCH,o,1);
@@ -378,10 +387,28 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
                 just_terminator = 0;
                 uint32_t o[]={lbl_ssa[in->label]};
                 spv_ins(&s.bin,OP_LABEL,o,1);
+                /* loop header: structured loop with continue + exit blocks */
+                if (lbl_is_loop_header[in->label]) {
+                    uint32_t om[]={lbl_exit[in->label], lbl_cont[in->label], 0};
+                    spv_ins(&s.bin,246 /*OpLoopMerge*/,om,3);
+                    uint32_t ob[]={lbl_cont[in->label]};
+                    spv_ins(&s.bin,OPCODE_BRANCH,ob,1);
+                    just_terminator = 1;
+                    /* the continue block is where the body resumes */
+                    { uint32_t oc[]={lbl_cont[in->label]}; spv_ins(&s.bin,OP_LABEL,oc,1); }
+                }
             }
             break;
         }
         case MIR_JMP: {
+            if (in->label < MAXLBL && lbl_is_loop_header[in->label]) {
+                uint32_t o[]={lbl_ssa[in->label]};   /* back-edge to header */
+                spv_ins(&s.bin,OPCODE_BRANCH,o,1);
+                just_terminator = 1;
+                /* emit exit label for post-loop code */
+                { uint32_t oe[]={lbl_exit[in->label]}; spv_ins(&s.bin,OP_LABEL,oe,1); }
+                break;
+            }
             if (in->label < MAXLBL && lbl_ssa[in->label]) {
                 uint32_t o[]={lbl_ssa[in->label]};
                 spv_ins(&s.bin,OPCODE_BRANCH,o,1);
@@ -390,6 +417,23 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
             break;
         }
         case MIR_JZ: case MIR_JNZ: {
+            /* backward conditional = loop latch */
+            if (in->label < MAXLBL && lbl_is_loop_header[in->label]) {
+                uint32_t cond = nid(&s);
+                uint16_t opc = in->op == MIR_JZ ? OPCODE_I_EQ : OPCODE_I_NE;
+                { uint32_t o[]={s.t_bool,cond,VRMAP_GET(in->a),s.c_zero64};
+                  spv_ins(&s.bin,opc,o,4); }
+                /* taken -> branch back to loop HEADER (the back-edge);
+                 * not-taken -> exit. Header holds the OpLoopMerge so this
+                 * forms the legal continue->header edge. */
+                uint32_t o2[]={cond,lbl_ssa[in->label],lbl_exit[in->label]};
+                spv_ins(&s.bin,OPCODE_BRANCH_COND,o2,3);
+                just_terminator = 1;
+                /* post-loop code lands in the exit block */
+                { uint32_t oe[]={lbl_exit[in->label]}; spv_ins(&s.bin,OP_LABEL,oe,1); }
+                just_terminator = 0;
+                break;
+            }
             if (in->label < MAXLBL && lbl_ssa[in->label]) {
                 /* cond = (a == 0) for JZ, (a != 0) for JNZ */
                 uint32_t cond = nid(&s);
@@ -413,6 +457,49 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
                 just_terminator = 0;  /* fall-through block is now current */
                 { uint32_t o[]={fall}; spv_ins(&s.bin,OP_LABEL,o,1); }
             }
+            break;
+        }
+        case MIR_LOAD: {
+            /* MIR cell i -> SSBO element i+1 (cell 0 = return slot).
+             * idx64 = a + 1; val = load(ptr_u64); dst = val */
+            uint32_t idx64 = nid(&s);
+            { uint32_t o[]={s.t_u64,idx64,VRMAP_GET(in->a),s.c_one64};
+              spv_ins(&s.bin,OPCODE_IADD,o,4); }
+            uint32_t uptr = nid(&s);
+            { uint32_t o[]={s.t_res_u64,uptr,s.var_ssbo,s.c_zero32,idx64};
+              spv_ins(&s.bin,OP_ACCESS_CHAIN,o,5); }
+            uint32_t val = nid(&s);
+            { uint32_t o[]={s.t_u64,val,uptr}; spv_ins(&s.bin,OP_LOAD,o,3); }
+            VRMAP_SET(in->dst, val);
+            break;
+        }
+        case MIR_STORE: {
+            uint32_t idx64 = nid(&s);
+            { uint32_t o[]={s.t_u64,idx64,VRMAP_GET(in->a),s.c_one64};
+              spv_ins(&s.bin,OPCODE_IADD,o,4); }
+            uint32_t uptr = nid(&s);
+            { uint32_t o[]={s.t_res_u64,uptr,s.var_ssbo,s.c_zero32,idx64};
+              spv_ins(&s.bin,OP_ACCESS_CHAIN,o,5); }
+            { uint32_t o[]={uptr,VRMAP_GET(in->b)}; spv_ins(&s.bin,OP_STORE,o,2); }
+            break;
+        }
+        case MIR_EQ: case MIR_NE: case MIR_LT: case MIR_LE:
+        case MIR_GT: case MIR_GE:
+        case MIR_ULT: case MIR_ULE: case MIR_UGT: case MIR_UGE: {
+            /* int compare -> bool -> select 1/0 (u64) */
+            uint16_t opc =
+                in->op==MIR_EQ ? 170 : in->op==MIR_NE ? 171 :
+                in->op==MIR_LT ? 177 : in->op==MIR_LE ? 179 :
+                in->op==MIR_GT ? 173 : in->op==MIR_GE ? 175 :
+                in->op==MIR_ULT ? 176 : in->op==MIR_ULE ? 178 :
+                in->op==MIR_UGT ? 172 : 174;
+            uint32_t bl = nid(&s);
+            { uint32_t o[]={s.t_bool,bl,VRMAP_GET(in->a),VRMAP_GET(in->b)};
+              spv_ins(&s.bin,opc,o,4); }
+            uint32_t pk = nid(&s);
+            { uint32_t o[]={s.t_u64,pk,bl,s.c_one64,s.c_zero64};
+              spv_ins(&s.bin,169,o,5); }
+            VRMAP_SET(in->dst, pk);
             break;
         }
         case MIR_FEQ: case MIR_FLT: {
