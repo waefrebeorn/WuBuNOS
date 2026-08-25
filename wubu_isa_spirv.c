@@ -102,7 +102,7 @@ typedef struct {
     uint32_t t_arr_mem, t_struct_ssbo, t_ptr_ssbo;     /* storage class 5 */
     uint32_t t_i32_in, t_gid_input;                    /* input v3i32 ptr */
     uint32_t t_pushblk, t_ptr_push;
-    uint32_t t_fn_void;
+    uint32_t t_fn_void, t_res_u64;
     uint32_t c_zero32, len_mem_cells;
     uint32_t c_zero64, c_one64;
     uint32_t var_ssbo, var_push, var_gid;
@@ -129,6 +129,7 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
     s.t_i32_in    = nid(&s);              /* ptr(Input,i32) */
     s.t_gid_input = nid(&s);              /* ptr(Input,v3i32) */
     s.t_pushblk   = nid(&s);              /* struct{u64} */
+    s.t_res_u64   = nid(&s);              /* ptr(StorageBuffer,u64) for ret slot */
     s.t_ptr_push  = nid(&s);
     s.t_fn_void   = nid(&s);
     s.c_zero32    = nid(&s);
@@ -139,9 +140,25 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
     s.var_gid     = nid(&s);
     s.fn_main     = nid(&s);
 
+    /* Pre-pass: collect DISTINCT i64 immediates and pin an id for each.
+     * Constants cannot appear inside function bodies (section 09 rule), so
+     * every MIR_CONST materializes as OpCopyObject from its section-09 def. */
+    typedef struct { int64_t imm; uint32_t id; } cment_t;
+    cment_t *cmts = NULL; size_t ncm = 0, cap_cm = 0;
+    for (size_t q = 0; q < p->n; q++) {
+        if (p->ins[q].op != MIR_CONST) continue;
+        int64_t v = p->ins[q].imm;
+        size_t w; for (w = 0; w < ncm; w++) if (cmts[w].imm == v) break;
+        if (w == ncm) {
+            if (ncm + 1 > cap_cm) { cap_cm = cap_cm ? cap_cm*2 : 32;
+                                    cmts = realloc(cmts, cap_cm * sizeof *cmts); }
+            cmts[ncm].imm = v;
+            cmts[ncm].id  = nid(&s);
+            ncm++;
+        }
+    }
     uint32_t vr_base = s.next_id;
-    uint32_t maxvr = 64;
-    if (maxvr < 256) maxvr = 256;         /* generous; bound patched later */
+    uint32_t maxvr = 256;
 
     /* ---- header ---- */
     sb_word(&s.bin, 0x07230203u);
@@ -204,6 +221,7 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
     { uint32_t o[]={s.t_pushblk,s.t_u64}; spv_ins(&s.bin,OP_TYPE_STRUCT,o,2);}
 
         { uint32_t o[]={s.t_ptr_push,9,s.t_pushblk}; spv_ins(&s.bin,OP_TYPE_POINTER,o,3);}
+    { uint32_t o[]={s.t_res_u64,12,s.t_u64}; spv_ins(&s.bin,OP_TYPE_POINTER,o,3);}
     { uint32_t o[]={s.t_fn_void,s.t_void}; spv_ins(&s.bin,OP_TYPE_FUNCTION,o,2);}
     /* type decorations (logical layout: before variables) */
 
@@ -214,6 +232,14 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
       sb_word(&s.bin,s.t_u64); sb_word(&s.bin,s.c_zero64); sb_word(&s.bin,0); sb_word(&s.bin,0);}
     { sb_word(&s.bin,(uint32_t)(5<<16)|OP_CONSTANT);
       sb_word(&s.bin,s.t_u64); sb_word(&s.bin,s.c_one64); sb_word(&s.bin,1); sb_word(&s.bin,0);}
+
+    for (size_t q = 0; q < ncm; q++) {
+        uint32_t lo = (uint32_t)(uint64_t)cmts[q].imm;
+        uint32_t hi = (uint32_t)((uint64_t)cmts[q].imm >> 32);
+        sb_word(&s.bin,(uint32_t)(5<<16)|OP_CONSTANT);
+        sb_word(&s.bin,s.t_u64); sb_word(&s.bin,cmts[q].id);
+        sb_word(&s.bin,lo); sb_word(&s.bin,hi);
+    }
 
 
     /* globals */
@@ -233,8 +259,11 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
     { uint32_t o[]={s.t_i32,id_x32,id_v3,0}; spv_ins(&s.bin,OP_COMPOSITE_EXTRACT,o,4);}
     { uint32_t o[]={s.t_u64,id_gid,id_x32}; spv_ins(&s.bin,OPCODE_UCONVERT,o,3);}
 
-    /* MIR VR k maps to SSA id (k==0 ? id_gid : vr_base+k) */
-    #define VROF(k) ((k)==0 ? id_gid : (uint32_t)(vr_base+(k)))
+    /* MIR VR -> current SSA id map (each write kills the prior version) */
+    uint32_t *vrmap = calloc(maxvr, 4);
+    #define VRMAP_GET(k) ((uint32_t)((k) < maxvr && vrmap[k] ? vrmap[k] : s.c_zero64))
+    #define VRMAP_SET(k,id_) do{ if((size_t)(k) < maxvr) vrmap[(k)]=(id_); }while(0)
+    VRMAP_SET(0, id_gid);   /* arg/thread register */
 
     /* per-vr phi-less labels: we emit straight-line ops; labels for branches */
     uint32_t lbl_ctr = 5000;
@@ -243,16 +272,40 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
     for (size_t pc = 0; pc < p->n; pc++) {
         const wubu_mir_instr_t *in = &p->ins[pc];
         switch (in->op) {
-        case MIR_CONST:
-            /* Phase 2: materialize via OpConstant64-in-section + OpCopyObject
-             * or arithmetic synthesis. Milestone 1 skips. */
+        case MIR_CONST: {
+            size_t w; for (w = 0; w < ncm; w++) if (cmts[w].imm == in->imm) break;
+            uint32_t csrc = (w < ncm) ? cmts[w].id : s.c_zero64;
+            uint32_t dst_id = nid(&s);
+            { uint32_t o[]={s.t_u64,dst_id,csrc}; spv_ins(&s.bin,83,o,3); }  /* OpCopyObject */
+            VRMAP_SET(in->dst, dst_id);
             break;
-        default: break; /* expanded below in phase-2 pass */
+        }
+        case MIR_ADD: case MIR_SUB: case MIR_MUL:
+        case MIR_AND: case MIR_OR: case MIR_XOR: {
+            uint16_t opc =
+                in->op==MIR_ADD ? 128 : in->op==MIR_SUB ? 130 :
+                in->op==MIR_MUL ? 132 : in->op==MIR_AND ? 199 :
+                in->op==MIR_OR  ? 197 : 198;
+            uint32_t d = nid(&s);
+            { uint32_t o[]={s.t_u64,d,VRMAP_GET(in->a),VRMAP_GET(in->b)};
+              spv_ins(&s.bin,opc,o,4); }
+            VRMAP_SET(in->dst, d);
+            break;
+        }
+        case MIR_RET:
+            last_ret_src = VRMAP_GET(in->a);
+            break;
+        default: break; /* branches/loads/stores land next wave */
         }
     }
-    /* NOTE: full instruction walk lands in phase 2 (see below); this file's
-     * first working milestone validates the module skeleton end-to-end. */
-    (void)lbl_ctr; (void)last_ret_src;
+
+    /* store RET value into mem cell 0 (the return slot) */
+    {
+        uint32_t res_ptr = nid(&s);
+        { uint32_t o[]={s.t_res_u64,res_ptr,s.var_ssbo,s.c_zero32,s.c_zero32};
+          spv_ins(&s.bin,OP_ACCESS_CHAIN,o,5); }   /* result,base,idx,idx */
+        { uint32_t o[]={res_ptr,last_ret_src}; spv_ins(&s.bin,OP_STORE,o,2); }
+    }
 
     { uint32_t o[1]; spv_ins(&s.bin,OP_RETURN,o,0);}
     { uint32_t o[1]; spv_ins(&s.bin,OP_FUNCTION_END,o,0);}
