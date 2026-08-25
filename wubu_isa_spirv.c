@@ -168,11 +168,12 @@ static void emit_tgemm_spirv(S *s, const wubu_mir_instr_t *in,
     uint32_t cM   = spirv_find_const(cmts, ncm, M);
     uint32_t cN   = spirv_find_const(cmts, ncm, Nn);
     uint32_t cK   = spirv_find_const(cmts, ncm, K);
-    uint32_t cS   = spirv_find_const(cmts, ncm, 64);
+    uint32_t cS   = spirv_find_const(cmts, ncm, 1);
     uint32_t cKN  = spirv_find_const(cmts, ncm, K*Nn);
     uint32_t cMKN = spirv_find_const(cmts, ncm, M*K*Nn);
     uint32_t aBase = TG_VRG(in->a), bBase = TG_VRG(in->b), cBase = TG_VRG(in->dst);
 
+    uint32_t sc_i = spirv_find_const(cmts, ncm, (long long)s->scratch_base);
     uint32_t head=nid(s), cont=nid(s), body=nid(s), merge=nid(s);
     uint32_t w = nid(s);
 
@@ -181,13 +182,10 @@ static void emit_tgemm_spirv(S *s, const wubu_mir_instr_t *in,
     *jt = 1;
 
     { uint32_t o[]={head}; spv_ins(&s->bin,OP_LABEL,o,1); }
-    { uint32_t om[]={merge,cont,0}; spv_ins(&s->bin,246,om,3); }
-    { uint32_t o[]={cont}; spv_ins(&s->bin,OPCODE_BRANCH,o,1); }
-
-    { uint32_t o[]={cont}; spv_ins(&s->bin,OP_LABEL,o,1); }
     {
         uint32_t cmp=nid(s);
         { uint32_t o[]={s->t_bool,cmp,w,cMKN}; spv_ins(&s->bin,176,o,4); }
+        { uint32_t om[]={merge,cont,0}; spv_ins(&s->bin,246,om,3); }
         { uint32_t o3[]={cmp,body,merge}; spv_ins(&s->bin,OPCODE_BRANCH_COND,o3,3); }
     }
 
@@ -197,7 +195,7 @@ static void emit_tgemm_spirv(S *s, const wubu_mir_instr_t *in,
         { uint32_t o[]={s->t_u64,iv_,w,cKN}; spv_ins(&s->bin,134,o,4);}
         { uint32_t o[]={s->t_u64,rr,w,cKN};  spv_ins(&s->bin,137,o,4);}
         { uint32_t o[]={s->t_u64,kk,rr,cN};  spv_ins(&s->bin,134,o,4);}
-        { uint32_t o[]={s->t_u64,jj,rr,kk};  spv_ins(&s->bin,137,o,4);}
+        { uint32_t o[]={s->t_u64,jj,rr,cN};  spv_ins(&s->bin,137,o,4);}
         { uint32_t o[]={s->t_u64,jN,jj,cN};  spv_ins(&s->bin,132,o,4);}
 
         uint32_t t1=nid(s), t2=nid(s), t4=nid(s), t5=nid(s), aptr=nid(s), aval=nid(s);
@@ -224,14 +222,17 @@ static void emit_tgemm_spirv(S *s, const wubu_mir_instr_t *in,
         TG_AC(cptr, w3); TG_LD(oldc, cptr);
         { uint32_t o[]={s->t_u64,newc,oldc,prod};      spv_ins(&s->bin,128,o,4);}
         TG_ST(cptr, newc);
+
+        /* w += stride */
+        { uint32_t nw=nid(s);
+          { uint32_t o[]={s->t_u64,nw,w,cS}; spv_ins(&s->bin,128,o,4);}
+          w = nw; }
+        { uint32_t o[]={cont}; spv_ins(&s->bin,OPCODE_BRANCH,o,1); }
+        *jt = 1;
     }
 
-    /* continue: w += 64 */
-    {
-        uint32_t nw=nid(s);
-        { uint32_t o[]={s->t_u64,nw,w,cS}; spv_ins(&s->bin,128,o,4);}
-        w = nw;
-    }
+    /* cont: pass-through backedge to header */
+    { uint32_t o[]={cont}; spv_ins(&s->bin,OP_LABEL,o,1); }
     { uint32_t o[]={head}; spv_ins(&s->bin,OPCODE_BRANCH,o,1); }
     *jt = 1;
 
