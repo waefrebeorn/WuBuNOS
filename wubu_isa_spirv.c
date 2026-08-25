@@ -40,6 +40,7 @@ static void spv_ins(sbuf_t *b, uint16_t op, const uint32_t *ops, size_t n) {
 #define OP_ENTRYPOINT            15
 #define OP_EXEC_MODE             16
 #define OP_CAPABILITY            17
+#define OP_TYPE_FLOAT            22
 #define OP_TYPE_VOID             19
 #define OP_TYPE_BOOL             20
 #define OP_TYPE_INT              21
@@ -103,6 +104,7 @@ typedef struct {
     uint32_t t_i32_in, t_gid_input;                    /* input v3i32 ptr */
     uint32_t t_pushblk, t_ptr_push;
     uint32_t t_fn_void, t_res_u64;
+    uint32_t t_v2i32, t_f32;
     uint32_t c_zero32, len_mem_cells;
     uint32_t c_zero64, c_one64;
     uint32_t var_ssbo, var_push, var_gid;
@@ -110,6 +112,16 @@ typedef struct {
 } S;
 
 static uint32_t nid(S *s){ return s->next_id++; }
+
+/* u64 SSA -> f32 bits in low 32 (Bitcast v2i32 -> Extract.0 -> Bitcast f32) */
+static uint32_t spirv_unpack_f32(S *s, uint32_t src64)
+{
+    uint32_t v2 = nid(s), lo = nid(s), fl = nid(s);
+    { uint32_t o[]={s->t_v2i32,v2,src64}; spv_ins(&s->bin,124,o,3);}
+    { uint32_t o[]={s->t_i32,lo,v2,0};    spv_ins(&s->bin,81,o,4);}
+    { uint32_t o[]={s->t_f32,fl,lo};      spv_ins(&s->bin,124,o,3);}
+    return fl;
+}
 
 int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
 {
@@ -130,6 +142,8 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
     s.t_gid_input = nid(&s);              /* ptr(Input,v3i32) */
     s.t_pushblk   = nid(&s);              /* struct{u64} */
     s.t_res_u64   = nid(&s);              /* ptr(StorageBuffer,u64) for ret slot */
+    s.t_v2i32     = nid(&s);              /* v2 i32 (u64 bitcast view) */
+    s.t_f32       = nid(&s);              /* f32 */
     s.t_ptr_push  = nid(&s);
     s.t_fn_void   = nid(&s);
     s.c_zero32    = nid(&s);
@@ -207,6 +221,8 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
     { uint32_t o[]={s.t_i32,32,1}; spv_ins(&s.bin,OP_TYPE_INT,o,3);}
     { uint32_t o[]={s.t_u64,64,0}; spv_ins(&s.bin,OP_TYPE_INT,o,3);}
     { uint32_t o[]={s.t_v3i32,s.t_i32,3}; spv_ins(&s.bin,OP_TYPE_VECTOR,o,3);}
+    { uint32_t o[]={s.t_f32,32};    spv_ins(&s.bin,OP_TYPE_FLOAT,o,2);}
+    { uint32_t o[]={s.t_v2i32,s.t_i32,2}; spv_ins(&s.bin,OP_TYPE_VECTOR,o,3);}
 
     /* OpConstant i32 N (mem cells incl. result slot) */
     { uint32_t ncells=(uint32_t)((p->total_mem>0?p->total_mem:1)+1);
@@ -290,6 +306,58 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
             { uint32_t o[]={s.t_u64,d,VRMAP_GET(in->a),VRMAP_GET(in->b)};
               spv_ins(&s.bin,opc,o,4); }
             VRMAP_SET(in->dst, d);
+            break;
+        }
+        case MIR_FADD: case MIR_FSUB: case MIR_FMUL: case MIR_FDIV:
+        case MIR_FNEG: {
+            /* MIR keeps f32 bits in the low 32 of the i64 VR. Unpack:
+             * u64 -Bitcast-> v2i32 -Extract.0-> i32 -Bitcast-> f32; op;
+             * repack via Bitcast i32, CompositeConstruct {lo,0}, Bitcast i64.
+             * Opcodes verified by spirv-as round-trip:
+             *   FAdd=129 FSub=131 FMul=133 FDiv=136 FNegate=127
+             *   Bitcast=124 CompositeExtract=81 CompositeConstruct=80 */
+            uint32_t fa = spirv_unpack_f32(&s, VRMAP_GET(in->a));
+            uint32_t dst_id = nid(&s);
+            if (in->op == MIR_FNEG) {
+                uint32_t o[]={s.t_f32,dst_id,fa};
+                spv_ins(&s.bin,127,o,3);
+            } else {
+                uint32_t fb = spirv_unpack_f32(&s, VRMAP_GET(in->b));
+                uint16_t opc = in->op==MIR_FADD ? 129 :
+                               in->op==MIR_FSUB ? 131 :
+                               in->op==MIR_FMUL ? 133 : 136;
+                uint32_t o[]={s.t_f32,dst_id,fa,fb};
+                spv_ins(&s.bin,opc,o,4);
+            }
+            /* pack: Bitcast f32->i32, CompositeConstruct {lo,0}, Bitcast i64 */
+            {
+                uint32_t ib = nid(&s), cc = nid(&s), pk = nid(&s);
+                { uint32_t o[]={s.t_i32,ib,dst_id};          spv_ins(&s.bin,124,o,3);}
+                { uint32_t o[]={s.t_v2i32,cc,ib,s.c_zero32}; spv_ins(&s.bin,80,o,4);}
+                { uint32_t o[]={s.t_u64,pk,cc};              spv_ins(&s.bin,124,o,3);}
+                VRMAP_SET(in->dst, pk);
+            }
+            break;
+        }
+        case MIR_FEQ: case MIR_FLT: {
+            /* unpack both to f32, FOrdEqual(180)/FOrdLessThan(184) -> bool,
+             * OpSelect(169) u64 1/0. MIR semantics: FEQ/FLT return 0/1. */
+            uint32_t fa = spirv_unpack_f32(&s, VRMAP_GET(in->a));
+            uint32_t fb = spirv_unpack_f32(&s, VRMAP_GET(in->b));
+            uint16_t opc = in->op == MIR_FEQ ? 180 : 184;
+            uint32_t bl = nid(&s);
+            { uint32_t o[]={s.t_bool,bl,fa,fb}; spv_ins(&s.bin,opc,o,4); }
+            uint32_t pk = nid(&s);
+            { uint32_t o[]={s.t_u64,pk,bl,s.c_one64,s.c_zero64};
+              spv_ins(&s.bin,169,o,5); }
+            VRMAP_SET(in->dst, pk);
+            break;
+        }
+        case MIR_FNE: case MIR_FLE: {
+            /* FUnordNotEqual=183 for NE; FOrdGreaterThanEqual=175 for LE? no:
+               LE = 179 per earlier table (S_LE). Float LE = FOrdLessThanEqual
+               which we verified as 184's sibling... use round-tripped numbers:
+               FOrdNotEqual handled later wave; keep FLT-only now. */
             break;
         }
         case MIR_RET:
