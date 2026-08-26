@@ -91,6 +91,7 @@ static void spv_ins(sbuf_t *b, uint16_t op, const uint32_t *ops, size_t n) {
 #define OPCODE_BRANCH               249
 #define OPCODE_BRANCH_COND          250
 #define OPCODE_SELECTION_MERGE      247
+#define OPCODE_LOOP_MERGE           246
 #define OPCODE_RETURN               253
 #define OPCODE_FUNCTION_END         56
 #define OPCODE_FUNCTION             54
@@ -190,13 +191,14 @@ static void emit_tgemm_spirv(S *s, const wubu_mir_instr_t *in,
     uint32_t nlanes = gx_*64;
     uint32_t cSTRIDE = spirv_find_const(cmts, ncm, (long long)nlanes);
     uint32_t cPASS  = spirv_find_const(cmts, ncm, ((long long)M*Nn + nlanes - 1)/nlanes);
+    uint32_t c8C    = spirv_find_const(cmts, ncm, 8); /* lane stride: 4 slots */
     uint32_t head=nid(s), cont=nid(s), body=nid(s), merge=nid(s);
     uint32_t w = nid(s);
 
     /* lane = gid; slot0(gid) = lane*4+scratch_base, slot1(pass) = slot0+4 */
     { uint32_t o[]={s->t_u64,w,id_gid}; spv_ins(&s->bin,83,o,3); }   /* w = lane */
     uint32_t lane4=nid(s), slt=nid(s), s1=nid(s), spo_=nid(s);
-    { uint32_t o[]={s->t_u64,lane4,w,c4L}; spv_ins(&s->bin,OPCODE_IMUL,o,4);} /* lane*4 */
+    { uint32_t o[]={s->t_u64,lane4,w,c8C}; spv_ins(&s->bin,OPCODE_IMUL,o,4);} /* lane*8 (4 slots) */
     { uint32_t o[]={s->t_u64,slt,lane4,sc_i};   spv_ins(&s->bin,OPCODE_IADD,o,4);} /* slot0 */
     { uint32_t o[]={s->t_u64,s1,slt,c4L};      spv_ins(&s->bin,OPCODE_IADD,o,4);} /* slot1 */
     { uint32_t o[]={s->t_res_u64,spo_,s->var_ssbo,s->c_zero32,slt};
@@ -226,29 +228,66 @@ static void emit_tgemm_spirv(S *s, const wubu_mir_instr_t *in,
         uint32_t pi_=nid(s), pj_=nid(s);
         { uint32_t o[]={s->t_u64,pi_,out,cN};  spv_ins(&s->bin,134,o,4);}
         { uint32_t o[]={s->t_u64,pj_,out,cN};  spv_ins(&s->bin,137,o,4);}
-        uint32_t acc = s->c_zero64;
-        /* acc lives in SSA regs — per-lane private, no memory needed */
-
-        /* K fully unrolled: acc(SSA) += A[i*K+k]*B[k*N+j] */
-        for (int k = 0; k < K; k++) {
-            uint32_t ck = spirv_find_const(cmts, ncm, k);
-            uint32_t tiK=nid(s), tik=nid(s), ta_=nid(s), aptr=nid(s), aval=nid(s);
-            { uint32_t o[]={s->t_u64,tiK,pi_,cK};    spv_ins(&s->bin,132,o,4);}
-            { uint32_t o[]={s->t_u64,tik,tiK,ck};    spv_ins(&s->bin,128,o,4);}
-            { uint32_t o[]={s->t_u64,ta_,tik,aBase}; spv_ins(&s->bin,128,o,4);}
-            TG_AC(aptr, ta_); TG_LD(aval, aptr);
-
-            uint32_t tkN=nid(s), tkj=nid(s), tb_=nid(s), bptr=nid(s), bval=nid(s);
-            { uint32_t o[]={s->t_u64,tkN,ck,cN};     spv_ins(&s->bin,132,o,4);}
-            { uint32_t o[]={s->t_u64,tkj,tkN,pj_};   spv_ins(&s->bin,128,o,4);}
-            { uint32_t o[]={s->t_u64,tb_,tkj,bBase}; spv_ins(&s->bin,128,o,4);}
-            TG_AC(bptr, tb_); TG_LD(bval, bptr);
-
-            uint32_t prod=nid(s), accn=nid(s);
-            { uint32_t o[]={s->t_u64,prod,aval,bval}; spv_ins(&s->bin,132,o,4);}
-            { uint32_t o[]={s->t_u64,accn,acc,prod};  spv_ins(&s->bin,128,o,4);}
-            acc = accn;
-        }
+        /* K reduction as structured k-loop — glslang-exact block layout that dzn handles:
+         *   kpre  = Label, LoopMerge(kmer,kcont), Branch khdr
+         *   khdr  = Label, Load k(slot2), ULessThan, BranchCond(kbody|kmer)
+         *   kbody = Label, FMA + Store acc(slot3), Branch kcont
+         *   kcont = Label, k+1→slot2, Branch khdr (back-edge)
+         *   kmer  = Label, Load final acc(slot3)
+         * LoopMerge lives on kpre (preheader), NOT on the header. dzn silently
+         * miscompiles headers where instructions precede LoopMerge. */
+        uint32_t kpre=nid(s), khdr=nid(s), kbody=nid(s), kcont=nid(s), kmer=nid(s);
+        uint32_t s8=nid(s), s3=nid(s);
+        { uint32_t o[]={s->t_u64,s8,slt,c8C};  spv_ins(&s->bin,128,o,4);}  /* slot2 = slt+8 */
+        { uint32_t o[]={s->t_u64,s3,s8,c4L};   spv_ins(&s->bin,128,o,4);}  /* slot3 = slt+12 */
+        /* init: k=0, acc=0 */
+        { uint32_t o[]={s->t_res_u64,nid(s),s->var_ssbo,s->c_zero32,s8};
+          uint32_t kp_=o[1]; spv_ins(&s->bin,65,o,5); TG_ST(kp_, s->c_zero64); }
+        { uint32_t o[]={s->t_res_u64,nid(s),s->var_ssbo,s->c_zero32,s3};
+          uint32_t ap_=o[1]; spv_ins(&s->bin,65,o,5); TG_ST(ap_, s->c_zero64); }
+        /* body → kpre */
+        { uint32_t o[]={kpre}; spv_ins(&s->bin,OPCODE_BRANCH,o,1); }
+        /* kpre: preheader with LoopMerge + Branch to header */
+        { uint32_t o[]={kpre}; spv_ins(&s->bin,OPCODE_LABEL,o,1); }
+        { uint32_t om2[]={kmer,kcont,0}; spv_ins(&s->bin,OPCODE_LOOP_MERGE,om2,3); }
+        { uint32_t o[]={khdr}; spv_ins(&s->bin,OPCODE_BRANCH,o,1); }
+        /* khdr: header - load k, test k<K, BranchCond */
+        { uint32_t o[]={khdr}; spv_ins(&s->bin,OPCODE_LABEL,o,1); }
+        uint32_t kptr=nid(s), kload=nid(s), klt=nid(s);
+        { uint32_t o[]={s->t_res_u64,kptr,s->var_ssbo,s->c_zero32,s8}; spv_ins(&s->bin,65,o,5); }
+        TG_LD(kload, kptr);
+        { uint32_t o[]={s->t_bool,klt,kload,cK}; spv_ins(&s->bin,176,o,4);} /* k < K */
+        { uint32_t o3[]={klt,kbody,kmer}; spv_ins(&s->bin,OPCODE_BRANCH_COND,o3,3); }
+        /* kbody: FMA + store acc */
+        { uint32_t o[]={kbody}; spv_ins(&s->bin,OPCODE_LABEL,o,1); }
+        uint32_t tiK=nid(s), tik=nid(s), ta_=nid(s), aptr=nid(s), aval=nid(s);
+        { uint32_t o[]={s->t_u64,tiK,pi_,cK};    spv_ins(&s->bin,132,o,4);}
+        { uint32_t o[]={s->t_u64,tik,tiK,kload}; spv_ins(&s->bin,128,o,4);}
+        { uint32_t o[]={s->t_u64,ta_,tik,aBase}; spv_ins(&s->bin,128,o,4);}
+        TG_AC(aptr, ta_); TG_LD(aval, aptr);
+        uint32_t tkN=nid(s), tkj=nid(s), tb_=nid(s), bptr=nid(s), bval=nid(s);
+        { uint32_t o[]={s->t_u64,tkN,kload,cN};  spv_ins(&s->bin,132,o,4);}
+        { uint32_t o[]={s->t_u64,tkj,tkN,pj_};   spv_ins(&s->bin,128,o,4);}
+        { uint32_t o[]={s->t_u64,tb_,tkj,bBase}; spv_ins(&s->bin,128,o,4);}
+        TG_AC(bptr, tb_); TG_LD(bval, bptr);
+        uint32_t prod=nid(s), olda=nid(s), accn=nid(s), acptr=nid(s);
+        { uint32_t o[]={s->t_u64,prod,aval,bval}; spv_ins(&s->bin,132,o,4);}
+        { uint32_t o[]={s->t_res_u64,acptr,s->var_ssbo,s->c_zero32,s3}; spv_ins(&s->bin,65,o,5); }
+        TG_LD(olda, acptr);
+        { uint32_t o[]={s->t_u64,accn,olda,prod}; spv_ins(&s->bin,128,o,4);}
+        TG_ST(acptr, accn);
+        { uint32_t o[]={kcont}; spv_ins(&s->bin,OPCODE_BRANCH,o,1); }
+        /* kcont: k+1 → slot2, back-edge to header */
+        { uint32_t o[]={kcont}; spv_ins(&s->bin,OPCODE_LABEL,o,1); }
+        { uint32_t kn1=nid(s);
+          { uint32_t o[]={s->t_u64,kn1,kload,s->c_one64}; spv_ins(&s->bin,128,o,4);}
+          TG_ST(kptr, kn1); }
+        { uint32_t o[]={kpre}; spv_ins(&s->bin,OPCODE_BRANCH,o,1); }
+        /* kmer: load final acc from slot3 */
+        { uint32_t o[]={kmer}; spv_ins(&s->bin,OPCODE_LABEL,o,1); }
+        uint32_t acc=nid(s), afinal=nid(s);
+        { uint32_t o[]={s->t_res_u64,afinal,s->var_ssbo,s->c_zero32,s3}; spv_ins(&s->bin,65,o,5); }
+        TG_LD(acc, afinal);
 
         /* writeback: if (out < M*N) C[i*N+j] += acc — uniform-loop, guarded store.
          * Uses a structured if (SelectionMerge) instead of OpSelect: Lavapipe
@@ -345,7 +384,7 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
             int Nn = (int)(p->ins[q].imm & 0x7FF);
             ADD_CONST(M_); ADD_CONST(K_); ADD_CONST(Nn);
             ADD_CONST(M_*Nn); ADD_CONST(M_*K_*Nn);   /* cKN, cMKN — used by helper */
-            ADD_CONST(64); ADD_CONST(1); ADD_CONST(0); ADD_CONST(4);
+            ADD_CONST(64); ADD_CONST(1); ADD_CONST(0); ADD_CONST(4); ADD_CONST(8);
             { int _k; for (_k = 0; _k < K_; _k++) ADD_CONST(_k); } /* unroll consts */
             /* multi-WG: bake stride + pass count */
             { unsigned _gx=1; const char *_ge=getenv("WUBU_VK_GROUPS");
