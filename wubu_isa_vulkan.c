@@ -56,13 +56,18 @@ static int64_t vulkan_run(const uint8_t *code, size_t size, int64_t arg)
     uint32_t cells = g_cells;
     char cmd[512];
     snprintf(cmd, sizeof(cmd),
-             "/tmp/vk_run %s /tmp/wubu_kernel.spv %lld %u 2>/dev/null",
+             "/tmp/vk_run %s /tmp/wubu_kernel.spv %lld %u",
              getenv("WUBU_VK_DEVICE") ? getenv("WUBU_VK_DEVICE") : "0",
              (long long)arg, cells);
     FILE *f = popen(cmd, "r");
     if (!f) return 0;
     long long r = 0;
-    if (fscanf(f, "%lld", &r) != 1) r = 0;
+    if (fscanf(f, "%lld", &r) != 1) {
+        /* Surface vk_run/device errors instead of swallowing them as 0. */
+        char *line = NULL; size_t sz = 0;
+        if (getline(&line, &sz, f) > 0) r = -1;  /* -1 = execution failure */
+        free(line);
+    }
     pclose(f);
     return (int64_t)r;
 }

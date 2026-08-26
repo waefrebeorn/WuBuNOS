@@ -271,7 +271,10 @@ int main(int argc, char **argv)
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                          0, 1, &mb, 0, NULL, 0, NULL);
-    vkCmdDispatch(cmd, 1, 1, 1);
+    uint32_t gx = 1, gy = 1, gz = 1;
+    const char *e = getenv("WUBU_VK_GROUPS");
+    if (e) { gx = (uint32_t)atoi(e); gy = 1; gz = 1; }
+    vkCmdDispatch(cmd, gx, gy, gz);
     VkMemoryBarrier mb2 = {0};
     mb2.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     mb2.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;

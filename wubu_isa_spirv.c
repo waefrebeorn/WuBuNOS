@@ -171,19 +171,29 @@ static void emit_tgemm_spirv(S *s, const wubu_mir_instr_t *in,
     uint32_t cS   = spirv_find_const(cmts, ncm, 1);
     uint32_t cKN  = spirv_find_const(cmts, ncm, K*Nn);
     uint32_t cMKN = spirv_find_const(cmts, ncm, M*K*Nn);
-    uint32_t aBase = TG_VRG(in->a), bBase = TG_VRG(in->b), cBase = TG_VRG(in->dst);
+    uint32_t aBase0 = TG_VRG(in->a), bBase0 = TG_VRG(in->b), cBase0 = TG_VRG(in->dst);
+    /* MIR cell i lives at SSBO element i+1 (cell 0 = return slot) — match LOAD/STORE */
+    uint32_t aBase=nid(s), bBase=nid(s), cBase=nid(s);
+    { uint32_t o[]={s->t_u64,aBase,aBase0,s->c_one64}; spv_ins(&s->bin,OPCODE_IADD,o,4);}
+    { uint32_t o[]={s->t_u64,bBase,bBase0,s->c_one64}; spv_ins(&s->bin,OPCODE_IADD,o,4);}
+    { uint32_t o[]={s->t_u64,cBase,cBase0,s->c_one64}; spv_ins(&s->bin,OPCODE_IADD,o,4);}
 
     uint32_t sc_i = spirv_find_const(cmts, ncm, (long long)s->scratch_base);
     uint32_t head=nid(s), cont=nid(s), body=nid(s), merge=nid(s);
     uint32_t w = nid(s);
 
+    /* w = gid; stored to scratch (memory-carried counter, probe pattern) */
     { uint32_t o[]={s->t_u64,w,id_gid}; spv_ins(&s->bin,83,o,3); }
+    { uint32_t o_[]={s->t_res_u64,nid(s),s->var_ssbo,s->c_zero32,sc_i};
+      uint32_t wp_=o_[1]; spv_ins(&s->bin,65,o_,5); TG_ST(wp_,w); }
     { uint32_t o[]={head}; spv_ins(&s->bin,OPCODE_BRANCH,o,1); }
     *jt = 1;
 
     { uint32_t o[]={head}; spv_ins(&s->bin,OP_LABEL,o,1); }
     {
         uint32_t cmp=nid(s);
+        { uint32_t o_[]={s->t_res_u64,nid(s),s->var_ssbo,s->c_zero32,sc_i};
+          uint32_t hp_=o_[1]; spv_ins(&s->bin,65,o_,5); TG_LD(w,hp_); }
         { uint32_t o[]={s->t_bool,cmp,w,cMKN}; spv_ins(&s->bin,176,o,4); }
         { uint32_t om[]={merge,cont,0}; spv_ins(&s->bin,246,om,3); }
         { uint32_t o3[]={cmp,body,merge}; spv_ins(&s->bin,OPCODE_BRANCH_COND,o3,3); }
@@ -191,12 +201,6 @@ static void emit_tgemm_spirv(S *s, const wubu_mir_instr_t *in,
 
     { uint32_t o[]={body}; spv_ins(&s->bin,OP_LABEL,o,1); }
     {
-        /* DEBUG: write w to cell 8 (scratch slot) */
-        { uint32_t rp=nid(s), eight=nid(s);
-          { uint32_t o[]={s->t_i32,eight,s->c_zero32}; spv_ins(&s->bin,43,o,3); }
-          { uint32_t o[]={s->t_i32,eight,eight,s->c_zero32}; spv_ins(&s->bin,128,o,4); }
-          { uint32_t o[]={s->t_res_u64,rp,s->var_ssbo,s->c_zero32,eight}; spv_ins(&s->bin,65,o,5); }
-          { uint32_t o2[]={rp,w}; spv_ins(&s->bin,62,o2,2); } }
         uint32_t iv_=nid(s), rr=nid(s), kk=nid(s), jj=nid(s), jN=nid(s);
         { uint32_t o[]={s->t_u64,iv_,w,cKN}; spv_ins(&s->bin,134,o,4);}
         { uint32_t o[]={s->t_u64,rr,w,cKN};  spv_ins(&s->bin,137,o,4);}
@@ -220,26 +224,26 @@ static void emit_tgemm_spirv(S *s, const wubu_mir_instr_t *in,
 
         uint32_t v1=nid(s), w1=nid(s), w2=nid(s), w3=nid(s);
         uint32_t cptr=nid(s), oldc=nid(s), newc=nid(s), prod=nid(s);
+        { uint32_t o[]={s->t_u64,w1,iv_,cN};           spv_ins(&s->bin,132,o,4);}
+        { uint32_t o[]={s->t_u64,w2,w1,jj};            spv_ins(&s->bin,128,o,4);}
         { uint32_t o[]={s->t_u64,v1,cBase,s->c_zero64}; spv_ins(&s->bin,128,o,4);}
-        { uint32_t o[]={s->t_u64,w1,iv_,cKN};          spv_ins(&s->bin,132,o,4);}
-        { uint32_t o[]={s->t_u64,w2,kk,cN};            spv_ins(&s->bin,132,o,4);}
-        { uint32_t o[]={s->t_u64,w3,w1,w2};            spv_ins(&s->bin,128,o,4);}
-        { uint32_t o[]={s->t_u64,w3,w3,jj};            spv_ins(&s->bin,128,o,4);}
+        { uint32_t o[]={s->t_u64,w3,w2,v1};            spv_ins(&s->bin,128,o,4);}
         { uint32_t o[]={s->t_u64,prod,aval,bval};      spv_ins(&s->bin,132,o,4);}
         TG_AC(cptr, w3); TG_LD(oldc, cptr);
         { uint32_t o[]={s->t_u64,newc,oldc,prod};      spv_ins(&s->bin,128,o,4);}
         TG_ST(cptr, newc);
-
-        /* w += stride */
-        { uint32_t nw=nid(s);
-          { uint32_t o[]={s->t_u64,nw,w,cS}; spv_ins(&s->bin,128,o,4);}
-          w = nw; }
         { uint32_t o[]={cont}; spv_ins(&s->bin,OPCODE_BRANCH,o,1); }
-        *jt = 1;
+
+        /* cont block: reload w, add stride, store back, branch header */
     }
 
-    /* cont: pass-through backedge to header */
+    /* cont: increment counter in memory (probe-proven), branch header */
     { uint32_t o[]={cont}; spv_ins(&s->bin,OP_LABEL,o,1); }
+    { uint32_t o_[]={s->t_res_u64,nid(s),s->var_ssbo,s->c_zero32,sc_i};
+      uint32_t cp_=o_[1]; spv_ins(&s->bin,65,o_,5); TG_LD(w,cp_);
+      uint32_t nw2=nid(s);
+      { uint32_t o[]={s->t_u64,nw2,w,cS}; spv_ins(&s->bin,128,o,4);}
+      TG_ST(cp_,nw2); }
     { uint32_t o[]={head}; spv_ins(&s->bin,OPCODE_BRANCH,o,1); }
     *jt = 1;
 
@@ -303,6 +307,7 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
             int K_ = (int)((p->ins[q].imm >> 11) & 0x7FF);
             int Nn = (int)(p->ins[q].imm & 0x7FF);
             ADD_CONST(M_); ADD_CONST(K_); ADD_CONST(Nn);
+            ADD_CONST(M_*Nn); ADD_CONST(M_*K_*Nn);   /* cKN, cMKN — used by helper */
             ADD_CONST(64); ADD_CONST(1); ADD_CONST(0);
             long long sb_ = (long long)((p->total_mem>0?p->total_mem:1)+1);
             s.scratch_base = (uint32_t)sb_;
@@ -350,6 +355,7 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
     { uint32_t o[]={s.t_pushblk,2}; spv_ins(&s.bin,OP_DECORATE,o,2);}     /* Block */
     { uint32_t o[]={s.var_ssbo,34,0}; spv_ins(&s.bin,OP_DECORATE,o,3);} /* DescriptorSet 0 */
     { uint32_t o[]={s.var_ssbo,33,0}; spv_ins(&s.bin,OP_DECORATE,o,3);} /* Binding 0 */
+    { uint32_t o[]={s.var_gid,11,28}; spv_ins(&s.bin,OP_DECORATE,o,3);} /* BuiltIn GlobalInvocationId */
     /* member layout: Block structs need explicit member Offsets */
     { uint32_t o[]={s.t_struct_ssbo,0,35,0}; spv_ins(&s.bin,72 /*MemberDecorate*/,o,4);}
     { uint32_t o[]={s.t_pushblk,0,35,0};     spv_ins(&s.bin,72,o,4);}
@@ -384,14 +390,14 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
     { uint32_t o[]={s.t_fn_void,s.t_void}; spv_ins(&s.bin,OP_TYPE_FUNCTION,o,2);}
     /* type decorations (logical layout: before variables) */
 
-    /* constants zero32/zero64/one64 */
+/* constants zero32/zero64/one64 */
     { sb_word(&s.bin,(uint32_t)(4<<16)|OP_CONSTANT);
       sb_word(&s.bin,s.t_i32); sb_word(&s.bin,s.c_zero32); sb_word(&s.bin,0); }
     { sb_word(&s.bin,(uint32_t)(5<<16)|OP_CONSTANT);
       sb_word(&s.bin,s.t_u64); sb_word(&s.bin,s.c_zero64); sb_word(&s.bin,0); sb_word(&s.bin,0);}
     { sb_word(&s.bin,(uint32_t)(5<<16)|OP_CONSTANT);
       sb_word(&s.bin,s.t_u64); sb_word(&s.bin,s.c_one64); sb_word(&s.bin,1); sb_word(&s.bin,0);}
-
+    /* remaining cmts[] constants */
     for (size_t q = 0; q < ncm; q++) {
         uint32_t lo = (uint32_t)(uint64_t)cmts[q].imm;
         uint32_t hi = (uint32_t)((uint64_t)cmts[q].imm >> 32);
