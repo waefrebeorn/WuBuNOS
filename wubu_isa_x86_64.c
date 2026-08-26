@@ -35,9 +35,10 @@
 /* Peephole optimizer — declared in x86_peephole.c */
 extern size_t x86_peephole_optimize(uint8_t *code, size_t n);
 
-/* Global thread-local pointer for JIT working memory (heap-allocated).
- * Set by x86_run before calling JIT'd code. Used by wubu_tgemm_parallel. */
-extern __thread int64_t *wubu_jit_mem_ptr;
+/* Global pointer for JIT working memory (heap-allocated).
+ * Set by x86_run before calling JIT'd code. Used by wubu_tgemm_parallel.
+ * NOT thread-local: OpenMP worker threads must see the same pointer. */
+extern int64_t *wubu_jit_mem_ptr;
 
 /* ---- the emitter ---- */
 
@@ -213,16 +214,23 @@ static void wubu_tgemm_scalar(int64_t *mem, int64_t A, int64_t B,
 }
 
 /* H4: parallel T_GEMM wrapper — dispatches row bands to OpenMP threads.
- * Uses wubu_jit_mem_ptr (heap-allocated via mmap in x86_run) for thread safety. */
+ * Uses wubu_jit_mem_ptr (heap-allocated via mmap in x86_run) for thread safety.
+ * Copies JIT stack frame to heap, runs parallel kernel, copies results back. */
 void wubu_tgemm_parallel(int64_t *stack_mem, int64_t A, int64_t B,
                                 int64_t C, int M, int N, int K)
 {
-    /* Use heap-allocated mem for OpenMP thread safety */
     int64_t *mem = wubu_jit_mem_ptr ? wubu_jit_mem_ptr : stack_mem;
+    size_t frame_bytes = (size_t)(((C > A) ? (size_t)C : (size_t)A) + M*N + 8) * 8;
 
 #if defined(_OPENMP)
     int nt = omp_get_max_threads();
     if (nt <= 1 || M < 4) { wubu_tgemm_scalar(mem, A, B, C, M, N, K); return; }
+
+    /* Sync stack -> heap for OpenMP worker access */
+    if (mem != stack_mem) {
+        memcpy(mem, stack_mem, frame_bytes);
+    }
+
     int rows_per = (M + nt - 1) / nt;
     #pragma omp parallel
     {
@@ -232,8 +240,14 @@ void wubu_tgemm_parallel(int64_t *stack_mem, int64_t A, int64_t B,
         int nm = hi - lo; if (nm > 0)
             wubu_tgemm_scalar(mem, A + (int64_t)lo*K, B, C + (int64_t)lo*N, nm, N, K);
     }
+
+    /* Sync heap -> stack to write results back to JIT frame */
+    if (mem != stack_mem) {
+        memcpy(stack_mem, mem, frame_bytes);
+    }
 #else
-    (void)stack_mem;(void)A;(void)B;(void)C;(void)M;(void)N;(void)K;
+    (void)stack_mem; (void)mem;
+    wubu_tgemm_scalar(mem, A, B, C, M, N, K);
 #endif
 }
 #if defined(WUBU_TGEMM_KEEP_NAIVE)
@@ -289,6 +303,11 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
     x86_emitter_t e;
     memset(&e, 0, sizeof(e));
     e.frame = n_spilled * 8 + mem_bytes + 8;      /* spills + var mem + spare */
+    /* Ensure 16-byte stack alignment for host calls (wubu_tgemm_parallel etc.).
+     * SysV ABI requires %rsp ≡ 0 (mod 16) at call sites. The JIT prologue does
+     * `push rbp` (8 bytes), making %rsp ≡ 8 (mod 16). So e.frame must be ≡ 8 (mod 16). */
+    e.frame = (e.frame + 7) & ~7ULL;      /* round up to 8 */
+    if ((e.frame % 16) == 0) e.frame += 8; /* force ≡ 8 mod 16 */
     e.spare_off = -(int32_t)(n_spilled * 8 + mem_bytes + 8);
     e.mem_off = (int32_t)(n_spilled * 8 + mem_bytes); /* offset to mem[0] */
     e.n_labels = p->n_labels;
@@ -946,7 +965,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
 
 /* Global thread-local pointer for JIT working memory (heap-allocated).
  * Set by x86_run before calling JIT'd code. Used by wubu_tgemm_parallel. */
-__thread int64_t *wubu_jit_mem_ptr = NULL;
+int64_t *wubu_jit_mem_ptr = NULL;
 
 static int64_t x86_run(const uint8_t *code, size_t size, int64_t arg) {
     (void)arg;
@@ -956,11 +975,12 @@ static int64_t x86_run(const uint8_t *code, size_t size, int64_t arg) {
     wubu_clear_cache(exec, size);
 
     /* Pre-allocate JIT working buffer via mmap (shared across pthreads).
-     * Estimate buffer size from code: if size > 0x7000, assume large frame. */
-    if (size > 0x7000) {
-        size_t buf_size = 8 * 1024 * 1024;
+     * Use a large region to accommodate frames up to 768³ (~13.5MB) and larger.
+     * Virtual memory is cheap — mmap allocates lazily. */
+    if (wubu_jit_mem_ptr == NULL) {
+        size_t buf_size = 64 * 1024 * 1024;
         void *buf = mmap(NULL, buf_size, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
-        wubu_jit_mem_ptr = (int64_t*)buf;
+        if (buf != MAP_FAILED) wubu_jit_mem_ptr = (int64_t*)buf;
     }
 
     int64_t (*fn)(void) = (int64_t (*)(void))exec;
@@ -971,7 +991,7 @@ static int64_t x86_run(const uint8_t *code, size_t size, int64_t arg) {
     }
     int64_t r = fn();
 
-    if (wubu_jit_mem_ptr) { munmap(wubu_jit_mem_ptr, 8*1024*1024); wubu_jit_mem_ptr = NULL; }
+    if (wubu_jit_mem_ptr) { munmap(wubu_jit_mem_ptr, 64*1024*1024); wubu_jit_mem_ptr = NULL; }
     jit_free_exec(exec, size);
     return r;
 }
