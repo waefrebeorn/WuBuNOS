@@ -102,6 +102,7 @@ typedef struct {
     uint32_t scratch_base;   /* first SSBO scratch elem (T_GEMM loop vars) */
     /* pinned ids */
     uint32_t t_void, t_i32, t_v3i32, t_u64, t_bool;
+    uint32_t c_i32_1, c_i32_2, c_i32_sem;              /* i32 consts for barriers */
     uint32_t t_arr_mem, t_struct_ssbo, t_ptr_ssbo;     /* storage class 5 */
     uint32_t t_i32_in, t_gid_input;                    /* input v3i32 ptr */
     uint32_t t_pushblk, t_ptr_push;
@@ -182,7 +183,13 @@ static void emit_tgemm_spirv(S *s, const wubu_mir_instr_t *in,
     { uint32_t o[]={s->t_u64,cBase,cBase0,s->c_one64}; spv_ins(&s->bin,OPCODE_IADD,o,4);}
 
     uint32_t sc_i   = spirv_find_const(cmts, ncm, (long long)s->scratch_base);
-    uint32_t cPASS  = spirv_find_const(cmts, ncm, ((long long)M*Nn + 63)/64);
+    /* Multi-WG grid-stride: stride = total lanes across WGs (gx*64), so each cell
+     * is owned by exactly one lane of one WG. Baked at emit time from env. */
+    unsigned gx_ = 1;
+    { const char *ge = getenv("WUBU_VK_GROUPS"); if (ge) gx_=(unsigned)atoi(ge); if (gx_<1) gx_=1; }
+    uint32_t nlanes = gx_*64;
+    uint32_t cSTRIDE = spirv_find_const(cmts, ncm, (long long)nlanes);
+    uint32_t cPASS  = spirv_find_const(cmts, ncm, ((long long)M*Nn + nlanes - 1)/nlanes);
     uint32_t head=nid(s), cont=nid(s), body=nid(s), merge=nid(s);
     uint32_t w = nid(s);
 
@@ -211,9 +218,9 @@ static void emit_tgemm_spirv(S *s, const wubu_mir_instr_t *in,
 
     { uint32_t o[]={body}; spv_ins(&s->bin,OP_LABEL,o,1); }
     {
-        /* out = gid + pass*64 (uniform pass loop; select-guard invalid cells) */
+        /* out = gid + pass*stride (multi-WG uniform grid-stride; guarded store) */
         uint32_t p64=nid(s), out=nid(s);
-        { uint32_t o[]={s->t_u64,p64,w,cS};   spv_ins(&s->bin,132,o,4);} /* pass*64 */
+        { uint32_t o[]={s->t_u64,p64,w,cSTRIDE}; spv_ins(&s->bin,OPCODE_IMUL,o,4);} /* pass*stride */
         { uint32_t o[]={s->t_u64,out,id_gid,p64}; spv_ins(&s->bin,OPCODE_IADD,o,4); }
         /* i = out/N; j = out%N */
         uint32_t pi_=nid(s), pj_=nid(s);
@@ -303,6 +310,9 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
     s.t_res_u64   = nid(&s);
     s.t_fn_void   = nid(&s);
     s.c_zero32    = nid(&s);
+    s.c_i32_1     = nid(&s);
+    s.c_i32_2     = nid(&s);
+    s.c_i32_sem   = nid(&s);
     s.c_zero64    = nid(&s);
     s.c_one64     = nid(&s);
     s.var_ssbo    = nid(&s);
@@ -337,7 +347,12 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
             ADD_CONST(M_*Nn); ADD_CONST(M_*K_*Nn);   /* cKN, cMKN — used by helper */
             ADD_CONST(64); ADD_CONST(1); ADD_CONST(0); ADD_CONST(4);
             { int _k; for (_k = 0; _k < K_; _k++) ADD_CONST(_k); } /* unroll consts */
-            { long long _ps = ((long long)M_*Nn + 63) / 64; ADD_CONST(_ps); } /* pass count */
+            /* multi-WG: bake stride + pass count */
+            { unsigned _gx=1; const char *_ge=getenv("WUBU_VK_GROUPS");
+              if (_ge) _gx=(unsigned)atoi(_ge); if (_gx<1) _gx=1;
+              unsigned _st=_gx*64;
+              ADD_CONST((long long)_st);
+              ADD_CONST((long long)(((long long)M_*Nn + _st - 1)/_st)); }
             long long sb_ = (long long)((p->total_mem>0?p->total_mem:1)+1);
             s.scratch_base = (uint32_t)sb_;
             ADD_CONST(sb_+0); ADD_CONST(sb_+1); ADD_CONST(sb_+2);
@@ -433,6 +448,12 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
 /* constants zero32/zero64/one64 */
     { sb_word(&s.bin,(uint32_t)(4<<16)|OP_CONSTANT);
       sb_word(&s.bin,s.t_i32); sb_word(&s.bin,s.c_zero32); sb_word(&s.bin,0); }
+    { sb_word(&s.bin,(uint32_t)(4<<16)|OP_CONSTANT);
+      sb_word(&s.bin,s.t_i32); sb_word(&s.bin,s.c_i32_1); sb_word(&s.bin,1); }
+    { sb_word(&s.bin,(uint32_t)(4<<16)|OP_CONSTANT);
+      sb_word(&s.bin,s.t_i32); sb_word(&s.bin,s.c_i32_2); sb_word(&s.bin,2); }
+    { sb_word(&s.bin,(uint32_t)(4<<16)|OP_CONSTANT);
+      sb_word(&s.bin,s.t_i32); sb_word(&s.bin,s.c_i32_sem); sb_word(&s.bin,0x48); }
     { sb_word(&s.bin,(uint32_t)(5<<16)|OP_CONSTANT);
       sb_word(&s.bin,s.t_u64); sb_word(&s.bin,s.c_zero64); sb_word(&s.bin,0); sb_word(&s.bin,0);}
     { sb_word(&s.bin,(uint32_t)(5<<16)|OP_CONSTANT);
@@ -728,6 +749,11 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
         default: break; /* remaining ops land next wave */
         }
     }
+
+    /* cross-WG + intra-WG barrier: all T_GEMM C-stores must be visible before any
+     * lane loads the result cell for the RET value. OpControlBarrier: exec=Workgroup(2),
+     * mem=Device(1), sem=AcquireRelease(0x8)|UniformMemory(0x40). */
+    { uint32_t ob[]={s.c_i32_2,s.c_i32_1,s.c_i32_sem}; spv_ins(&s.bin,224,ob,3); }
 
     /* store RET value into mem cell 0 (the return slot) */
     {

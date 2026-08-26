@@ -23,6 +23,7 @@
 int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n);
 
 static uint32_t g_cells = 17;
+static uint32_t g_result_cell = 0;  /* SSBO cell holding the return value */
 
 static int vulkan_compile(const wubu_mir_prog_t *p,
                           uint8_t **out_code, size_t *out_size)
@@ -35,7 +36,12 @@ static int vulkan_compile(const wubu_mir_prog_t *p,
     if (rc_ != 0) return -1;
     /* remember the module's mem-cell count for run()'s buffer sizing */
     { int has_tg=0; for (unsigned q=0;q<p->n;q++) if (p->ins[q].op==MIR_T_GEMM) has_tg=1;
-      g_cells = (uint32_t)((p->total_mem > 0 ? p->total_mem : 1) + 1 + (has_tg?64*4+1:0)); }
+      /* Multi-WG: per-lane scratch offsets scale by WUBU_VK_GROUPS; remember the
+       * result cell (last C cell) for run() — cell 0 races across WGs. */
+      unsigned gx_ = 1;
+      { const char *ge = getenv("WUBU_VK_GROUPS"); if (ge) gx_=(unsigned)atoi(ge); if (gx_<1) gx_=1; }
+      g_cells = (uint32_t)((p->total_mem > 0 ? p->total_mem : 1) + 1 + (has_tg?gx_*64*4+1:0));
+      g_result_cell = has_tg ? (uint32_t)p->total_mem : 0; }
 
     /* persist for the runner */
     FILE *f = fopen("/tmp/wubu_kernel.spv", "wb");
@@ -60,7 +66,32 @@ static int64_t vulkan_run(const uint8_t *code, size_t size, int64_t arg)
              getenv("WUBU_VK_DEVICE") ? getenv("WUBU_VK_DEVICE") : "0",
              (long long)arg, cells);
     if (getenv("DBG_VK")) fprintf(stderr, "[vk] cmd: %s\n", cmd);
-    FILE *f = popen(cmd, "r");
+    FILE *f = NULL;
+    unsigned gx_run = 1;
+    { const char *ge = getenv("WUBU_VK_GROUPS"); if (ge) gx_run=(unsigned)atoi(ge); if (gx_run<1) gx_run=1; }
+    if (gx_run > 1 && g_result_cell > 0) {
+        /* multi-WG: cell 0 races (every WG stores it). Read the LAST C cell via
+         * vk_run's WUBU_VK_DUMP instead — it prints "cell[i] = v" lines. */
+        char cmd2[640];
+        snprintf(cmd2, sizeof(cmd2),
+                 "WUBU_VK_DUMP=%u /tmp/vk_run %s /tmp/wubu_kernel.spv %lld %u 2>&1 >/dev/null",
+                 g_result_cell + 1,
+                 getenv("WUBU_VK_DEVICE") ? getenv("WUBU_VK_DEVICE") : "0",
+                 (long long)arg, cells);
+        if (getenv("DBG_VK")) fprintf(stderr, "[vk] cmd2: %s\n", cmd2);
+        f = popen(cmd2, "r");
+        if (!f) return 0;
+        char line[128]; long long rr = -1;
+        while (fgets(line, sizeof line, f)) {
+            long idx; long long v;
+            if (sscanf(line, "cell[%ld] = %lld", &idx, &v) == 2 &&
+                (unsigned long)idx == g_result_cell) { rr = v; break; }
+        }
+        int rc2 = pclose(f);
+        if (rc2 != 0 || rr < 0) return -1;
+        return rr;
+    }
+    f = popen(cmd, "r");
     if (!f) return 0;
     long long r = 0;
     /* dzn driver emits WARNING lines to stdout before the result number; skip non-numeric */
