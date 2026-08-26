@@ -27,12 +27,17 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #ifdef _OPENMP
 #include <omp.h>
 #endif
 
 /* Peephole optimizer — declared in x86_peephole.c */
 extern size_t x86_peephole_optimize(uint8_t *code, size_t n);
+
+/* Global thread-local pointer for JIT working memory (heap-allocated).
+ * Set by x86_run before calling JIT'd code. Used by wubu_tgemm_parallel. */
+extern __thread int64_t *wubu_jit_mem_ptr;
 
 /* ---- the emitter ---- */
 
@@ -208,12 +213,13 @@ static void wubu_tgemm_scalar(int64_t *mem, int64_t A, int64_t B,
 }
 
 /* H4: parallel T_GEMM wrapper — dispatches row bands to OpenMP threads.
- * Each thread calls wubu_tgemm_scalar on its slice. mem is heap/JIT-allocated
- * (not the caller's stack), so concurrent access is safe. B is read-only,
- * C rows are partitioned by the schedule. */
-static void wubu_tgemm_parallel(int64_t *mem, int64_t A, int64_t B,
+ * Uses wubu_jit_mem_ptr (heap-allocated via mmap in x86_run) for thread safety. */
+void wubu_tgemm_parallel(int64_t *stack_mem, int64_t A, int64_t B,
                                 int64_t C, int M, int N, int K)
 {
+    /* Use heap-allocated mem for OpenMP thread safety */
+    int64_t *mem = wubu_jit_mem_ptr ? wubu_jit_mem_ptr : stack_mem;
+
 #if defined(_OPENMP)
     int nt = omp_get_max_threads();
     if (nt <= 1 || M < 4) { wubu_tgemm_scalar(mem, A, B, C, M, N, K); return; }
@@ -227,9 +233,7 @@ static void wubu_tgemm_parallel(int64_t *mem, int64_t A, int64_t B,
             wubu_tgemm_scalar(mem, A + (int64_t)lo*K, B, C + (int64_t)lo*N, nm, N, K);
     }
 #else
-    (void)mem;(void)A;(void)B;(void)C;(void)M;(void)N;(void)K;
-    /* single-threaded fallback compiled via the JIT libcall */
-    /* (wubu_tgemm_scalar is the direct call when OpenMP is off) */
+    (void)stack_mem;(void)A;(void)B;(void)C;(void)M;(void)N;(void)K;
 #endif
 }
 #if defined(WUBU_TGEMM_KEEP_NAIVE)
@@ -940,12 +944,25 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
     return 0;
 }
 
+/* Global thread-local pointer for JIT working memory (heap-allocated).
+ * Set by x86_run before calling JIT'd code. Used by wubu_tgemm_parallel. */
+__thread int64_t *wubu_jit_mem_ptr = NULL;
+
 static int64_t x86_run(const uint8_t *code, size_t size, int64_t arg) {
     (void)arg;
     void *exec = jit_alloc_exec(size);
     if (!exec) return -1;
     memcpy(exec, code, size);
     wubu_clear_cache(exec, size);
+
+    /* Pre-allocate JIT working buffer via mmap (shared across pthreads).
+     * Estimate buffer size from code: if size > 0x7000, assume large frame. */
+    if (size > 0x7000) {
+        size_t buf_size = 8 * 1024 * 1024;
+        void *buf = mmap(NULL, buf_size, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+        wubu_jit_mem_ptr = (int64_t*)buf;
+    }
+
     int64_t (*fn)(void) = (int64_t (*)(void))exec;
     if (getenv("WUBU_CALL_DEBUG") && size > 40) {
         fprintf(stderr, "[run] size=%zu code:", size);
@@ -953,6 +970,8 @@ static int64_t x86_run(const uint8_t *code, size_t size, int64_t arg) {
         fprintf(stderr, "\n");
     }
     int64_t r = fn();
+
+    if (wubu_jit_mem_ptr) { munmap(wubu_jit_mem_ptr, 8*1024*1024); wubu_jit_mem_ptr = NULL; }
     jit_free_exec(exec, size);
     return r;
 }
