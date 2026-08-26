@@ -206,8 +206,41 @@ int main(int argc, char **argv)
     pci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
     pci.stage = stage;
     pci.layout = layout;
+
+    /* Pipeline cache — dzn re-translates SPIR-V→DXIL every vkCreateComputePipelines
+     * call (13.4s for the 1.3MB T_GEMM module). A persistent pipeline cache lets the
+     * driver reuse cached DXIL across runs. The cache is keyed by (shader hash +
+     * layout + stage create flags), so identical modules reuse the translation. */
+    const char *vpc_cache = "/tmp/wubu_vk_pipeline.cache";
+    VkPipelineCache pc;
+    VkPipelineCacheCreateInfo pci_c = {0};
+    pci_c.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+    /* try loading existing cache so dzn reuses prior translation */
+    FILE *cf = fopen(vpc_cache, "rb");
+    if (cf) {
+        fseek(cf, 0, SEEK_END); long cdsz = ftell(cf); fseek(cf, 0, SEEK_SET);
+        void *cd = malloc((size_t)cdsz);
+        fread(cd, 1, (size_t)cdsz, cf); fclose(cf);
+        pci_c.initialDataSize = (size_t)cdsz;
+        pci_c.pInitialData = cd;
+        CHECK(vkCreatePipelineCache(dev, &pci_c, NULL, &pc));
+        free(cd);
+    } else {
+        CHECK(vkCreatePipelineCache(dev, &pci_c, NULL, &pc));
+    }
+
     VkPipeline pipe;
-    CHECK(vkCreateComputePipelines(dev, VK_NULL_HANDLE, 1, &pci, NULL, &pipe));
+    CHECK(vkCreateComputePipelines(dev, VK_NULL_HANDLE, 1, &pci, pc, &pipe));
+
+    /* persist the (possibly updated) pipeline cache so the NEXT run reuses the
+     * translation instead of re-doing SPIR-V→DXIL */
+    { size_t pcsz = 0; vkGetPipelineCacheData(dev, pc, &pcsz, NULL);
+      void *pcb = malloc(pcsz);
+      if (vkGetPipelineCacheData(dev, pc, &pcsz, pcb) == VK_SUCCESS) {
+          FILE *cof = fopen(vpc_cache, "wb");
+          if (cof) { fwrite(pcb, 1, pcsz, cof); fclose(cof); }
+      }
+      free(pcb); }
 
     /* descriptor pool + set */
     VkDescriptorPoolSize ps = {0};

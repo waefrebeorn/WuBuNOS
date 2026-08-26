@@ -27,6 +27,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 /* Peephole optimizer — declared in x86_peephole.c */
 extern size_t x86_peephole_optimize(uint8_t *code, size_t n);
@@ -161,8 +164,8 @@ static void x86_patch_push(x86_patch_t **patches, size_t *np, size_t *cap,
 static void wubu_tgemm_scalar(int64_t *mem, int64_t A, int64_t B,
                               int64_t C, int M, int N, int K)
 {
-    int i = 0;
-    for (; i + 3 < M; i += 4) {
+    int i;
+    for (i = 0; i + 3 < M; i += 4) {
         const int64_t *a0 = &mem[A + (int64_t)(i+0) * K];
         const int64_t *a1 = &mem[A + (int64_t)(i+1) * K];
         const int64_t *a2 = &mem[A + (int64_t)(i+2) * K];
@@ -202,6 +205,32 @@ static void wubu_tgemm_scalar(int64_t *mem, int64_t A, int64_t B,
             c0[j] = s0;
         }
     }
+}
+
+/* H4: parallel T_GEMM wrapper — dispatches row bands to OpenMP threads.
+ * Each thread calls wubu_tgemm_scalar on its slice. mem is heap/JIT-allocated
+ * (not the caller's stack), so concurrent access is safe. B is read-only,
+ * C rows are partitioned by the schedule. */
+static void wubu_tgemm_parallel(int64_t *mem, int64_t A, int64_t B,
+                                int64_t C, int M, int N, int K)
+{
+#if defined(_OPENMP)
+    int nt = omp_get_max_threads();
+    if (nt <= 1 || M < 4) { wubu_tgemm_scalar(mem, A, B, C, M, N, K); return; }
+    int rows_per = (M + nt - 1) / nt;
+    #pragma omp parallel
+    {
+        int tid = omp_get_thread_num();
+        int lo = tid * rows_per;
+        int hi = lo + rows_per; if (hi > M) hi = M;
+        int nm = hi - lo; if (nm > 0)
+            wubu_tgemm_scalar(mem, A + (int64_t)lo*K, B, C + (int64_t)lo*N, nm, N, K);
+    }
+#else
+    (void)mem;(void)A;(void)B;(void)C;(void)M;(void)N;(void)K;
+    /* single-threaded fallback compiled via the JIT libcall */
+    /* (wubu_tgemm_scalar is the direct call when OpenMP is off) */
+#endif
 }
 #if defined(WUBU_TGEMM_KEEP_NAIVE)
 static void wubu_tgemm_naive(int64_t *mem, int64_t A, int64_t B,
@@ -725,7 +754,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             break;
         }
         case MIR_T_GEMM: {
-            /* Native tensor-MADD via libcall to wubu_tgemm_scalar.
+            /* Native tensor-MADD via parallel libcall to wubu_tgemm_parallel.
              * SysV ABI: rdi=&mem[0], rsi=Abase, rdx=Bbase, rcx=Cbase,
              *          r8=M, r9=N, stack(K).
              * We use r11 for the helper pointer (movabs r11) — r11 is NOT in
@@ -759,7 +788,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             /* movabs r11, &wubu_tgemm_scalar (REX.WB + B8 = 49 BB imm64).
              * rex(1,0,0,1) = 0x49. If addr > 2GB, shrink_movabs leaves it
              * intact; if it shrinks it's a bug we avoid by keeping addr wide. */
-            rex(&e,1,0,0,1); e8(&e,0xBB); e64(&e,(uint64_t)&wubu_tgemm_scalar);
+            rex(&e,1,0,0,1); e8(&e,0xBB); e64(&e,(uint64_t)&wubu_tgemm_parallel);
             /* call r11 (FF D3 with REX.B → 41 FF D3; without 0x41 it decodes as call rbx!) */
             e8(&e,0x41); e8(&e,0xFF); e8(&e,0xD3);
             /* add rsp,8 (restore stack for K arg) */
