@@ -213,9 +213,14 @@ static void wubu_tgemm_scalar(int64_t *mem, int64_t A, int64_t B,
     }
 }
 
-/* H4: parallel T_GEMM wrapper — dispatches row bands to OpenMP threads.
+/* H4: parallel T_GEMM wrapper — dispatches row blocks to OpenMP threads.
  * Uses wubu_jit_mem_ptr (heap-allocated via mmap in x86_run) for thread safety.
- * Copies JIT stack frame to heap, runs parallel kernel, copies results back. */
+ * Copies JIT stack frame to heap, runs parallel kernel, copies results back.
+ *
+ * Parallelization strategy: OpenMP parallel for over 4-row blocks.
+ * Each wubu_tgemm_scalar call handles 4 rows, so we distribute these
+ * calls across threads. B is read-only (shared), C rows are independent
+ * (no races). schedule(static) gives even distribution. */
 void wubu_tgemm_parallel(int64_t *stack_mem, int64_t A, int64_t B,
                                 int64_t C, int M, int N, int K)
 {
@@ -231,14 +236,17 @@ void wubu_tgemm_parallel(int64_t *stack_mem, int64_t A, int64_t B,
         memcpy(mem, stack_mem, frame_bytes);
     }
 
-    int rows_per = (M + nt - 1) / nt;
-    #pragma omp parallel
-    {
-        int tid = omp_get_thread_num();
-        int lo = tid * rows_per;
-        int hi = lo + rows_per; if (hi > M) hi = M;
-        int nm = hi - lo; if (nm > 0)
-            wubu_tgemm_scalar(mem, A + (int64_t)lo*K, B, C + (int64_t)lo*N, nm, N, K);
+    /* Parallelize over 4-row blocks. wubu_tgemm_scalar processes 4 rows
+     * per call (plus a tail for M%4). Each block of rows is independent:
+     * B is read-only, C rows don't overlap. */
+    int nm = M - (M % 4);  /* aligned rows */
+    #pragma omp parallel for schedule(static)
+    for (int i = 0; i < nm; i += 4) {
+        wubu_tgemm_scalar(mem, A + (int64_t)i*K, B, C + (int64_t)i*N, 4, N, K);
+    }
+    /* Tail rows */
+    if (nm < M) {
+        wubu_tgemm_scalar(mem, A + (int64_t)nm*K, B, C + (int64_t)nm*N, M - nm, N, K);
     }
 
     /* Sync heap -> stack to write results back to JIT frame */
