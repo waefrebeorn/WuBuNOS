@@ -168,9 +168,12 @@ static void emit_tgemm_spirv(S *s, const wubu_mir_instr_t *in,
     uint32_t cM   = spirv_find_const(cmts, ncm, M);
     uint32_t cN   = spirv_find_const(cmts, ncm, Nn);
     uint32_t cK   = spirv_find_const(cmts, ncm, K);
-    uint32_t cS   = spirv_find_const(cmts, ncm, 1);
-    uint32_t cKN  = spirv_find_const(cmts, ncm, K*Nn);
-    uint32_t cMKN = spirv_find_const(cmts, ncm, M*K*Nn);
+    /* TRUE grid-stride: out=gid; out<M*N; out+=64. Each lane owns whole cells,
+     * full K-reduction per cell — every C write has exactly one writer. */
+    uint32_t cS   = spirv_find_const(cmts, ncm, 64);
+    uint32_t cKN  = spirv_find_const(cmts, ncm, K*Nn); (void)cKN;
+    uint32_t cMKN = spirv_find_const(cmts, ncm, M*Nn);
+    uint32_t c4L  = spirv_find_const(cmts, ncm, 4);
     uint32_t aBase0 = TG_VRG(in->a), bBase0 = TG_VRG(in->b), cBase0 = TG_VRG(in->dst);
     /* MIR cell i lives at SSBO element i+1 (cell 0 = return slot) — match LOAD/STORE */
     uint32_t aBase=nid(s), bBase=nid(s), cBase=nid(s);
@@ -182,18 +185,21 @@ static void emit_tgemm_spirv(S *s, const wubu_mir_instr_t *in,
     uint32_t head=nid(s), cont=nid(s), body=nid(s), merge=nid(s);
     uint32_t w = nid(s);
 
-    /* w = gid; stored to scratch (memory-carried counter, probe pattern) */
-    { uint32_t o[]={s->t_u64,w,id_gid}; spv_ins(&s->bin,83,o,3); }
-    { uint32_t o_[]={s->t_res_u64,nid(s),s->var_ssbo,s->c_zero32,sc_i};
-      uint32_t wp_=o_[1]; spv_ins(&s->bin,65,o_,5); TG_ST(wp_,w); }
+    /* lane = gid; slot base = lane*4; out(slot0) = gid */
+    { uint32_t o[]={s->t_u64,w,id_gid}; spv_ins(&s->bin,83,o,3); }   /* w = lane */
+    uint32_t lane4=nid(s), slt=nid(s), spo_=nid(s);
+    { uint32_t o[]={s->t_u64,lane4,w,c4L}; spv_ins(&s->bin,OPCODE_IMUL,o,4);}
+    { uint32_t o[]={s->t_u64,slt,lane4,sc_i}; spv_ins(&s->bin,OPCODE_IADD,o,4);} /* slot0 idx */
+    { uint32_t o[]={s->t_res_u64,spo_,s->var_ssbo,s->c_zero32,slt};
+      spv_ins(&s->bin,65,o,5); TG_ST(spo_,w); }
     { uint32_t o[]={head}; spv_ins(&s->bin,OPCODE_BRANCH,o,1); }
     *jt = 1;
 
     { uint32_t o[]={head}; spv_ins(&s->bin,OP_LABEL,o,1); }
     {
         uint32_t cmp=nid(s);
-        { uint32_t o_[]={s->t_res_u64,nid(s),s->var_ssbo,s->c_zero32,sc_i};
-          uint32_t hp_=o_[1]; spv_ins(&s->bin,65,o_,5); TG_LD(w,hp_); }
+        { uint32_t oh[]={s->t_res_u64,nid(s),s->var_ssbo,s->c_zero32,slt};
+          uint32_t hp_=oh[1]; spv_ins(&s->bin,65,oh,5); TG_LD(w,hp_); }
         { uint32_t o[]={s->t_bool,cmp,w,cMKN}; spv_ins(&s->bin,176,o,4); }
         { uint32_t om[]={merge,cont,0}; spv_ins(&s->bin,246,om,3); }
         { uint32_t o3[]={cmp,body,merge}; spv_ins(&s->bin,OPCODE_BRANCH_COND,o3,3); }
@@ -201,45 +207,49 @@ static void emit_tgemm_spirv(S *s, const wubu_mir_instr_t *in,
 
     { uint32_t o[]={body}; spv_ins(&s->bin,OP_LABEL,o,1); }
     {
-        uint32_t iv_=nid(s), rr=nid(s), kk=nid(s), jj=nid(s), jN=nid(s);
-        { uint32_t o[]={s->t_u64,iv_,w,cKN}; spv_ins(&s->bin,134,o,4);}
-        { uint32_t o[]={s->t_u64,rr,w,cKN};  spv_ins(&s->bin,137,o,4);}
-        { uint32_t o[]={s->t_u64,kk,rr,cN};  spv_ins(&s->bin,134,o,4);}
-        { uint32_t o[]={s->t_u64,jj,rr,cN};  spv_ins(&s->bin,137,o,4);}
-        { uint32_t o[]={s->t_u64,jN,jj,cN};  spv_ins(&s->bin,132,o,4);}
+        /* i = out/N; j = out%N */
+        uint32_t pi_=nid(s), pj_=nid(s);
+        { uint32_t o[]={s->t_u64,pi_,w,cN};  spv_ins(&s->bin,134,o,4);}
+        { uint32_t o[]={s->t_u64,pj_,w,cN};  spv_ins(&s->bin,137,o,4);}
+        uint32_t acc = s->c_zero64;
+        /* acc lives in SSA regs — per-lane private, no memory needed */
 
-        uint32_t t1=nid(s), t2=nid(s), t4=nid(s), t5=nid(s), aptr=nid(s), aval=nid(s);
-        { uint32_t o[]={s->t_u64,t1,aBase,s->c_zero64}; spv_ins(&s->bin,128,o,4);}
-        { uint32_t o[]={s->t_u64,t2,iv_,cK};           spv_ins(&s->bin,132,o,4);}
-        { uint32_t o[]={s->t_u64,t4,t2,kk};            spv_ins(&s->bin,128,o,4);}
-        { uint32_t o[]={s->t_u64,t5,t4,t1};            spv_ins(&s->bin,128,o,4);}
-        TG_AC(aptr, t5); TG_LD(aval, aptr);
+        /* K fully unrolled: acc(SSA) += A[i*K+k]*B[k*N+j] */
+        for (int k = 0; k < K; k++) {
+            uint32_t ck = spirv_find_const(cmts, ncm, k);
+            uint32_t tiK=nid(s), tik=nid(s), ta_=nid(s), aptr=nid(s), aval=nid(s);
+            { uint32_t o[]={s->t_u64,tiK,pi_,cK};    spv_ins(&s->bin,132,o,4);}
+            { uint32_t o[]={s->t_u64,tik,tiK,ck};    spv_ins(&s->bin,128,o,4);}
+            { uint32_t o[]={s->t_u64,ta_,tik,aBase}; spv_ins(&s->bin,128,o,4);}
+            TG_AC(aptr, ta_); TG_LD(aval, aptr);
 
-        uint32_t u1=nid(s), u2=nid(s), u4=nid(s), u5=nid(s), bptr=nid(s), bval=nid(s);
-        { uint32_t o[]={s->t_u64,u1,bBase,s->c_zero64}; spv_ins(&s->bin,128,o,4);}
-        { uint32_t o[]={s->t_u64,u2,kk,cN};            spv_ins(&s->bin,132,o,4);}
-        { uint32_t o[]={s->t_u64,u4,u2,jj};            spv_ins(&s->bin,128,o,4);}
-        { uint32_t o[]={s->t_u64,u5,u4,u1};            spv_ins(&s->bin,128,o,4);}
-        TG_AC(bptr, u5); TG_LD(bval, bptr);
+            uint32_t tkN=nid(s), tkj=nid(s), tb_=nid(s), bptr=nid(s), bval=nid(s);
+            { uint32_t o[]={s->t_u64,tkN,ck,cN};     spv_ins(&s->bin,132,o,4);}
+            { uint32_t o[]={s->t_u64,tkj,tkN,pj_};   spv_ins(&s->bin,128,o,4);}
+            { uint32_t o[]={s->t_u64,tb_,tkj,bBase}; spv_ins(&s->bin,128,o,4);}
+            TG_AC(bptr, tb_); TG_LD(bval, bptr);
 
-        uint32_t v1=nid(s), w1=nid(s), w2=nid(s), w3=nid(s);
-        uint32_t cptr=nid(s), oldc=nid(s), newc=nid(s), prod=nid(s);
-        { uint32_t o[]={s->t_u64,w1,iv_,cN};           spv_ins(&s->bin,132,o,4);}
-        { uint32_t o[]={s->t_u64,w2,w1,jj};            spv_ins(&s->bin,128,o,4);}
-        { uint32_t o[]={s->t_u64,v1,cBase,s->c_zero64}; spv_ins(&s->bin,128,o,4);}
-        { uint32_t o[]={s->t_u64,w3,w2,v1};            spv_ins(&s->bin,128,o,4);}
-        { uint32_t o[]={s->t_u64,prod,aval,bval};      spv_ins(&s->bin,132,o,4);}
-        TG_AC(cptr, w3); TG_LD(oldc, cptr);
-        { uint32_t o[]={s->t_u64,newc,oldc,prod};      spv_ins(&s->bin,128,o,4);}
+            uint32_t prod=nid(s), accn=nid(s);
+            { uint32_t o[]={s->t_u64,prod,aval,bval}; spv_ins(&s->bin,132,o,4);}
+            { uint32_t o[]={s->t_u64,accn,acc,prod};  spv_ins(&s->bin,128,o,4);}
+            acc = accn;
+        }
+
+        /* writeback: C[out] += acc */
+        uint32_t ciN=nid(s), cij=nid(s), coff=nid(s), cptr=nid(s);
+        uint32_t oldc=nid(s), newc=nid(s);
+        { uint32_t o[]={s->t_u64,ciN,w,cN};      spv_ins(&s->bin,132,o,4);}
+        { uint32_t o[]={s->t_u64,cij,ciN,pj_};   spv_ins(&s->bin,128,o,4);}
+        { uint32_t o[]={s->t_u64,coff,cij,cBase};spv_ins(&s->bin,128,o,4);}
+        TG_AC(cptr, coff); TG_LD(oldc, cptr);
+        { uint32_t o[]={s->t_u64,newc,oldc,acc}; spv_ins(&s->bin,128,o,4);}
         TG_ST(cptr, newc);
         { uint32_t o[]={cont}; spv_ins(&s->bin,OPCODE_BRANCH,o,1); }
-
-        /* cont block: reload w, add stride, store back, branch header */
     }
 
     /* cont: increment counter in memory (probe-proven), branch header */
     { uint32_t o[]={cont}; spv_ins(&s->bin,OP_LABEL,o,1); }
-    { uint32_t o_[]={s->t_res_u64,nid(s),s->var_ssbo,s->c_zero32,sc_i};
+    { uint32_t o_[]={s->t_res_u64,nid(s),s->var_ssbo,s->c_zero32,slt};
       uint32_t cp_=o_[1]; spv_ins(&s->bin,65,o_,5); TG_LD(w,cp_);
       uint32_t nw2=nid(s);
       { uint32_t o[]={s->t_u64,nw2,w,cS}; spv_ins(&s->bin,128,o,4);}
@@ -308,10 +318,12 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
             int Nn = (int)(p->ins[q].imm & 0x7FF);
             ADD_CONST(M_); ADD_CONST(K_); ADD_CONST(Nn);
             ADD_CONST(M_*Nn); ADD_CONST(M_*K_*Nn);   /* cKN, cMKN — used by helper */
-            ADD_CONST(64); ADD_CONST(1); ADD_CONST(0);
+            ADD_CONST(64); ADD_CONST(1); ADD_CONST(0); ADD_CONST(4);
+            { int _k; for (_k = 0; _k < K_; _k++) ADD_CONST(_k); } /* unroll consts */
             long long sb_ = (long long)((p->total_mem>0?p->total_mem:1)+1);
             s.scratch_base = (uint32_t)sb_;
             ADD_CONST(sb_+0); ADD_CONST(sb_+1); ADD_CONST(sb_+2);
+            ADD_CONST(sb_+3); ADD_CONST(sb_+4);
         }
     }
     #undef ADD_CONST
@@ -351,7 +363,7 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
         for(size_t i=0;i<ws;i++) sb_word(&s.bin,(uint32_t)tmp[i*4]|((uint32_t)tmp[i*4+1]<<8)|((uint32_t)tmp[i*4+2]<<16)|((uint32_t)tmp[i*4+3]<<24));
         sb_word(&s.bin, s.var_gid);   /* interface: GlobalInvocationId input */
     }
-    { uint32_t e[]={s.fn_main,17,1,1,1}; spv_ins(&s.bin,OP_EXEC_MODE,e,5);} /* LocalSize */
+    { uint32_t e[]={s.fn_main,17,64,1,1}; spv_ins(&s.bin,OP_EXEC_MODE,e,5);} /* LocalSize 64 */
     { uint32_t e[]={1,450}; spv_ins(&s.bin,OP_SOURCE,e,2);}
 
     /* debug names help spirv-val diagnostics */
@@ -383,8 +395,8 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
     { uint32_t has_tg=0;
       for (size_t q=0;q<p->n;q++) if (p->ins[q].op==MIR_T_GEMM) has_tg=1;
       (void)has_tg;
-      /* array always gets +8 scratch elems so T_GEMM can use them */
-      uint32_t ncells=(uint32_t)(s.scratch_base+8);
+      /* 64 lanes x 4 per-lane scratch slots for parallel T_GEMM */
+      uint32_t ncells=(uint32_t)(s.scratch_base + 64*4);
       sb_word(&s.bin,(uint32_t)(4<<16)|OP_CONSTANT);
       sb_word(&s.bin,s.t_i32); sb_word(&s.bin,s.len_mem_cells); sb_word(&s.bin,ncells); }
     { uint32_t o[]={s.t_arr_mem,s.t_u64,s.len_mem_cells}; spv_ins(&s.bin,OP_TYPE_ARRAY,o,3);}

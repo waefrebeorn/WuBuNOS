@@ -301,11 +301,11 @@ int main(int argc, char **argv)
     }
 
     printf("%lld\n", (long long)host[0]);
-#define DEBUG_CELLS 8
-#ifdef DEBUG_CELLS
-    for (int i = 0; i < 4 && (size_t)i < bufsz/8; i++)
-        fprintf(stderr, "cell[%d] = %lld\n", i, (long long)host[i]);
-#endif
+    if (getenv("WUBU_VK_DUMP")) {
+        int n = atoi(getenv("WUBU_VK_DUMP"));
+        for (int i = 0; i < n && (size_t)i < bufsz/8; i++)
+            fprintf(stderr, "cell[%d] = %lld\n", i, (long long)host[i]);
+    }
 
     /* cleanup */
     vkUnmapMemory(dev, stage_mem);

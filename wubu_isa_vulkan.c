@@ -35,7 +35,7 @@ static int vulkan_compile(const wubu_mir_prog_t *p,
     if (rc_ != 0) return -1;
     /* remember the module's mem-cell count for run()'s buffer sizing */
     { int has_tg=0; for (unsigned q=0;q<p->n;q++) if (p->ins[q].op==MIR_T_GEMM) has_tg=1;
-      g_cells = (uint32_t)((p->total_mem > 0 ? p->total_mem : 1) + 1 + (has_tg?8:0)); }
+      g_cells = (uint32_t)((p->total_mem > 0 ? p->total_mem : 1) + 1 + (has_tg?64*4:0)); }
 
     /* persist for the runner */
     FILE *f = fopen("/tmp/wubu_kernel.spv", "wb");
