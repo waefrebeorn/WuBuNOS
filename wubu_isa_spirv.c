@@ -316,7 +316,17 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
     }
     #undef ADD_CONST
     uint32_t vr_base = s.next_id;
+    /* vrmap sized from the program's actual VR high-water mark (scan all
+     * operands). The old hardcoded 256 silently dropped writes for bigger
+     * programs — every read then returned c_zero64 (wrong results at scale). */
     uint32_t maxvr = 256;
+    for (size_t q = 0; q < p->n; q++) {
+        const wubu_mir_instr_t *qi = &p->ins[q];
+        if (qi->dst + 1u > maxvr) maxvr = qi->dst + 1u;
+        if (qi->a  + 1u > maxvr) maxvr = qi->a  + 1u;
+        if (qi->b  + 1u > maxvr) maxvr = qi->b  + 1u;
+    }
+    maxvr += 8; /* headroom */
 
     /* ---- header ---- */
     sb_word(&s.bin, 0x07230203u);

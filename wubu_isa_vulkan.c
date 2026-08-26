@@ -59,6 +59,7 @@ static int64_t vulkan_run(const uint8_t *code, size_t size, int64_t arg)
              "/tmp/vk_run %s /tmp/wubu_kernel.spv %lld %u",
              getenv("WUBU_VK_DEVICE") ? getenv("WUBU_VK_DEVICE") : "0",
              (long long)arg, cells);
+    if (getenv("DBG_VK")) fprintf(stderr, "[vk] cmd: %s\n", cmd);
     FILE *f = popen(cmd, "r");
     if (!f) return 0;
     long long r = 0;
