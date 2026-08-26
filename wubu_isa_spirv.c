@@ -172,7 +172,7 @@ static void emit_tgemm_spirv(S *s, const wubu_mir_instr_t *in,
      * full K-reduction per cell — every C write has exactly one writer. */
     uint32_t cS   = spirv_find_const(cmts, ncm, 64);
     uint32_t cKN  = spirv_find_const(cmts, ncm, K*Nn); (void)cKN;
-    uint32_t cMKN = spirv_find_const(cmts, ncm, M*Nn);
+    uint32_t cMN  = spirv_find_const(cmts, ncm, M*Nn); (void)cMN;
     uint32_t c4L  = spirv_find_const(cmts, ncm, 4);
     uint32_t aBase0 = TG_VRG(in->a), bBase0 = TG_VRG(in->b), cBase0 = TG_VRG(in->dst);
     /* MIR cell i lives at SSBO element i+1 (cell 0 = return slot) — match LOAD/STORE */
@@ -181,36 +181,44 @@ static void emit_tgemm_spirv(S *s, const wubu_mir_instr_t *in,
     { uint32_t o[]={s->t_u64,bBase,bBase0,s->c_one64}; spv_ins(&s->bin,OPCODE_IADD,o,4);}
     { uint32_t o[]={s->t_u64,cBase,cBase0,s->c_one64}; spv_ins(&s->bin,OPCODE_IADD,o,4);}
 
-    uint32_t sc_i = spirv_find_const(cmts, ncm, (long long)s->scratch_base);
+    uint32_t sc_i   = spirv_find_const(cmts, ncm, (long long)s->scratch_base);
+    uint32_t cPASS  = spirv_find_const(cmts, ncm, ((long long)M*Nn + 63)/64);
     uint32_t head=nid(s), cont=nid(s), body=nid(s), merge=nid(s);
     uint32_t w = nid(s);
 
-    /* lane = gid; slot base = lane*4; out(slot0) = gid */
+    /* lane = gid; slot0(gid) = lane*4+scratch_base, slot1(pass) = slot0+4 */
     { uint32_t o[]={s->t_u64,w,id_gid}; spv_ins(&s->bin,83,o,3); }   /* w = lane */
-    uint32_t lane4=nid(s), slt=nid(s), spo_=nid(s);
-    { uint32_t o[]={s->t_u64,lane4,w,c4L}; spv_ins(&s->bin,OPCODE_IMUL,o,4);}
-    { uint32_t o[]={s->t_u64,slt,lane4,sc_i}; spv_ins(&s->bin,OPCODE_IADD,o,4);} /* slot0 idx */
+    uint32_t lane4=nid(s), slt=nid(s), s1=nid(s), spo_=nid(s);
+    { uint32_t o[]={s->t_u64,lane4,w,c4L}; spv_ins(&s->bin,OPCODE_IMUL,o,4);} /* lane*4 */
+    { uint32_t o[]={s->t_u64,slt,lane4,sc_i};   spv_ins(&s->bin,OPCODE_IADD,o,4);} /* slot0 */
+    { uint32_t o[]={s->t_u64,s1,slt,c4L};      spv_ins(&s->bin,OPCODE_IADD,o,4);} /* slot1 */
     { uint32_t o[]={s->t_res_u64,spo_,s->var_ssbo,s->c_zero32,slt};
-      spv_ins(&s->bin,65,o,5); TG_ST(spo_,w); }
+      spv_ins(&s->bin,65,o,5); TG_ST(spo_,w); }                         /* slot0 = gid */
+    { uint32_t op1[]={s->t_res_u64,nid(s),s->var_ssbo,s->c_zero32,s1};
+      uint32_t st1=op1[1]; spv_ins(&s->bin,65,op1,5); TG_ST(st1,s->c_zero64); } /* slot1 = 0 */
     { uint32_t o[]={head}; spv_ins(&s->bin,OPCODE_BRANCH,o,1); }
     *jt = 1;
 
     { uint32_t o[]={head}; spv_ins(&s->bin,OP_LABEL,o,1); }
     {
         uint32_t cmp=nid(s);
-        { uint32_t oh[]={s->t_res_u64,nid(s),s->var_ssbo,s->c_zero32,slt};
-          uint32_t hp_=oh[1]; spv_ins(&s->bin,65,oh,5); TG_LD(w,hp_); }
-        { uint32_t o[]={s->t_bool,cmp,w,cMKN}; spv_ins(&s->bin,176,o,4); }
+        { uint32_t oh[]={s->t_res_u64,nid(s),s->var_ssbo,s->c_zero32,s1};
+          uint32_t hp_=oh[1]; spv_ins(&s->bin,65,oh,5); TG_LD(w,hp_); }  /* w = pass# */
+        { uint32_t o[]={s->t_bool,cmp,w,cPASS}; spv_ins(&s->bin,176,o,4); } /* p < passes */
         { uint32_t om[]={merge,cont,0}; spv_ins(&s->bin,246,om,3); }
         { uint32_t o3[]={cmp,body,merge}; spv_ins(&s->bin,OPCODE_BRANCH_COND,o3,3); }
     }
 
     { uint32_t o[]={body}; spv_ins(&s->bin,OP_LABEL,o,1); }
     {
+        /* out = gid + pass*64 (uniform pass loop; select-guard invalid cells) */
+        uint32_t p64=nid(s), out=nid(s);
+        { uint32_t o[]={s->t_u64,p64,w,cS};   spv_ins(&s->bin,132,o,4);} /* pass*64 */
+        { uint32_t o[]={s->t_u64,out,id_gid,p64}; spv_ins(&s->bin,OPCODE_IADD,o,4); }
         /* i = out/N; j = out%N */
         uint32_t pi_=nid(s), pj_=nid(s);
-        { uint32_t o[]={s->t_u64,pi_,w,cN};  spv_ins(&s->bin,134,o,4);}
-        { uint32_t o[]={s->t_u64,pj_,w,cN};  spv_ins(&s->bin,137,o,4);}
+        { uint32_t o[]={s->t_u64,pi_,out,cN};  spv_ins(&s->bin,134,o,4);}
+        { uint32_t o[]={s->t_u64,pj_,out,cN};  spv_ins(&s->bin,137,o,4);}
         uint32_t acc = s->c_zero64;
         /* acc lives in SSA regs — per-lane private, no memory needed */
 
@@ -235,24 +243,33 @@ static void emit_tgemm_spirv(S *s, const wubu_mir_instr_t *in,
             acc = accn;
         }
 
-        /* writeback: C[out] += acc */
+        /* writeback: if (out < M*N) C[i*N+j] += acc — uniform-loop, guarded store.
+         * Uses a structured if (SelectionMerge) instead of OpSelect: Lavapipe
+         * mishandles OpSelect feeding an SSBO store when lanes diverge on data. */
         uint32_t ciN=nid(s), cij=nid(s), coff=nid(s), cptr=nid(s);
-        uint32_t oldc=nid(s), newc=nid(s);
-        { uint32_t o[]={s->t_u64,ciN,w,cN};      spv_ins(&s->bin,132,o,4);}
-        { uint32_t o[]={s->t_u64,cij,ciN,pj_};   spv_ins(&s->bin,128,o,4);}
+        uint32_t oldc=nid(s), cond=nid(s), wb_then=nid(s), wb_end=nid(s);
+        { uint32_t o[]={s->t_bool,cond,out,cMN};  spv_ins(&s->bin,176,o,4);} /* out<M*N */
+        { uint32_t o[]={s->t_u64,ciN,pi_,cN};    spv_ins(&s->bin,132,o,4);} /* i*N */
+        { uint32_t o[]={s->t_u64,cij,ciN,pj_};   spv_ins(&s->bin,128,o,4);} /* +j */
         { uint32_t o[]={s->t_u64,coff,cij,cBase};spv_ins(&s->bin,128,o,4);}
+        { uint32_t osm[]={wb_end,0}; spv_ins(&s->bin,OPCODE_SELECTION_MERGE,osm,2); }
+        { uint32_t obc[]={cond,wb_then,wb_end}; spv_ins(&s->bin,OPCODE_BRANCH_COND,obc,3); }
+        { uint32_t ot[]={wb_then}; spv_ins(&s->bin,OP_LABEL,ot,1); }
         TG_AC(cptr, coff); TG_LD(oldc, cptr);
-        { uint32_t o[]={s->t_u64,newc,oldc,acc}; spv_ins(&s->bin,128,o,4);}
-        TG_ST(cptr, newc);
+        uint32_t added=nid(s);
+        { uint32_t o[]={s->t_u64,added,oldc,acc}; spv_ins(&s->bin,128,o,4);}
+        TG_ST(cptr, added);
+        { uint32_t oe[]={wb_end}; spv_ins(&s->bin,OPCODE_BRANCH,oe,1); }
+        { uint32_t oend[]={wb_end}; spv_ins(&s->bin,OP_LABEL,oend,1); }
         { uint32_t o[]={cont}; spv_ins(&s->bin,OPCODE_BRANCH,o,1); }
     }
 
-    /* cont: increment counter in memory (probe-proven), branch header */
+    /* cont: increment pass counter (slot1), branch header */
     { uint32_t o[]={cont}; spv_ins(&s->bin,OP_LABEL,o,1); }
-    { uint32_t o_[]={s->t_res_u64,nid(s),s->var_ssbo,s->c_zero32,slt};
-      uint32_t cp_=o_[1]; spv_ins(&s->bin,65,o_,5); TG_LD(w,cp_);
+    { uint32_t o_[]={s->t_res_u64,nid(s),s->var_ssbo,s->c_zero32,s1};
+      uint32_t cp_=o_[1]; spv_ins(&s->bin,65,o_,5); TG_LD(w,cp_);  /* w = pass */
       uint32_t nw2=nid(s);
-      { uint32_t o[]={s->t_u64,nw2,w,cS}; spv_ins(&s->bin,128,o,4);}
+      { uint32_t o[]={s->t_u64,nw2,w,s->c_one64}; spv_ins(&s->bin,OPCODE_IADD,o,4);} /* pass+1 */
       TG_ST(cp_,nw2); }
     { uint32_t o[]={head}; spv_ins(&s->bin,OPCODE_BRANCH,o,1); }
     *jt = 1;
@@ -320,6 +337,7 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
             ADD_CONST(M_*Nn); ADD_CONST(M_*K_*Nn);   /* cKN, cMKN — used by helper */
             ADD_CONST(64); ADD_CONST(1); ADD_CONST(0); ADD_CONST(4);
             { int _k; for (_k = 0; _k < K_; _k++) ADD_CONST(_k); } /* unroll consts */
+            { long long _ps = ((long long)M_*Nn + 63) / 64; ADD_CONST(_ps); } /* pass count */
             long long sb_ = (long long)((p->total_mem>0?p->total_mem:1)+1);
             s.scratch_base = (uint32_t)sb_;
             ADD_CONST(sb_+0); ADD_CONST(sb_+1); ADD_CONST(sb_+2);
@@ -396,7 +414,7 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
       for (size_t q=0;q<p->n;q++) if (p->ins[q].op==MIR_T_GEMM) has_tg=1;
       (void)has_tg;
       /* 64 lanes x 4 per-lane scratch slots for parallel T_GEMM */
-      uint32_t ncells=(uint32_t)(s.scratch_base + 64*4);
+      uint32_t ncells=(uint32_t)(s.scratch_base + 64*4 + 1);
       sb_word(&s.bin,(uint32_t)(4<<16)|OP_CONSTANT);
       sb_word(&s.bin,s.t_i32); sb_word(&s.bin,s.len_mem_cells); sb_word(&s.bin,ncells); }
     { uint32_t o[]={s.t_arr_mem,s.t_u64,s.len_mem_cells}; spv_ins(&s.bin,OP_TYPE_ARRAY,o,3);}

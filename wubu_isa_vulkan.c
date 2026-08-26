@@ -35,7 +35,7 @@ static int vulkan_compile(const wubu_mir_prog_t *p,
     if (rc_ != 0) return -1;
     /* remember the module's mem-cell count for run()'s buffer sizing */
     { int has_tg=0; for (unsigned q=0;q<p->n;q++) if (p->ins[q].op==MIR_T_GEMM) has_tg=1;
-      g_cells = (uint32_t)((p->total_mem > 0 ? p->total_mem : 1) + 1 + (has_tg?64*4:0)); }
+      g_cells = (uint32_t)((p->total_mem > 0 ? p->total_mem : 1) + 1 + (has_tg?64*4+1:0)); }
 
     /* persist for the runner */
     FILE *f = fopen("/tmp/wubu_kernel.spv", "wb");
@@ -63,6 +63,11 @@ static int64_t vulkan_run(const uint8_t *code, size_t size, int64_t arg)
     FILE *f = popen(cmd, "r");
     if (!f) return 0;
     long long r = 0;
+    /* dzn driver emits WARNING lines to stdout before the result number; skip non-numeric */
+    while (!feof(f) && !ferror(f)) {
+        int c2 = fgetc(f);
+        if (c2=='-' || c2=='+' || (c2>='0' && c2<='9')) { ungetc(c2, f); break; }
+    }
     if (fscanf(f, "%lld", &r) != 1) {
         /* Surface vk_run/device errors instead of swallowing them as 0. */
         char *line = NULL; size_t sz = 0;
