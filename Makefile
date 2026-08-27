@@ -139,7 +139,10 @@ test_gap_audit: isa-test/gap_audit.c $(MIR)
 	./$@
 
 # Self-hosting battery: every C11 construct the compiler must support
-test_selfhost_battery: isa-test/selfhost_battery.c $(FRONT) $(MIR) $(ISA) $(INTERP) $(OS_INTERP) jit_stub.c
+# Uses x86-64 JIT + all available interpreter backends.
+# Links ALL ISA drivers to satisfy wubu_isa_driver.c's registry,
+# including the vulkan stub and jit_stub.c for arm64.
+test_selfhost_battery: isa-test/selfhost_battery.c $(FRONT) $(MIR) $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) jit_stub.c jit_stubs_arm64.c
 	$(CC) $(CFLAGS) -I. -I$(OS_ROOT) $^ -o $@ -lm
 	./$@
 
@@ -149,3 +152,7 @@ clean:
 	rm -f *.o
 
 .PHONY: all test clean gauntlet
+test_crash_items: tools/test_crash_items.c
+	$(CC) $(CFLAGS) -I. $^ wubu_mir.c wubu_mir_opt.c wubu_mir_lower.c wubu_mir_regalloc.c wubu_mir_interp.c x86_peephole.c wubu_softfloat.c wubu_tgemm.c wubu_host_tensor.c wubu_mir_ssa.c wubu_mir_sccp.c wubu_mir_gvn.c wubu_mir_fuse.c wubu_isa_driver.c wubu_isa_x86_64.c wubu_isa_ptx.c wubu_isa_amdgpu.c wubu_isa_mips.c wubu_isa_m68k.c wubu_isa_riscv.c wubu_isa_8086.c wubu_isa_6502.c wubu_isa_z80.c wubu_isa_8051.c wubu_isa_avr.c wubu_isa_pic.c wubu_elf64_cubin.c wubu_isa_vulkan.c wubu_isa_spirv.c wubu_m68k_interp.c wubu_z80_interp.c wubu_8051_interp.c wubu_avr_interp.c wubu_pic_interp.c holyd_mir_eval.c holyd_parse.c holyd_parse_ast.c holyd_codegen.c holyd_codegen_emit.c holyd_codegen_expr.c holyd_codegen_stmt.c holyd_codegen_api.c holyd_mir_eval.c wubu_preproc.c -lm -o $@
+	./$@
+
