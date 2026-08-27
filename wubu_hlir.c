@@ -100,7 +100,10 @@ hlir_node_t *hlir_op(hlir_graph_t *g, hlir_op_t op, const char *name,
                      const hlir_attr_t *attrs, int n_attrs)
 {
     hlir_node_t *n = make_node(g, op, name);
-    n->output = *output_shape;
+    if (output_shape)
+        n->output = *output_shape;
+    else if (n_inputs > 0 && inputs && inputs[0])
+        n->output = inputs[0]->output;  /* infer from first input */
     if (n_inputs > 0) {
         n->inputs = malloc((size_t)n_inputs * sizeof(hlir_node_t *));
         memcpy(n->inputs, inputs, (size_t)n_inputs * sizeof(hlir_node_t *));
@@ -483,7 +486,7 @@ int hlir_lower_mir(const hlir_graph_t *g, void *prog)
             break;
         }
         default: {
-            /* Passthrough first input */
+            /* Passthrough first input (unary/binary placeholder ops) */
             if (n->n_inputs > 0) {
                 wubu_vr_t a = base_vr[hlir_topo_order_of(g, n->inputs[0])];
                 wubu_vr_t va = wubu_mir_load(p, a);
