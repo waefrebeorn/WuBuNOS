@@ -207,6 +207,126 @@ static void wubu_tgemm_scalar(int64_t *mem, int64_t A, int64_t B,
     }
 }
 
+/* ---- AVX-512 micro-kernel (Zen 4 native) ----
+ * 8x4 micro-kernel: 8 rows x 4 columns using AVX-512 512-bit vectors.
+ * Each ZMM holds 8x int64. We accumulate 4 columns simultaneously:
+ *   c_col0 = ZMM with C[i+0..7, j+0]
+ *   c_col1 = ZMM with C[i+0..7, j+1]
+ *   c_col2 = ZMM with C[i+0..7, j+2]
+ *   c_col3 = ZMM with C[i+0..7, j+3]
+ * Inner loop: for each k, broadcast A[i+0..7, k] and B[k, j+0..3],
+ * multiply-add into the 4 column accumulators.
+ * Register pressure: 4 (accum) + 1 (A) + 4 (B broadcast) = 9 ZMM regs.
+ * Zen 4 has 16 ZMM registers — fits comfortably. */
+
+#if defined(__AVX512F__) && defined(__AVX512DQ__) && defined(__AVX512VL__)
+#define HAS_AVX512 1
+#include <immintrin.h>
+#else
+#define HAS_AVX512 0
+#endif
+
+#define MC 64   /* M cache block: 64 rows */
+#define NC 64   /* N cache block: 64 cols */
+#define KC 64   /* K cache block: 64 */
+#define MR 8    /* Micro-kernel rows (AVX-512 = 8x int64) */
+#define NR 4    /* Micro-kernel cols */
+
+static void wubu_tgemm_avx512(int64_t *mem, int64_t A, int64_t B,
+                               int64_t C, int M, int N, int K)
+{
+#if !HAS_AVX512
+    wubu_tgemm_scalar(mem, A, B, C, M, N, K);
+    return;
+#else
+    /* Aligned packing buffers.
+     * A_packed: KC x MC (col-major) — column k of the tile is contiguous
+     *           so the micro-kernel can _mm512_loadu 8 rows at once.
+     * B_packed: KC x NC (row-major) — row k of the tile is contiguous
+     *           so B[k, j:j+4] is a 32-byte load. */
+    size_t a_buf_size = (size_t)KC * MC * sizeof(int64_t);
+    size_t b_buf_size = (size_t)KC * NC * sizeof(int64_t);
+    int64_t *A_packed = (int64_t *)aligned_alloc(64, a_buf_size);
+    int64_t *B_packed = (int64_t *)aligned_alloc(64, b_buf_size);
+    if (!A_packed || !B_packed) { free(A_packed); free(B_packed); return; }
+
+    for (int i3 = 0; i3 < M; i3 += MC) {
+        int mc = (i3 + MC <= M) ? MC : M - i3;
+        for (int j3 = 0; j3 < N; j3 += NC) {
+            int nc = (j3 + NC <= N) ? NC : N - j3;
+            for (int k3 = 0; k3 < K; k3 += KC) {
+                int kc = (k3 + KC <= K) ? KC : K - k3;
+
+                /* Pack A[i3:i3+MC, k3:k3+KC] as KC x MC col-major:
+                 * A_packed[k * MC + i] = mem[A + (i3+i)*K + k3+k] */
+                for (int k = 0; k < kc; k++)
+                    for (int i = 0; i < mc; i++)
+                        A_packed[(size_t)k * MC + i] = mem[A + (int64_t)(i3 + i) * K + k3 + k];
+
+                /* Pack B[k3:k3+KC, j3:j3+NC] as KC x NC row-major:
+                 * B_packed[k * NC + j] = mem[B + (k3+k)*N + j3+j] */
+                for (int k = 0; k < kc; k++)
+                    for (int j = 0; j < nc; j++)
+                        B_packed[(size_t)k * nc + j] = mem[B + (int64_t)(k3 + k) * N + j3 + j];
+
+                /* Micro-kernel: C[i3:i3+mc, j3:j3+nc] += A_packed * B_packed
+                 * Process MR=8 rows x NR=4 cols per iteration */
+                for (int i = 0; i + MR <= mc; i += MR) {
+                    for (int j = 0; j + NR <= nc; j += NR) {
+                        __m512i c0 = _mm512_setzero_si512();
+                        __m512i c1 = _mm512_setzero_si512();
+                        __m512i c2 = _mm512_setzero_si512();
+                        __m512i c3 = _mm512_setzero_si512();
+
+                        for (int k = 0; k < kc; k++) {
+                            /* Load A[i:i+8, k] — contiguous in col-major layout */
+                            __m512i a = _mm512_loadu_si512(A_packed + (size_t)k * MC + i);
+                            /* Broadcast B[k, j..j+3] to 4 separate vectors */
+                            __m512i b0 = _mm512_set1_epi64(B_packed[(size_t)k * nc + j + 0]);
+                            __m512i b1 = _mm512_set1_epi64(B_packed[(size_t)k * nc + j + 1]);
+                            __m512i b2 = _mm512_set1_epi64(B_packed[(size_t)k * nc + j + 2]);
+                            __m512i b3 = _mm512_set1_epi64(B_packed[(size_t)k * nc + j + 3]);
+                            /* Accumulate: c[col] += a * b[col] */
+                            c0 = _mm512_add_epi64(c0, _mm512_mullo_epi64(a, b0));
+                            c1 = _mm512_add_epi64(c1, _mm512_mullo_epi64(a, b1));
+                            c2 = _mm512_add_epi64(c2, _mm512_mullo_epi64(a, b2));
+                            c3 = _mm512_add_epi64(c3, _mm512_mullo_epi64(a, b3));
+                        }
+
+                        /* Store accumulators to C[i3+i:i3+i+8, j3+j:j3+j+4] */
+                        int64_t *c_base = mem + C + (int64_t)(i3 + i) * N + j3 + j;
+                        int64_t tmp[4][8];
+                        _mm512_storeu_si512(tmp[0], c0);
+                        _mm512_storeu_si512(tmp[1], c1);
+                        _mm512_storeu_si512(tmp[2], c2);
+                        _mm512_storeu_si512(tmp[3], c3);
+                        for (int r = 0; r < 8; r++) {
+                            c_base[r * N + 0] += tmp[0][r];
+                            c_base[r * N + 1] += tmp[1][r];
+                            c_base[r * N + 2] += tmp[2][r];
+                            c_base[r * N + 3] += tmp[3][r];
+                        }
+                    }
+                }
+
+                /* Handle remaining rows (mc % MR != 0) with scalar kernel */
+                int i_remain = (mc / MR) * MR;
+                for (int i = i_remain; i < mc; i++) {
+                    for (int j = 0; j < nc; j++) {
+                        int64_t acc = mem[C + (int64_t)(i3 + i) * N + j3 + j];
+                        for (int k = 0; k < kc; k++)
+                            acc += A_packed[(size_t)k * MC + i] * B_packed[(size_t)k * nc + j];
+                        mem[C + (int64_t)(i3 + i) * N + j3 + j] = acc;
+                    }
+                }
+            }
+        }
+    }
+    free(A_packed);
+    free(B_packed);
+#endif /* HAS_AVX512 */
+}
+
 /* H4: parallel T_GEMM wrapper — dispatches row blocks to OpenMP threads.
  * Uses wubu_jit_mem_ptr (heap-allocated via mmap in x86_run) for thread safety.
  * Copies JIT stack frame to heap, runs parallel kernel, copies results back.
@@ -234,6 +354,11 @@ void wubu_tgemm_parallel(int64_t *stack_mem, int64_t A, int64_t B,
         memcpy(mem, stack_mem, frame_bytes);
     }
 
+    /* Use AVX-512 kernel if available — it has its own cache blocking
+     * and micro-kernel. Otherwise fall back to scalar 4-row parallel. */
+#if HAS_AVX512
+    wubu_tgemm_avx512(mem, A, B, C, M, N, K);
+#else
     /* Parallelize over 4-row blocks. wubu_tgemm_scalar processes 4 rows
      * per call (plus a tail for M%4). Each block of rows is independent:
      * B is read-only, C rows don't overlap. */
@@ -251,6 +376,7 @@ void wubu_tgemm_parallel(int64_t *stack_mem, int64_t A, int64_t B,
     if (mem != stack_mem) {
         memcpy(stack_mem, mem, frame_bytes);
     }
+#endif /* HAS_AVX512 */
 #else
     (void)stack_mem; (void)mem;
     wubu_tgemm_scalar(mem, A, B, C, M, N, K);
