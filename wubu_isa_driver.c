@@ -26,6 +26,7 @@ extern const wubu_isa_driver_t wubu_isa_pic;   /* Microchip PIC (PIC16F877A) */
 extern const wubu_isa_driver_t wubu_isa_amdgpu; /* AMD GPU (RDNA2/gfx1030) */
 extern const wubu_isa_driver_t wubu_isa_ptx;  /* NVIDIA GPU (PTX/SM89) */
 extern const wubu_isa_driver_t wubu_isa_vulkan; /* ANY Vulkan card (SPIR-V) */
+extern const wubu_isa_driver_t wubu_isa_wasm;    /* WebAssembly MVP (portable) */
 
 /* Portable cache clear for JIT'd code.
  * x86-64: hardware maintains i/d cache coherency — compiler barrier only.
@@ -90,5 +91,7 @@ const wubu_isa_driver_t *wubu_isa_find(const char *name)
         !strcmp(name, "spirv") || !strcmp(name, "radv") ||
         !strcmp(name, "igpu") || !strcmp(name, "740m"))
         return &wubu_isa_vulkan;
+    if (!strcmp(name, "wasm") || !strcmp(name, "web"))
+        return &wubu_isa_wasm;
     return NULL;
 }

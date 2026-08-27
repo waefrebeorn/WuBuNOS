@@ -25,12 +25,13 @@ MIR     = wubu_mir.c wubu_mir_opt.c wubu_mir_lower.c wubu_mir_regalloc.c \
           wubu_mir_interp.c x86_peephole.c wubu_softfloat.c wubu_tgemm.c \
           wubu_host_tensor.c wubu_mir_ssa.c wubu_mir_sccp.c wubu_mir_gvn.c wubu_mir_fuse.c wubu_auto_tune.c
 
-# ISA drivers (10 interpreter-based + 2 JIT stubs)
+# ISA drivers (10 interpreter-based + 2 JIT stubs + 1 WASM emitter)
 ISA     = wubu_isa_driver.c wubu_isa_jit_stubs.c \
           wubu_isa_mips.c wubu_isa_m68k.c wubu_isa_riscv.c \
           wubu_isa_8086.c wubu_isa_6502.c wubu_isa_z80.c \
           wubu_isa_8051.c wubu_isa_avr.c wubu_isa_pic.c \
-          wubu_isa_amdgpu.c wubu_isa_ptx.c wubu_elf64_cubin.c
+          wubu_isa_amdgpu.c wubu_isa_ptx.c wubu_elf64_cubin.c \
+          jit/wubu_isa_wasm.c
 
 # Interpreters (compiler repo)
 INTERP  = wubu_m68k_interp.c wubu_z80_interp.c wubu_8051_interp.c \
@@ -180,4 +181,9 @@ test_online_learn: tools/test_online_learn.c wubu_online_learn.c wubu_online_lea
 # FP16 + quantization test (precision format expansion)
 test_fp16: tools/test_fp16.c wubu_softfloat.c wubu_softfloat.h
 	$(CC) $(CFLAGS) -I. $< wubu_softfloat.c -lm -o $@
+	./$@
+
+# WASM backend test
+test_wasm_backend: tools/test_wasm_backend.c jit/wubu_isa_wasm.c jit/wubu_isa_wasm.h $(MIR) $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) jit_stub.c jit_stubs_arm64.c
+	$(CC) $(CFLAGS) -I. -Ijit $^ $(LDFLAGS) -o $@
 	./$@
