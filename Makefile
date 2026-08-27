@@ -23,7 +23,7 @@ LDFLAGS = -lm
 # MIR mid-level IR + optimizer
 MIR     = wubu_mir.c wubu_mir_opt.c wubu_mir_lower.c wubu_mir_regalloc.c \
           wubu_mir_interp.c x86_peephole.c wubu_softfloat.c wubu_tgemm.c \
-          wubu_host_tensor.c wubu_mir_ssa.c wubu_mir_sccp.c wubu_mir_gvn.c wubu_mir_fuse.c
+          wubu_host_tensor.c wubu_mir_ssa.c wubu_mir_sccp.c wubu_mir_gvn.c wubu_mir_fuse.c wubu_auto_tune.c
 
 # ISA drivers (10 interpreter-based + 2 JIT stubs)
 ISA     = wubu_isa_driver.c wubu_isa_jit_stubs.c \
@@ -156,3 +156,8 @@ test_crash_items: tools/test_crash_items.c
 	$(CC) $(CFLAGS) -I. $^ wubu_mir.c wubu_mir_opt.c wubu_mir_lower.c wubu_mir_regalloc.c wubu_mir_interp.c x86_peephole.c wubu_softfloat.c wubu_tgemm.c wubu_host_tensor.c wubu_mir_ssa.c wubu_mir_sccp.c wubu_mir_gvn.c wubu_mir_fuse.c wubu_isa_driver.c wubu_isa_x86_64.c wubu_isa_ptx.c wubu_isa_amdgpu.c wubu_isa_mips.c wubu_isa_m68k.c wubu_isa_riscv.c wubu_isa_8086.c wubu_isa_6502.c wubu_isa_z80.c wubu_isa_8051.c wubu_isa_avr.c wubu_isa_pic.c wubu_elf64_cubin.c wubu_isa_vulkan.c wubu_isa_spirv.c wubu_m68k_interp.c wubu_z80_interp.c wubu_8051_interp.c wubu_avr_interp.c wubu_pic_interp.c holyd_mir_eval.c holyd_parse.c holyd_parse_ast.c holyd_codegen.c holyd_codegen_emit.c holyd_codegen_expr.c holyd_codegen_stmt.c holyd_codegen_api.c holyd_mir_eval.c wubu_preproc.c -lm -o $@
 	./$@
 
+
+# Auto-tuning test
+test_auto_tune: tools/test_auto_tune.c wubu_auto_tune.c wubu_auto_tune.h wubu_tgemm.c wubu_tgemm.h
+	$(CC) $(CFLAGS) -I. $< wubu_auto_tune.c wubu_tgemm.c -lm -o $@
+	./$@
