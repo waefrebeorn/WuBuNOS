@@ -26,6 +26,7 @@
 #include "wubu_isa_ptx.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include <stdarg.h>
 #include <unistd.h>
@@ -176,23 +177,22 @@ static inline void ptx_f32_to_vr(ptx_emitter_t *e, uint32_t vr, uint32_t fs) {
     ptx_emit(e, "    mov.b64 %%r%u, {%%w0, 0};\n", vr);  /* zero-extend */
 }
 
-static void emit_tgemm(ptx_emitter_t *e, const wubu_mir_instr_t *ins)
+static void emit_tgemm(ptx_emitter_t *e, const wubu_mir_instr_t *ins, uint32_t reg_base)
 {
     int M = (int)(ins->imm >> 22);
     int N = (int)((ins->imm >> 11) & 0x7FF);
     int K = (int)(ins->imm & 0x7FF);
 
-    /* Scratch window ABOVE all program VRs (no collision possible).
-     * count_regs already bumps declared reg count for T_GEMM. */
-    uint32_t B0  = e->n_vregs;
+    /* Scratch window ABOVE all program VRs */
+    uint32_t B0 = reg_base;
     uint32_t rA=B0, rB=B0+1, rC=B0+2;
     uint32_t rI=B0+3, rKk=B0+4, rJ=B0+5, rAcc=B0+6;
     uint32_t rT1=B0+7, rT2=B0+8, rTid=B0+9, rStride=B0+10;
-    e->n_vregs += 11;
+    if (B0 + 11 > e->n_vregs) e->n_vregs = B0 + 11;
 
     int S = tgemm_parallel_rows(M);
     ptx_emit(e, "    /* hw-aware T_GEMM: %dx%d x %d, %d-way row parallel */\n", M, N, K, S);
-    ptx_emit(e, "    bar.sync 0;\n");   /* producers of A/B/C done */
+    /* barrier: wait for init to complete (emitted by caller) */
     ptx_emit(e, "    cvt.s64.u32 %%r%u, %%tid0;\n", rTid);
     ptx_emit(e, "    mov.s64 %%r%u, %d;\n", rStride, S);
     ptx_emit(e, "    mov.s64 %%r%u, %%r%u;\n", rI, rTid);      /* i = tid */
@@ -269,12 +269,23 @@ static void emit_tgemm(ptx_emitter_t *e, const wubu_mir_instr_t *ins)
 
 static void emit_kernel_body(ptx_emitter_t *e, const wubu_mir_prog_t *p)
 {
-    /* We need to track label positions. PTX labels are just identifiers
-     * followed by ':'. Since we emit linearly, labels are emitted at the
-     * right place. For forward branches we record the label id and emit
-     * it when we hit a MIR_LABEL. */
-
+    /* Find T_GEMM split point: init code before T_GEMM runs on thread 0
+     * only (idempotent stores). T_GEMM + cleanup runs on all threads. */
+    size_t tgemm_idx = p->n;
     for (size_t i = 0; i < p->n; i++) {
+        if (p->ins[i].op == MIR_T_GEMM) { tgemm_idx = i; break; }
+    }
+    uint32_t init_label = e->n_pred++;
+
+    /* Phase 1: initialization (thread 0 only) */
+    uint32_t vregs_before_init = e->n_vregs;
+    if (tgemm_idx < p->n) {
+        uint32_t pred_tid = e->n_pred++;
+        ptx_emit(e, "    setp.ne.u32 p%u, %%tid0, 0;\n", pred_tid);
+        ptx_emit(e, "    @p%u bra p_skip_init_%u;\n", pred_tid, init_label);
+    }
+    size_t limit = (tgemm_idx < p->n) ? tgemm_idx : p->n;
+    for (size_t i = 0; i < limit; i++) {
         const wubu_mir_instr_t *ins = &p->ins[i];
         uint32_t rd;
 
@@ -696,20 +707,168 @@ static void emit_kernel_body(ptx_emitter_t *e, const wubu_mir_prog_t *p)
             break;
         }
 
+        default:
+            /* Init phase: skip everything else (T_GEMM handled below) */
+            break;
+        }
+    }
+
+    /* End of init phase: barrier + label for non-init threads */
+    if (tgemm_idx < p->n) {
+        ptx_emit(e, "p_skip_init_%u:\n", init_label);
+        ptx_emit(e, "    bar.sync 0;\n");
+    }
+
+    /* Phase 2: T_GEMM + cleanup (all threads).
+     * Use e->n_vregs (after init phase) as base to avoid register conflicts. */
+    size_t start2 = (tgemm_idx < p->n) ? tgemm_idx : p->n;
+    for (size_t i = start2; i < p->n; i++) {
+        const wubu_mir_instr_t *ins = &p->ins[i];
+        uint32_t rd;
+
+        switch (ins->op) {
         case MIR_T_GEMM:
-            emit_tgemm(e, ins);
+            emit_tgemm(e, ins, e->n_vregs);
             break;
 
+        case MIR_CONST:
+            rd = ptx_vr(e, ins->dst);
+            ptx_emit(e, "    mov.b64 %%r%lld, %lld;\n", (long long)rd, (long long)ins->imm);
+            break;
+
+        case MIR_MOV:
+            rd = ptx_vr(e, ins->dst);
+            ptx_emit(e, "    mov.b64 %%r%d, %%r%d;\n", (int)rd, (int)ptx_vr(e, ins->a));
+            break;
+
+        case MIR_ADD:
+            rd = ptx_vr(e, ins->dst);
+            ptx_emit(e, "    add.s64 %%r%d, %%r%d, %%r%d;\n",
+                     (int)rd, (int)ptx_vr(e, ins->a), (int)ptx_vr(e, ins->b));
+            break;
+
+        case MIR_SUB:
+            rd = ptx_vr(e, ins->dst);
+            ptx_emit(e, "    sub.s64 %%r%d, %%r%d, %%r%d;\n",
+                     (int)rd, (int)ptx_vr(e, ins->a), (int)ptx_vr(e, ins->b));
+            break;
+
+        case MIR_MUL: {
+            rd = ptx_vr(e, ins->dst);
+            if (i + 1 < p->n &&
+                (p->ins[i+1].op == MIR_ADD || p->ins[i+1].op == MIR_SUB) &&
+                p->ins[i+1].a == ins->dst) {
+                const wubu_mir_instr_t *nx = &p->ins[i+1];
+                uint32_t rd2 = ptx_vr(e, nx->dst);
+                uint32_t c   = ptx_vr(e, nx->b);
+                uint32_t ra  = ptx_vr(e, ins->a);
+                uint32_t rb  = ptx_vr(e, ins->b);
+                if (nx->op == MIR_SUB) {
+                    ptx_emit(e, "    neg.s64 %%r%d, %%r%d;\n", (int)rd2, (int)c);
+                    ptx_emit(e, "    mad.lo.s64 %%r%d, %%r%d, %%r%d, %%r%d;\n",
+                             (int)rd2, (int)ra, (int)rb, (int)rd2);
+                } else {
+                    ptx_emit(e, "    mad.lo.s64 %%r%d, %%r%d, %%r%d, %%r%d;\n",
+                             (int)rd2, (int)ra, (int)rb, (int)c);
+                }
+                i++;
+                break;
+            }
+            ptx_emit(e, "    mul.lo.s64 %%r%d, %%r%d, %%r%d;\n",
+                     (int)rd, (int)ptx_vr(e, ins->a), (int)ptx_vr(e, ins->b));
+            break;
+        }
+
+        case MIR_DIV:
+            rd = ptx_vr(e, ins->dst);
+            ptx_emit(e, "    div.s64 %%r%d, %%r%d, %%r%d;\n",
+                     (int)rd, (int)ptx_vr(e, ins->a), (int)ptx_vr(e, ins->b));
+            break;
+
+        case MIR_MOD:
+            rd = ptx_vr(e, ins->dst);
+            ptx_emit(e, "    rem.s64 %%r%d, %%r%d, %%r%d;\n",
+                     (int)rd, (int)ptx_vr(e, ins->a), (int)ptx_vr(e, ins->b));
+            break;
+
+        case MIR_AND:
+            rd = ptx_vr(e, ins->dst);
+            ptx_emit(e, "    and.b64 %%r%d, %%r%d, %%r%d;\n",
+                     (int)rd, (int)ptx_vr(e, ins->a), (int)ptx_vr(e, ins->b));
+            break;
+
+        case MIR_OR:
+            rd = ptx_vr(e, ins->dst);
+            ptx_emit(e, "    or.b64 %%r%d, %%r%d, %%r%d;\n",
+                     (int)rd, (int)ptx_vr(e, ins->a), (int)ptx_vr(e, ins->b));
+            break;
+
+        case MIR_XOR:
+            rd = ptx_vr(e, ins->dst);
+            ptx_emit(e, "    xor.b64 %%r%d, %%r%d, %%r%d;\n",
+                     (int)rd, (int)ptx_vr(e, ins->a), (int)ptx_vr(e, ins->b));
+            break;
+
+        case MIR_LOAD: {
+            rd = ptx_vr(e, ins->dst);
+            ptx_emit(e, "    cvt.u32.s64 %%rc1, %%r%d;\n", (int)ptx_vr(e, ins->a));
+            ptx_emit(e, "    mul.lo.u32 %%rc1, %%rc1, 8;\n");
+            ptx_emit(e, "    cvt.u64.u32 %%ra1, %%rc1;\n");
+            ptx_emit(e, "    add.u64 %%ra1, %%ra1, %%ra0;\n");
+            ptx_emit(e, "    ld.global.s64 %%r%d, [%%ra1];\n", (int)rd);
+            break;
+        }
+
+        case MIR_STORE: {
+            ptx_emit(e, "    cvt.u32.s64 %%rc1, %%r%d;\n", (int)ptx_vr(e, ins->a));
+            ptx_emit(e, "    mul.lo.u32 %%rc1, %%rc1, 8;\n");
+            ptx_emit(e, "    cvt.u64.u32 %%ra1, %%rc1;\n");
+            ptx_emit(e, "    add.u64 %%ra1, %%ra1, %%ra0;\n");
+            ptx_emit(e, "    st.global.s64 [%%ra1], %%r%d;\n", (int)ptx_vr(e, ins->b));
+            break;
+        }
+
+        case MIR_EQ: case MIR_NE: case MIR_LT: case MIR_LE:
+        case MIR_GT: case MIR_GE:
+        case MIR_ULT: case MIR_ULE: case MIR_UGT: case MIR_UGE: {
+            int rd2 = ptx_vr(e, ins->dst);
+            uint32_t pred = e->n_pred++;
+            const char *cmp;
+            switch (ins->op) {
+                case MIR_EQ:  cmp = "eq.s64";  break;
+                case MIR_NE:  cmp = "ne.s64";  break;
+                case MIR_LT:  cmp = "lt.s64";  break;
+                case MIR_LE:  cmp = "le.s64";  break;
+                case MIR_GT:  cmp = "gt.s64";  break;
+                case MIR_GE:  cmp = "ge.s64";  break;
+                case MIR_ULT: cmp = "lt.u64";  break;
+                case MIR_ULE: cmp = "ule.s64"; break;
+                case MIR_UGT: cmp = "ugt.s64"; break;
+                case MIR_UGE: cmp = "uge.s64"; break;
+                default:      cmp = "eq.s64";  break;
+            }
+            ptx_emit(e, "    setp.%s p%u, %%r%d, %%r%d;\n",
+                     cmp, pred, (int)ptx_vr(e, ins->a), (int)ptx_vr(e, ins->b));
+            ptx_emit(e, "    selp.b64 %%r%d, 1, 0, p%u;\n", (int)rd2, pred);
+            break;
+        }
+
+        case MIR_RET: {
+            /* Load value from mem[vr] and store to result */
+            rd = ptx_vr(e, ins->a);
+            ptx_emit(e, "    ld.param.b64 %%rd_result, [result];\n");
+            ptx_emit(e, "    st.global.s64 [%%rd_result], %%r%d;\n", (int)rd);
+            break;
+        }
 
         default:
-            /* Unknown op — emit a comment so it's visible */
-            ptx_emit(e, "    /* MIR op %d — not yet implemented */\n", (int)ins->op);
+            /* Unknown op or op handled in init phase */
             break;
         }
     }
 }
 
-/* ---- T_GEMM emission (scalar triple loop on a single GPU thread) ----
+/* ---- T_GEMM emission (M*N cell-parallel on GPU) ----
  *
  * MIR_T_GEMM encoding (from wubu_mir.h):
  *   imm = ((uint64_t)M << 22) | ((uint64_t)N << 11) | (uint64_t)K
@@ -920,23 +1079,41 @@ static int ptx_compile(const wubu_mir_prog_t *p, uint8_t **out_code, size_t *out
     if (!ptx) return -1;
 
 #ifdef WUBU_HOSTED
-    /* 2a. Hosted: compile PTX -> cubin via ptxas */
+    /* 2a. Hosted: compile PTX -> cubin via ptxas (with caching) */
     const char *ptx_path = "/tmp/wubu_kernel.ptx";
-    FILE *f = fopen(ptx_path, "w");
-    if (!f) { free(ptx); return -1; }
-    fputs(ptx, f);
-    fclose(f);
-
     const char *cubin_path = "/tmp/wubu_kernel.cubin";
-    char cmd[512];
-    snprintf(cmd, sizeof(cmd),
-             "ptxas -arch=sm_89 -O2 %s -o %s 2>/tmp/ptxas_build.log",
-             ptx_path, cubin_path);
-    int rc = system(cmd);
-    if (rc != 0) {
-        fprintf(stderr, "[ptx] ptxas compilation failed (rc=%d)\n", rc);
-        free(ptx);
-        return -1;
+
+    /* Compute simple hash of PTX content to detect changes */
+    uint32_t ptx_hash = 0;
+    for (const char *s = ptx; *s; s++)
+        ptx_hash = ptx_hash * 31 + (uint8_t)*s;
+
+    /* Check if cubin already exists and matches */
+    static uint32_t last_hash = 0;
+    int need_compile = 1;
+    if (ptx_hash == last_hash) {
+        FILE *cf = fopen(cubin_path, "rb");
+        if (cf) { fclose(cf); need_compile = 0; }
+    }
+
+    if (need_compile) {
+        fprintf(stderr, "[ptx] cache: hash=%u last=%u COMPILING\n", ptx_hash, last_hash);
+        FILE *f = fopen(ptx_path, "w");
+        if (!f) { free(ptx); return -1; }
+        fputs(ptx, f);
+        fclose(f);
+
+        char cmd[512];
+        snprintf(cmd, sizeof(cmd),
+                 "ptxas -arch=sm_89 -O2 %s -o %s 2>/tmp/ptxas_build.log",
+                 ptx_path, cubin_path);
+        int rc = system(cmd);
+        if (rc != 0) {
+            fprintf(stderr, "[ptx] ptxas compilation failed (rc=%d)\n", rc);
+            free(ptx);
+            return -1;
+        }
+        last_hash = ptx_hash;
     }
 
     FILE *cf = fopen(cubin_path, "rb");

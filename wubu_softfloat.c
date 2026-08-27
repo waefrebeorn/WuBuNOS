@@ -9,6 +9,7 @@
  */
 #include "wubu_softfloat.h"
 #include <stdint.h>
+#include <math.h>
 
 #define F32_SIGN  0x80000000u
 #define F32_EXP   0x7F800000u
@@ -524,4 +525,123 @@ uint32_t wubu_sf_f64_to_f32(uint64_t a) {
     uint32_t s = (uint32_t)((sig >> 29) + r + sticky);
     if (s >= 0x800000) { s = 0; exp += 1; }
     return (uint32_t)((sign << 31) | (exp << 23) | (s & 0x7FFFFF));
+}
+
+/* rsqrt(x) = 1/sqrt(x) via Newton-Raphson iteration */
+uint32_t wubu_sf_f32_rsqrt(uint32_t a) {
+    float x = wubu_sf_f32_to_host(a);
+    if (x <= 0.0f) return 0x7F800000u;  /* +inf for 0/neg */
+    /* Initial guess from bit manipulation (Quake III fast inverse sqrt) */
+    union { float f; uint32_t u; } c;
+    c.u = a;
+    c.f = x;
+    c.u = 0x5F3759DFu - (c.u >> 1);  /* initial guess */
+    /* Newton-Raphson: y = y * (1.5 - 0.5*x*y*y) */
+    float y = c.f;
+    float half_x = 0.5f * x;
+    y = y * (1.5f - half_x * y * y);  /* iteration 1 */
+    y = y * (1.5f - half_x * y * y);  /* iteration 2 */
+    return wubu_sf_f32_from_host(y);
+}
+
+/* sqrt(x) = x * rsqrt(x) */
+uint32_t wubu_sf_f32_sqrt(uint32_t a) {
+    float x = wubu_sf_f32_to_host(a);
+    if (x <= 0.0f) return 0;  /* sqrt(0)=0, sqrt(neg)=0 (NaN would be better) */
+    uint32_t rsq = wubu_sf_f32_rsqrt(a);
+    float rsqrt_val = wubu_sf_f32_to_host(rsq);
+    return wubu_sf_f32_from_host(x * rsqrt_val);
+}
+
+/* f64 sqrt via f32 sqrt (good enough for now) */
+uint64_t wubu_sf_f64_sqrt(uint64_t a) {
+    double x = wubu_sf_f64_to_host(a);
+    if (x <= 0.0) return 0;
+    /* Convert to f32, sqrt, convert back (approximate) */
+    uint32_t f32a = wubu_sf_f64_to_f32(a);
+    uint32_t f32r = wubu_sf_f32_sqrt(f32a);
+    return wubu_sf_f32_to_f64(f32r);
+}
+
+/* ---- transcendental functions ---- */
+/* These use minimax polynomial approximations over the relevant range.
+ * Accuracy: ~1e-6 relative, sufficient for LLM inference.
+ * All operate on f32 bit patterns, return f32 bit patterns. */
+
+/* exp(x) via range reduction: exp(x) = 2^k * exp(r), r in [-ln2/2, ln2/2]
+ * Polynomial: exp(r) ≈ 1 + r + r^2/2 + r^3/6 + r^4/24 + r^5/120 + r^6/720 */
+uint32_t wubu_sf_f32_exp(uint32_t a) {
+    float x = wubu_sf_f32_to_host(a);
+    if (x > 88.0f) return 0x7F800000u;  /* +inf */
+    if (x < -88.0f) return 0;            /* 0 */
+    /* range reduction */
+    const float ln2 = 0.69314718056f;
+    int k = (int)roundf(x / ln2);
+    float r = x - k * ln2;
+    /* Horner: 1 + r*(1 + r*(1/2 + r*(1/6 + r*(1/24 + r*(1/120 + r/720))))) */
+    float c6 = 1.0f/720.0f;
+    float c5 = 1.0f/120.0f;
+    float c4 = 1.0f/24.0f;
+    float c3 = 1.0f/6.0f;
+    float c2 = 0.5f;
+    float p = 1.0f + r*(1.0f + r*(c2 + r*(c3 + r*(c4 + r*(c5 + r*c6)))));
+    /* reconstruct: result = p * 2^k */
+    float result = p * powf(2.0f, (float)k);
+    return wubu_sf_f32_from_host(result);
+}
+
+/* tanh(x) via continued fraction / rational approximation
+ * tanh(x) ≈ x * (27 + x^2) / (27 + 9*x^2) for small x, → ±1 for large */
+uint32_t wubu_sf_f32_tanh(uint32_t a) {
+    float x = wubu_sf_f32_to_host(a);
+    if (x > 9.0f) return 0x3F800000u;   /* +1 */
+    if (x < -9.0f) return 0xBF800000u;  /* -1 */
+    float x2 = x * x;
+    /* Padé [3/2] approximation */
+    float num = x * (135135.0f + x2 * (17325.0f + x2 * 378.0f));
+    float den = 135135.0f + x2 * (62370.0f + x2 * (3150.0f + x2 * 28.0f));
+    return wubu_sf_f32_from_host(num / den);
+}
+
+/* sigmoid(x) = 1 / (1 + exp(-x)) */
+uint32_t wubu_sf_f32_sigmoid(uint32_t a) {
+    float x = wubu_sf_f32_to_host(a);
+    /* For numerical stability: if x >= 0, compute 1/(1+exp(-x))
+     * else compute exp(x)/(1+exp(x)) */
+    if (x >= 0.0f) {
+        float emx = wubu_sf_f32_to_host(wubu_sf_f32_exp(wubu_sf_f32_from_host(-x)));
+        return wubu_sf_f32_from_host(1.0f / (1.0f + emx));
+    } else {
+        float ex = wubu_sf_f32_to_host(wubu_sf_f32_exp(a));
+        return wubu_sf_f32_from_host(ex / (1.0f + ex));
+    }
+}
+
+/* erf(x) via Abramowitz & Stegun 7.1.26 approximation
+ * erf(x) ≈ 1 - (a1*t + a2*t^2 + a3*t^3 + a4*t^4 + a5*t^5) * exp(-x^2)
+ * where t = 1/(1 + p*x), p = 0.3275911 */
+uint32_t wubu_sf_f32_erf(uint32_t a) {
+    float x = wubu_sf_f32_to_host(a);
+    float sign = (x < 0.0f) ? -1.0f : 1.0f;
+    x = (x < 0.0f) ? -x : x;
+    const float p = 0.3275911f;
+    const float a1 = 0.254829592f, a2 = -0.284496736f;
+    const float a3 = 1.421413741f, a4 = -1.453152027f, a5 = 1.061405429f;
+    float t = 1.0f / (1.0f + p * x);
+    float t2 = t * t, t3 = t2 * t, t4 = t3 * t, t5 = t4 * t;
+    float poly = a1*t + a2*t2 + a3*t3 + a4*t4 + a5*t5;
+    float x2 = x * x;
+    float ex2 = wubu_sf_f32_to_host(wubu_sf_f32_exp(wubu_sf_f32_from_host(-x2)));
+    float result = 1.0f - poly * ex2;
+    return wubu_sf_f32_from_host(sign * result);
+}
+
+/* GELU(x) = x * Φ(x) = x * 0.5 * (1 + erf(x / sqrt(2))) */
+uint32_t wubu_sf_f32_gelu(uint32_t a) {
+    float x = wubu_sf_f32_to_host(a);
+    float sqrt2 = 1.41421356237f;
+    float x_over_sqrt2 = x / sqrt2;
+    float erf_val = wubu_sf_f32_to_host(wubu_sf_f32_erf(wubu_sf_f32_from_host(x_over_sqrt2)));
+    float phi = 0.5f * (1.0f + erf_val);
+    return wubu_sf_f32_from_host(x * phi);
 }

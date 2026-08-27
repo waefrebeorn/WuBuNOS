@@ -101,7 +101,72 @@ typedef enum {
      * all in the MIR flat mem[] array. Lowered to a register-tiled
      * triple loop (x86-64 native emits AVX/sse2 integer MADD-style
      * block accumulation). */
-    MIR_T_GEMM
+    MIR_T_GEMM,
+    /* ---- AGI tensor ops (inference primitives) ---- */
+    /* T_SOFTMAX: softmax over a 1D vector of f32 values.
+     * a=input(base), dst=output(base), imm=N (count).
+     * Output[i] = exp(input[i] - max) / sum(exp(input[j] - max)) */
+    MIR_T_SOFTMAX,
+    /* T_LAYERNORM: RMS-style normalization over a 1D f32 vector.
+     * a=input(base), dst=output(base), imm=N (count).
+     * mean_sq = sum(x^2)/N; output[i] = input[i] / sqrt(mean_sq + eps) */
+    MIR_T_LAYERNORM,
+    /* T_ATTENTION: scaled dot-product attention.
+     * a=Q(base), b=K(base), dst=V(base); imm packs (H << 24)|(D_head << 16)|T|scale.
+     * Q,K,V are T×D_head row-major per head, H heads. Output overwrites V. */
+    MIR_T_ATTENTION,
+    /* T_EMBEDDING: token embedding lookup.
+     * a=table(base), b=token_id, dst=output_row(base), imm=dim.
+     * Copies dim elements from table[token_id*dim .. (token_id+1)*dim] to output. */
+    MIR_T_EMBEDDING,
+    /* T_SWIGLU: SwiGLU activation (gate * sigmoid(gate)) * up.
+     * a=gate(base), b=up(base), dst=output(base), imm=N.
+     * output[i] = gate[i] * sigmoid(gate[i]) * up[i] */
+    MIR_T_SWIGLU,
+    /* T_RMS_NORM: RMSNorm with optional weight.
+     * a=input(base), b=weight(base or 0), dst=output(base), imm=N.
+     * rms = sqrt(sum(x^2)/N + eps); output[i] = weight[i] * x[i] / rms */
+    MIR_T_RMS_NORM,
+    /* T_ROPE: Rotary Position Embedding.
+     * a=input(base), dst=output(base), imm packs (dim << 16) | pos | (head << 8).
+     * Applies 2D rotation pairs at position pos for head head, dim dimensions. */
+    MIR_T_ROPE,
+    /* T_CONV2D: 2D convolution (simplified: valid padding, stride 1).
+     * a=input(base), b=kernel(base), dst=output(base);
+     * imm packs (IC << 24)|(OC << 16)|(KH << 8)|KW.
+     * Input: IC×IH×IW, Kernel: OC×IC×KH×KW, Output: OC×OH×OW. */
+    MIR_T_CONV2D,
+    /* T_DROPOUT: dropout mask (training only; inference = identity).
+     * a=input(base), dst=output(base), imm=N; rate in a->imm (0 = inference).
+     * output[i] = (rand() > rate) ? input[i] / (1-rate) : 0 */
+    MIR_T_DROPOUT,
+    /* T_ARGMAX: find index of maximum f32 value.
+     * a=input(base), imm=N. Returns index in vr0. */
+    MIR_T_ARGMAX,
+    /* T_SUM: sum a 1D f32 vector.
+     * a=input(base), imm=N. Returns sum (f32 bits) in vr0. */
+    MIR_T_SUM,
+    /* T_EXP: elementwise exp(x) on f32 vector.
+     * a=input(base), dst=output(base), imm=N. */
+    MIR_T_EXP,
+    /* T_SQRT: elementwise sqrt(x) on f32 vector.
+     * a=input(base), dst=output(base), imm=N. */
+    MIR_T_SQRT,
+    /* T_TANH: elementwise tanh(x) on f32 vector.
+     * a=input(base), dst(output(base), imm=N. */
+    MIR_T_TANH,
+    /* T_SIGMOID: elementwise sigmoid(x) = 1/(1+exp(-x)).
+     * a=input(base), dst=output(base), imm=N. */
+    MIR_T_SIGMOID,
+    /* T_GELU: elementwise GELU(x) = x * Φ(x).
+     * a=input(base), dst=output(base), imm=N. */
+    MIR_T_GELU,
+    /* T_RELU: elementwise ReLU(x) = max(0,x).
+     * a=input(base), dst=output(base), imm=N. */
+    MIR_T_RELU,
+    /* T_CLAMP: elementwise clamp(x, lo, hi).
+     * a=input(base), dst=output(base), imm packs lo/hi as f32 bits in upper/lower 32. */
+    MIR_T_CLAMP
 } wubu_mir_op_t;
 
 #define MIR_MAX_FUNCTIONS 256
@@ -129,6 +194,7 @@ typedef struct {
     uint32_t n_labels;           /* next label id */
     uint32_t n_args;             /* number of function arguments (v1..n_args) */
     int64_t total_mem;           /* number of int64 cells reserved via MIR_ALLOC */
+    int64_t *mem;                /* direct-access memory (for tests/external init) */
     wubu_vr_t next_vr_hi;        /* high-water mark of high-vr address slots (call convention) */
     wubu_mir_func_t funcs[MIR_MAX_FUNCTIONS];
     int n_funcs;
@@ -166,6 +232,25 @@ void wubu_mir_ret(wubu_mir_prog_t *p, wubu_vr_t v);
  * a=Abase, b=Bbase, dst=Cbase, M/N/K are the matrix shapes. */
 void wubu_mir_tgemm(wubu_mir_prog_t *p, wubu_vr_t a, wubu_vr_t b,
                    wubu_vr_t dst, int M, int N, int K);
+/* AGI tensor ops */
+void wubu_mir_tsoftmax(wubu_mir_prog_t *p, wubu_vr_t a, wubu_vr_t b, wubu_vr_t dst, int64_t imm);
+void wubu_mir_trms_norm(wubu_mir_prog_t *p, wubu_vr_t a, wubu_vr_t b, wubu_vr_t dst, int64_t imm);
+void wubu_mir_tlayernorm(wubu_mir_prog_t *p, wubu_vr_t a, wubu_vr_t b, wubu_vr_t dst, int64_t imm);
+void wubu_mir_tattention(wubu_mir_prog_t *p, wubu_vr_t a, wubu_vr_t b, wubu_vr_t dst, int64_t imm);
+void wubu_mir_tembedding(wubu_mir_prog_t *p, wubu_vr_t a, wubu_vr_t b, wubu_vr_t dst, int64_t imm);
+void wubu_mir_tswiglu(wubu_mir_prog_t *p, wubu_vr_t a, wubu_vr_t b, wubu_vr_t dst, int64_t imm);
+void wubu_mir_trope(wubu_mir_prog_t *p, wubu_vr_t a, wubu_vr_t b, wubu_vr_t dst, int64_t imm);
+void wubu_mir_tconv2d(wubu_mir_prog_t *p, wubu_vr_t a, wubu_vr_t b, wubu_vr_t dst, int64_t imm);
+void wubu_mir_tdropout(wubu_mir_prog_t *p, wubu_vr_t a, wubu_vr_t b, wubu_vr_t dst, int64_t imm);
+void wubu_mir_targmax(wubu_mir_prog_t *p, wubu_vr_t a, wubu_vr_t b, wubu_vr_t dst, int64_t imm);
+void wubu_mir_tsum(wubu_mir_prog_t *p, wubu_vr_t a, wubu_vr_t b, wubu_vr_t dst, int64_t imm);
+void wubu_mir_texp(wubu_mir_prog_t *p, wubu_vr_t a, wubu_vr_t b, wubu_vr_t dst, int64_t imm);
+void wubu_mir_tsqrt(wubu_mir_prog_t *p, wubu_vr_t a, wubu_vr_t b, wubu_vr_t dst, int64_t imm);
+void wubu_mir_ttanh(wubu_mir_prog_t *p, wubu_vr_t a, wubu_vr_t b, wubu_vr_t dst, int64_t imm);
+void wubu_mir_tsigmoid(wubu_mir_prog_t *p, wubu_vr_t a, wubu_vr_t b, wubu_vr_t dst, int64_t imm);
+void wubu_mir_tgelu(wubu_mir_prog_t *p, wubu_vr_t a, wubu_vr_t b, wubu_vr_t dst, int64_t imm);
+void wubu_mir_trelu(wubu_mir_prog_t *p, wubu_vr_t a, wubu_vr_t b, wubu_vr_t dst, int64_t imm);
+void wubu_mir_tclamp(wubu_mir_prog_t *p, wubu_vr_t a, wubu_vr_t b, wubu_vr_t dst, int64_t imm);
 /* Emit MIR_CALL to prog->funcs[func_id] (args must be in v1..vN already). */
 void wubu_mir_call(wubu_mir_prog_t *p, uint32_t func_id);
 

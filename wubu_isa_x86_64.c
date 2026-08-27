@@ -114,6 +114,21 @@ static int32_t spill_off(const wubu_reg_assign_t *assign, size_t assign_count,
     return off;
 }
 
+/* Load the base address of mem[] into rdi (same pattern as T_GEMM).
+ * lea rdi, [rbp - mem_off]  (modrm 0xBD = mod10 reg7 rm5 = rbp disp32) */
+static void emit_mov_mem0_rdi(x86_emitter_t *e) {
+    rex(e,1,0,0,0); e8(e,0x8D); e8(e,0xBD); e32(e,(uint32_t)(-(int32_t)e->mem_off));
+}
+
+/* ---- AGI tensor ops host dispatch ---- */
+/* Called from JIT'd code with SysV ABI:
+ *   rdi=&mem[0], rsi=op_code, rdx=a_base, rcx=b_base, r8=dst_base,
+ *   r9=imm_lo, stack(40)=imm_hi.
+ * op_code selects which tensor op to execute. */
+void wubu_tensor_dispatch(int64_t *mem, uint32_t op,
+                          int64_t a, int64_t b, int64_t dst,
+                          int64_t imm_lo, int64_t imm_hi);
+
 
 /* is instruction index `idx` inside any declared function body? */
 static int x86_in_func_body(const wubu_mir_prog_t *p, size_t idx) {
@@ -1040,6 +1055,48 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             e32(&e, (uint32_t)(-(int32_t)e.mem_off));
             rex(&e,1,0,0,0); e8(&e, 0x01); e8(&e, 0xC6);   /* add rsi, rax */
             rex(&e,1,0,0,0); e8(&e, 0x89); e8(&e, 0x3E);   /* mov [rsi], rdi */
+            break;
+        }
+        case MIR_T_SOFTMAX:
+        case MIR_T_TANH:
+        case MIR_T_SIGMOID:
+        case MIR_T_GELU:
+        case MIR_T_RELU:
+        case MIR_T_EXP:
+        case MIR_T_SQRT:
+        case MIR_T_SUM:
+        case MIR_T_RMS_NORM:
+        case MIR_T_EMBEDDING:
+        case MIR_T_ROPE:
+        case MIR_T_LAYERNORM:
+        case MIR_T_CONV2D:
+        case MIR_T_DROPOUT:
+        case MIR_T_ARGMAX:
+        case MIR_T_SWIGLU:
+        case MIR_T_CLAMP: {
+            /* Tensor ops: emit call to wubu_tensor_dispatch(op, mem, a, b, dst, N).
+             * Use same pattern as T_GEMM: movabs r11, &wubu_tensor_dispatch; call r11. */
+            /* rdi = mem_base */
+            emit_mov_mem0_rdi(&e);
+            int sa = VR_ENC(in->a);
+            if (sa >= 0) emit_mov_reg(&e, 6, sa);
+            else emit_load_rbp(&e, 6, spill_off(assign, assign_count, &e, in->a));
+            int sb = VR_ENC(in->b);
+            if (sb >= 0) emit_mov_reg(&e, 2, sb);
+            else emit_load_rbp(&e, 2, spill_off(assign, assign_count, &e, in->b));
+            int sd = VR_ENC(in->dst);
+            if (sd >= 0) emit_mov_reg(&e, 1, sd);
+            else emit_load_rbp(&e, 1, spill_off(assign, assign_count, &e, in->dst));
+            /* push op, then push N (7th and 8th args) */
+            if ((uint32_t)in->op < 0x80u) { e8(&e,0x6A); e8(&e,(uint8_t)in->op); }
+            else { e8(&e,0x68); e32(&e,(uint32_t)in->op); }
+            if ((uint32_t)in->imm < 0x80u) { e8(&e,0x6A); e8(&e,(uint8_t)in->imm); }
+            else { e8(&e,0x68); e32(&e,(uint32_t)in->imm); }
+            /* movabs r11, &wubu_tensor_dispatch; call r11 */
+            rex(&e,1,0,0,1); e8(&e,0xBB); e64(&e,(uint64_t)&wubu_tensor_dispatch);
+            e8(&e,0x41); e8(&e,0xFF); e8(&e,0xD3);
+            /* add rsp,16 (restore stack for 2 args) */
+            e8(&e,0x48); e8(&e,0x83); e8(&e,0xC4); e8(&e,0x10);
             break;
         }
         }

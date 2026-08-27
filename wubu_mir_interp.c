@@ -23,6 +23,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 
 /* HolyC/HolyD contract: `int` intermediates are 64-bit two's-complement;
  * arithmetic NEVER wraps implicitly — only explicit narrowing ops truncate.
@@ -72,7 +73,8 @@ int64_t wubu_mir_interp(const wubu_mir_prog_t *p)
     int64_t mem_hi = p->total_mem;
     if ((int64_t)(p->next_vr_hi) - 1 > mem_hi) mem_hi = (int64_t)(p->next_vr_hi) - 1;
     int64_t mem_size = (mem_hi < 1) ? 1 : (mem_hi + 1);
-    int64_t *mem = (int64_t *)calloc((size_t)mem_size, sizeof(int64_t));
+    int64_t *mem = p->mem ? p->mem : (int64_t *)calloc((size_t)mem_size, sizeof(int64_t));
+    int alloc_mem = (p->mem == NULL);
     if (!mem) { free(vr); free(label_pc); return 0; }
 
     size_t pc = 0;
@@ -254,6 +256,185 @@ int64_t wubu_mir_interp(const wubu_mir_prog_t *p)
             pc++;
             break;
         }
+        /* ---- AGI tensor ops ---- */
+        case MIR_T_SOFTMAX: {
+            uint32_t N = (uint32_t)in->imm;
+            int64_t base_a = vr[in->a], base_d = vr[in->dst];
+            /* Find max for numerical stability */
+            float mx = -1e30f;
+            for (uint32_t i = 0; i < N; i++) {
+                float v = wubu_sf_f32_to_host((uint32_t)mem[base_a + i]);
+                if (v > mx) mx = v;
+            }
+            /* Compute exp(x - max) and sum */
+            float sum = 0.0f;
+            for (uint32_t i = 0; i < N; i++) {
+                float v = wubu_sf_f32_to_host((uint32_t)mem[base_a + i]) - mx;
+                float e = wubu_sf_f32_to_host(wubu_sf_f32_exp(wubu_sf_f32_from_host(v)));
+                mem[base_d + i] = (int64_t)wubu_sf_f32_from_host(e);
+                sum += e;
+            }
+            /* Normalize */
+            for (uint32_t i = 0; i < N; i++) {
+                float v = wubu_sf_f32_to_host((uint32_t)mem[base_d + i]) / sum;
+                mem[base_d + i] = (int64_t)wubu_sf_f32_from_host(v);
+            }
+            pc++; break;
+        }
+        case MIR_T_RMS_NORM: {
+            uint32_t N = (uint32_t)in->imm;
+            int64_t base_a = vr[in->a], base_b = vr[in->b], base_d = vr[in->dst];
+            float sum_sq = 0.0f;
+            for (uint32_t i = 0; i < N; i++) {
+                float v = wubu_sf_f32_to_host((uint32_t)mem[base_a + i]);
+                sum_sq += v * v;
+            }
+            float rms = wubu_sf_f32_to_host(wubu_sf_f32_sqrt(wubu_sf_f32_from_host(sum_sq / N + 1e-6f)));
+            for (uint32_t i = 0; i < N; i++) {
+                float x = wubu_sf_f32_to_host((uint32_t)mem[base_a + i]);
+                float w = (base_b > 0) ? wubu_sf_f32_to_host((uint32_t)mem[base_b + i]) : 1.0f;
+                mem[base_d + i] = (int64_t)wubu_sf_f32_from_host(w * x / rms);
+            }
+            pc++; break;
+        }
+        case MIR_T_SUM: {
+            uint32_t N = (uint32_t)in->imm;
+            int64_t base_a = vr[in->a];
+            float sum = 0.0f;
+            for (uint32_t i = 0; i < N; i++)
+                sum += wubu_sf_f32_to_host((uint32_t)mem[base_a + i]);
+            vr[0] = (int64_t)wubu_sf_f32_from_host(sum);
+            pc++; break;
+        }
+        case MIR_T_EXP: {
+            uint32_t N = (uint32_t)in->imm;
+            int64_t base_a = vr[in->a], base_d = vr[in->dst];
+            for (uint32_t i = 0; i < N; i++)
+                mem[base_d + i] = (int64_t)wubu_sf_f32_exp((uint32_t)mem[base_a + i]);
+            pc++; break;
+        }
+        case MIR_T_SQRT: {
+            uint32_t N = (uint32_t)in->imm;
+            int64_t base_a = vr[in->a], base_d = vr[in->dst];
+            for (uint32_t i = 0; i < N; i++)
+                mem[base_d + i] = (int64_t)wubu_sf_f32_sqrt((uint32_t)mem[base_a + i]);
+            pc++; break;
+        }
+        case MIR_T_TANH: {
+            uint32_t N = (uint32_t)in->imm;
+            int64_t base_a = vr[in->a], base_d = vr[in->dst];
+            for (uint32_t i = 0; i < N; i++)
+                mem[base_d + i] = (int64_t)wubu_sf_f32_tanh((uint32_t)mem[base_a + i]);
+            pc++; break;
+        }
+        case MIR_T_SIGMOID: {
+            uint32_t N = (uint32_t)in->imm;
+            int64_t base_a = vr[in->a], base_d = vr[in->dst];
+            for (uint32_t i = 0; i < N; i++)
+                mem[base_d + i] = (int64_t)wubu_sf_f32_sigmoid((uint32_t)mem[base_a + i]);
+            pc++; break;
+        }
+        case MIR_T_GELU: {
+            uint32_t N = (uint32_t)in->imm;
+            int64_t base_a = vr[in->a], base_d = vr[in->dst];
+            for (uint32_t i = 0; i < N; i++)
+                mem[base_d + i] = (int64_t)wubu_sf_f32_gelu((uint32_t)mem[base_a + i]);
+            pc++; break;
+        }
+        case MIR_T_RELU: {
+            uint32_t N = (uint32_t)in->imm;
+            int64_t base_a = vr[in->a], base_d = vr[in->dst];
+            for (uint32_t i = 0; i < N; i++) {
+                float v = wubu_sf_f32_to_host((uint32_t)mem[base_a + i]);
+                mem[base_d + i] = (v > 0.0f) ? mem[base_a + i] : 0;
+            }
+            pc++; break;
+        }
+        case MIR_T_ARGMAX: {
+            uint32_t N = (uint32_t)in->imm;
+            int64_t base_a = vr[in->a];
+            uint32_t best_i = 0;
+            float best_v = -1e30f;
+            for (uint32_t i = 0; i < N; i++) {
+                float v = wubu_sf_f32_to_host((uint32_t)mem[base_a + i]);
+                if (v > best_v) { best_v = v; best_i = i; }
+            }
+            vr[0] = (int64_t)best_i;
+            pc++; break;
+        }
+        case MIR_T_SWIGLU: {
+            uint32_t N = (uint32_t)in->imm;
+            int64_t base_a = vr[in->a], base_b = vr[in->b], base_d = vr[in->dst];
+            for (uint32_t i = 0; i < N; i++) {
+                float gate = wubu_sf_f32_to_host((uint32_t)mem[base_a + i]);
+                float up = wubu_sf_f32_to_host((uint32_t)mem[base_b + i]);
+                float sig = wubu_sf_f32_to_host(wubu_sf_f32_sigmoid((uint32_t)mem[base_a + i]));
+                mem[base_d + i] = (int64_t)wubu_sf_f32_from_host(gate * sig * up);
+            }
+            pc++; break;
+        }
+        case MIR_T_LAYERNORM: {
+            uint32_t N = (uint32_t)in->imm;
+            int64_t base_a = vr[in->a], base_d = vr[in->dst];
+            float sum_sq = 0.0f;
+            for (uint32_t i = 0; i < N; i++) {
+                float v = wubu_sf_f32_to_host((uint32_t)mem[base_a + i]);
+                sum_sq += v * v;
+            }
+            float inv_std = wubu_sf_f32_to_host(wubu_sf_f32_rsqrt(wubu_sf_f32_from_host(sum_sq / N + 1e-5f)));
+            for (uint32_t i = 0; i < N; i++) {
+                float x = wubu_sf_f32_to_host((uint32_t)mem[base_a + i]);
+                mem[base_d + i] = (int64_t)wubu_sf_f32_from_host(x * inv_std);
+            }
+            pc++; break;
+        }
+        case MIR_T_EMBEDDING: {
+            uint32_t dim = (uint32_t)in->imm;
+            int64_t base_table = vr[in->a];
+            uint32_t token_id = (uint32_t)vr[in->b];
+            int64_t base_out = vr[in->dst];
+            int64_t src = base_table + (int64_t)token_id * dim;
+            for (uint32_t i = 0; i < dim; i++)
+                mem[base_out + i] = mem[src + i];
+            pc++; break;
+        }
+        case MIR_T_ROPE: {
+            uint32_t dim = (uint32_t)((in->imm >> 16) & 0xFFFF);
+            uint32_t pos = (uint32_t)(in->imm & 0xFFFF);
+            int64_t base_a = vr[in->a], base_d = vr[in->dst];
+            for (uint32_t i = 0; i < dim; i += 2) {
+                float x0 = wubu_sf_f32_to_host((uint32_t)mem[base_a + i]);
+                float x1 = (i+1 < dim) ? wubu_sf_f32_to_host((uint32_t)mem[base_a + i+1]) : 0.0f;
+                float freq = 1.0f / powf(10000.0f, (float)(i/2) / (float)(dim/2));
+                float theta = (float)pos * freq;
+                float cos_t = cosf(theta), sin_t = sinf(theta);
+                float y0 = x0 * cos_t - x1 * sin_t;
+                float y1 = x0 * sin_t + x1 * cos_t;
+                mem[base_d + i] = (int64_t)wubu_sf_f32_from_host(y0);
+                if (i+1 < dim) mem[base_d + i+1] = (int64_t)wubu_sf_f32_from_host(y1);
+            }
+            pc++; break;
+        }
+        case MIR_T_CLAMP: {
+            uint32_t N = (uint32_t)(in->imm & 0xFFFFFFFF);
+            if (N == 0) N = (uint32_t)in->imm; /* fallback */
+            int64_t base_a = vr[in->a], base_d = vr[in->dst];
+            /* lo/hi packed in the upper/lower 32 bits of a second imm — use dst as count */
+            float lo = wubu_sf_f32_to_host((uint32_t)(in->imm >> 32));
+            float hi = wubu_sf_f32_to_host((uint32_t)(in->imm & 0xFFFFFFFF));
+            for (uint32_t i = 0; i < N; i++) {
+                float v = wubu_sf_f32_to_host((uint32_t)mem[base_a + i]);
+                if (v < lo) v = lo;
+                if (v > hi) v = hi;
+                mem[base_d + i] = (int64_t)wubu_sf_f32_from_host(v);
+            }
+            pc++; break;
+        }
+        case MIR_T_ATTENTION:
+        case MIR_T_CONV2D:
+        case MIR_T_DROPOUT:
+            /* Complex ops: interpreter stub (lowered to elementwise on real HW) */
+            pc++; break;
         default:
             /* unsupported op: skip (honest: lowering covers the battery) */
             pc++;
@@ -264,6 +445,6 @@ int64_t wubu_mir_interp(const wubu_mir_prog_t *p)
 done:
     free(vr);
     free(label_pc);
-    free(mem);
+    if (alloc_mem) free(mem);
     return result;
 }

@@ -152,6 +152,37 @@ void wubu_mir_tgemm(wubu_mir_prog_t *p, wubu_vr_t a, wubu_vr_t b,
     }
 }
 
+/* ---- AGI tensor op builders ---- */
+static inline wubu_mir_instr_t* emit_tensor(wubu_mir_prog_t *p, wubu_mir_op_t op,
+                                            wubu_vr_t a, wubu_vr_t b, wubu_vr_t dst,
+                                            int64_t imm) {
+    wubu_mir_instr_t *i = emit(p);
+    if (i) { i->op = op; i->a = a; i->b = b; i->dst = dst; i->imm = imm; }
+    return i;
+}
+#define TENSOR_OP(name, op) \
+void wubu_mir_##name(wubu_mir_prog_t *p, wubu_vr_t a, wubu_vr_t b, wubu_vr_t dst, int64_t imm) { \
+    emit_tensor(p, op, a, b, dst, imm); }
+
+TENSOR_OP(tsoftmax,    MIR_T_SOFTMAX)
+TENSOR_OP(trms_norm,   MIR_T_RMS_NORM)
+TENSOR_OP(tlayernorm,  MIR_T_LAYERNORM)
+TENSOR_OP(tattention,  MIR_T_ATTENTION)
+TENSOR_OP(tembedding,  MIR_T_EMBEDDING)
+TENSOR_OP(tswiglu,     MIR_T_SWIGLU)
+TENSOR_OP(trope,       MIR_T_ROPE)
+TENSOR_OP(tconv2d,     MIR_T_CONV2D)
+TENSOR_OP(tdropout,    MIR_T_DROPOUT)
+TENSOR_OP(targmax,     MIR_T_ARGMAX)
+TENSOR_OP(tsum,        MIR_T_SUM)
+TENSOR_OP(texp,        MIR_T_EXP)
+TENSOR_OP(tsqrt,       MIR_T_SQRT)
+TENSOR_OP(ttanh,       MIR_T_TANH)
+TENSOR_OP(tsigmoid,    MIR_T_SIGMOID)
+TENSOR_OP(tgelu,       MIR_T_GELU)
+TENSOR_OP(trelu,       MIR_T_RELU)
+TENSOR_OP(tclamp,      MIR_T_CLAMP)
+
 void wubu_mir_ret(wubu_mir_prog_t *p, wubu_vr_t v)
 {
     wubu_mir_instr_t *i = emit(p);
