@@ -267,4 +267,7 @@ void wubu_mir_dump(const wubu_mir_prog_t *p);
  * Returns the vr0 value at MIR_RET. */
 int64_t wubu_mir_interp(const wubu_mir_prog_t *p);
 
+/* O5: convert MIR to SSA form (enables SCCP + GVN) */
+int wubu_mir_to_ssa(wubu_mir_prog_t *p);
+
 #endif /* WUBU_MIR_H */
