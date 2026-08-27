@@ -30,6 +30,7 @@ typedef enum {
     MIR_OPT_SCCP    = 128, /* sparse conditional constant propagation */
     MIR_OPT_SSA     = 256, /* convert to SSA form */
     MIR_OPT_GVN     = 512, /* global value numbering */
+    MIR_OPT_FUSE    = 1024,/* operator fusion */
 } mir_opt_flags_t;
 
 /* Run all requested optimization passes on program p.
@@ -54,5 +55,8 @@ int wubu_mir_sccp(wubu_mir_prog_t *p);
 
 /* Global Value Numbering */
 int wubu_mir_gvn(wubu_mir_prog_t *p);
+
+/* Operator fusion */
+int wubu_mir_fuse(wubu_mir_prog_t *p);
 
 #endif /* WUBU_MIR_OPT_H */

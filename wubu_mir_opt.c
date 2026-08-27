@@ -509,4 +509,5 @@ void wubu_mir_optimize(wubu_mir_prog_t *p, mir_opt_flags_t flags)
     if (flags & MIR_OPT_COMBINE) combine_pass(p);
     if (flags & MIR_OPT_CSE)     cse_pass(p);
     if (flags & MIR_OPT_GVN)     wubu_mir_gvn(p);
+    if (flags & MIR_OPT_FUSE)    wubu_mir_fuse(p);
 }

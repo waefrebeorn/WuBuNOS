@@ -166,7 +166,16 @@ typedef enum {
     MIR_T_RELU,
     /* T_CLAMP: elementwise clamp(x, lo, hi).
      * a=input(base), dst=output(base), imm packs lo/hi as f32 bits in upper/lower 32. */
-    MIR_T_CLAMP
+    MIR_T_CLAMP,
+    /* T_GEMM_BIAS: fused GEMM + bias addition.
+     * Same encoding as T_GEMM plus b=bias_base. */
+    MIR_T_GEMM_BIAS,
+    /* FUSED_AFFINE: y = x * weight + bias (single instruction).
+     * dst=output, a=x, b=weight; imm packs bias VR in upper 32 bits. */
+    MIR_FUSED_AFFINE,
+    /* T_LAYERNORM_APPLY: fused layer norm application (gamma, beta).
+     * dst=output, a=centered, b=params; imm packs gamma/beta indices. */
+    MIR_T_LAYERNORM_APPLY
 } wubu_mir_op_t;
 
 #define MIR_MAX_FUNCTIONS 256
