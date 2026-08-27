@@ -200,6 +200,48 @@ void wubu_tensor_dispatch(int64_t *mem, uint32_t op,
         case MIR_T_DROPOUT:    tensor_dropout(mem, a, b, dst, N); break;
         case MIR_T_ROPE:       tensor_rope(mem, a, b, dst, N); break;
         case MIR_T_CONV2D:     tensor_conv2d(mem, a, b, dst, N); break;
+        case MIR_F16_TO_F32: {
+            /* Elementwise: convert f16 vector to f32 */
+            for (int64_t i = 0; i < N; i++) {
+                uint16_t h = (uint16_t)(uint32_t)mem[a + i];
+                store_f32(mem, dst + i, wubu_sf_f32_from_host(wubu_sf_f16_to_f32(h)));
+            }
+            break;
+        }
+        case MIR_F32_TO_F16: {
+            for (int64_t i = 0; i < N; i++) {
+                float f = load_f32(mem, a + i);
+                mem[dst + i] = (int64_t)(int32_t)wubu_sf_f32_to_f16(wubu_sf_f32_from_host(f));
+            }
+            break;
+        }
+        case MIR_F16_ADD: {
+            for (int64_t i = 0; i < N; i++) {
+                uint16_t ah = (uint16_t)(uint32_t)mem[a + i];
+                uint16_t bh = (uint16_t)(uint32_t)mem[b + i];
+                uint32_t rf = wubu_sf_f32_add(wubu_sf_f16_to_f32(ah), wubu_sf_f16_to_f32(bh));
+                mem[dst + i] = (int64_t)(int32_t)wubu_sf_f32_to_f16(rf);
+            }
+            break;
+        }
+        case MIR_F16_MUL: {
+            for (int64_t i = 0; i < N; i++) {
+                uint16_t ah = (uint16_t)(uint32_t)mem[a + i];
+                uint16_t bh = (uint16_t)(uint32_t)mem[b + i];
+                uint32_t rf = wubu_sf_f32_mul(wubu_sf_f16_to_f32(ah), wubu_sf_f16_to_f32(bh));
+                mem[dst + i] = (int64_t)(int32_t)wubu_sf_f32_to_f16(rf);
+            }
+            break;
+        }
+        case MIR_F16_DIV: {
+            for (int64_t i = 0; i < N; i++) {
+                uint16_t ah = (uint16_t)(uint32_t)mem[a + i];
+                uint16_t bh = (uint16_t)(uint32_t)mem[b + i];
+                uint32_t rf = wubu_sf_f32_div(wubu_sf_f16_to_f32(ah), wubu_sf_f16_to_f32(bh));
+                mem[dst + i] = (int64_t)(int32_t)wubu_sf_f32_to_f16(rf);
+            }
+            break;
+        }
         default: break;
     }
 }

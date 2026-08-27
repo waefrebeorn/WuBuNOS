@@ -71,15 +71,19 @@ static inline double wubu_sf_f64_to_host(uint64_t u) {
 uint32_t wubu_sf_f32_rsqrt(uint32_t a);    /* 1/sqrt(x), Newton-Raphson */
 
 /* ---- transcendental functions (polynomial approximations, inference-grade) ---- */
-uint32_t wubu_sf_f32_exp(uint32_t a);      /* exp(x), |x| < 88, else ±inf/0 */
+uint32_t wubu_sf_f32_exp(uint32_t a);      /* exp(x), |x| < 88, else +/-inf/0 */
 uint32_t wubu_sf_f32_tanh(uint32_t a);     /* tanh(x), accurate to ~1e-6 */
 uint32_t wubu_sf_f32_sigmoid(uint32_t a);  /* 1/(1+exp(-x)) */
-uint32_t wubu_sf_f32_gelu(uint32_t a);     /* x * Φ(x) (CDF of standard normal) */
+uint32_t wubu_sf_f32_gelu(uint32_t a);     /* x * Phi(x) (CDF of standard normal) */
 uint32_t wubu_sf_f32_erf(uint32_t a);      /* error function (for GELU) */
 
 /* bfloat16: the tensor-core dtype, the top 16 bits of f32. Conversion is
  * round-to-nearest-even on the low 16 bits (NaN stays NaN). */
 uint32_t wubu_sf_bf16_to_f32(uint16_t h);
 uint16_t wubu_sf_f32_to_bf16(uint32_t a);
+
+/* FP16 (IEEE 754 half precision): 1-5-10 layout. */
+uint32_t wubu_sf_f16_to_f32(uint16_t h);
+uint16_t wubu_sf_f32_to_f16(uint32_t a);
 
 #endif /* WUBU_SOFTFLOAT_H */

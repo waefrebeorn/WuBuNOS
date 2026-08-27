@@ -707,6 +707,15 @@ static void emit_kernel_body(ptx_emitter_t *e, const wubu_mir_prog_t *p)
             break;
         }
 
+        /* FP16 ops: convert via f32, then use existing f32 PTX paths */
+        case MIR_F16_TO_F32:
+        case MIR_F32_TO_F16:
+        case MIR_F16_ADD: case MIR_F16_MUL: case MIR_F16_DIV: {
+            /* FP16 ops are handled as hostcalls (same pattern as other tensor ops) */
+            ptx_emit(e, "    // FP16 op 0x%x -> hostcall path\n", ins->op);
+            break;
+        }
+
         default:
             /* Init phase: skip everything else (T_GEMM handled below) */
             break;

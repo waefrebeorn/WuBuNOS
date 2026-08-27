@@ -94,6 +94,25 @@ typedef enum {
     /* bfloat16: the AGI tensor dtype. bf16 travels as uint16 in low bits. */
     MIR_BF16_TO_F32,   /* dst = widen_bf16(a)   (exact) */
     MIR_F32_TO_BF16,   /* dst = narrow_f32(a)   (RNE) */
+    /* FP16 (IEEE 754 half): 5-bit exp, 10-bit mantissa.
+     * Travels as uint16 in low bits; sign-extended to f32 on widen. */
+    MIR_F16_TO_F32,    /* dst = widen_f16(a)    (exact) */
+    MIR_F32_TO_F16,    /* dst = narrow_f32(a)   (RNE) */
+    MIR_F16_ADD,       /* dst = f16(a) + f16(b)  (via f32) */
+    MIR_F16_MUL,       /* dst = f16(a) * f16(b)  (via f32) */
+    MIR_F16_DIV,       /* dst = f16(a) / f16(b)  (via f32) */
+    /* ---- Quantization ops (INT8 for inference) ---- */
+    /* Quantize f32 to INT8: scale by (127/max_val), clamp [-128,127].
+     * a=input(base), b=scale(base, float), dst=output(base), imm=N.
+     * Stores int8 as int32 (sign-extended) for retro-ISA compatibility. */
+    MIR_QUANTIZE_I8,   /* dst[i] = clamp(f32[i] * scale, -128, 127) */
+    /* Dequantize INT8 to f32: multiply by scale.
+     * a=input(base), b=scale(base), dst=output(base), imm=N. */
+    MIR_DEQUANTIZE_I8, /* dst[i] = int8[i] * scale */
+    /* INT8 matrix multiply: C += A*B where A,B,C are int8 matrices.
+     * a=A(base), b=B(base), dst=C(base); imm packs M,N,K.
+     * Accumulates into int32 to prevent overflow. */
+    MIR_T_GEMM_I8,
     /* T_GEMM: tensor matrix multiply C += A*B (int64 elements).
      * vrs: a=A(base), b=B(base), dst=C(base); imm packs M,N,K:
      *   imm = ((uint64_t)M << 22) | ((uint64_t)N << 11) | (uint64_t)K

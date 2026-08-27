@@ -204,6 +204,11 @@ int64_t wubu_mir_interp(const wubu_mir_prog_t *p)
         case MIR_F64_TO_F32: vr[in->dst] = (int32_t)wubu_sf_f64_to_f32((uint64_t)vr[in->a]); pc++; break;
         case MIR_BF16_TO_F32: vr[in->dst] = (int32_t)wubu_sf_bf16_to_f32((uint16_t)vr[in->a]); pc++; break;
         case MIR_F32_TO_BF16: vr[in->dst] = (int16_t)wubu_sf_f32_to_bf16((uint32_t)vr[in->a]); pc++; break;
+        case MIR_F16_TO_F32:  vr[in->dst] = (int32_t)wubu_sf_f16_to_f32((uint16_t)vr[in->a]); pc++; break;
+        case MIR_F32_TO_F16:  vr[in->dst] = (int16_t)wubu_sf_f32_to_f16((uint32_t)vr[in->a]); pc++; break;
+        case MIR_F16_ADD:  { uint32_t a = wubu_sf_f16_to_f32((uint16_t)vr[in->a]); uint32_t b = wubu_sf_f16_to_f32((uint16_t)vr[in->b]); uint32_t r = wubu_sf_f32_add(a, b); vr[in->dst] = (int32_t)wubu_sf_f32_to_f16(r); pc++; break; }
+        case MIR_F16_MUL:  { uint32_t a = wubu_sf_f16_to_f32((uint16_t)vr[in->a]); uint32_t b = wubu_sf_f16_to_f32((uint16_t)vr[in->b]); uint32_t r = wubu_sf_f32_mul(a, b); vr[in->dst] = (int32_t)wubu_sf_f32_to_f16(r); pc++; break; }
+        case MIR_F16_DIV:  { uint32_t a = wubu_sf_f16_to_f32((uint16_t)vr[in->a]); uint32_t b = wubu_sf_f16_to_f32((uint16_t)vr[in->b]); uint32_t r = wubu_sf_f32_div(a, b); vr[in->dst] = (int32_t)wubu_sf_f32_to_f16(r); pc++; break; }
         case MIR_FRET: return vr[0];
         case MIR_T_GEMM: {
             /* C += A*B, int64, row-major, packed M/N/K in imm */

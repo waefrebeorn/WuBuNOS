@@ -645,3 +645,51 @@ uint32_t wubu_sf_f32_gelu(uint32_t a) {
     float phi = 0.5f * (1.0f + erf_val);
     return wubu_sf_f32_from_host(x * phi);
 }
+/* ---- FP16 (IEEE 754 half) conversions ---- */
+
+uint32_t wubu_sf_f16_to_f32(uint16_t h)
+{
+    /* FP16: 1-5-10 layout. FP32: 1-8-23.
+     * Sign is bit 15. Exp16 is bits 14..10 (bias 15).
+     * Expand: sign->31, exp->126..149 (bias 15->127 = +112), mantissa->52..62. */
+    uint32_t sign = (uint32_t)(h >> 15) & 1;
+    uint32_t exp  = (uint32_t)(h >> 10) & 0x1F;
+    uint32_t mant = (uint32_t)h & 0x3FF;
+    uint32_t f32;
+    if (exp == 0) {
+        if (mant == 0) {
+            f32 = sign << 31;
+        } else {
+            int shift = 1;
+            while ((mant & (1u << 10)) == 0) { mant <<= 1; shift++; }
+            mant &= 0x3FF;
+            f32 = (sign << 31) | ((112 - shift) << 23) | (mant << 13);
+        }
+    } else if (exp == 31) {
+        f32 = (sign << 31) | (0xFFu << 23) | (mant << 13);
+    } else {
+        f32 = (sign << 31) | ((exp + 112) << 23) | (mant << 13);
+    }
+    return f32;
+}
+
+uint16_t wubu_sf_f32_to_f16(uint32_t a)
+{
+    /* FP32 -> FP16: round-to-nearest-even (RNE) */
+    uint32_t sign = (a >> 31) & 1;
+    uint32_t exp  = (a >> 23) & 0xFF;
+    uint32_t mant = a & 0x7FFFFFu;
+    if (exp == 0) return (uint16_t)(sign << 15);
+    if (exp > 142) return (uint16_t)((sign << 15) | 0x7C00u | (mant ? 0x200u : 0));
+    uint32_t nexp = (exp > 112) ? (exp - 112) : 0;
+    uint32_t nmant = (mant >> 13) & 0x3FF;
+    if (exp < 113) return (uint16_t)(sign << 15);
+    uint32_t round_bit = (mant >> 12) & 1;
+    uint32_t sticky = mant & 0xFFFu;
+    if (round_bit && (sticky || (nmant & 1))) {
+        nmant++;
+        if (nmant == 0x400) { nmant = 0; nexp++; }
+    }
+    if (nexp >= 31) return (uint16_t)((sign << 15) | 0x7C00u);
+    return (uint16_t)((sign << 15) | (nexp << 10) | nmant);
+}

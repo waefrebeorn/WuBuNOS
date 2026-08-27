@@ -688,6 +688,8 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
                 break;
             }
 
+            case MIR_F16_TO_F32: case MIR_F32_TO_F16:
+            case MIR_F16_ADD: case MIR_F16_MUL: case MIR_F16_DIV:
             case MIR_DITOF: case MIR_DTOI: {
                 int sc = VR_ENC(in->a);
                 if (sc >= 0) emit_mov_reg(&e, 0, sc);

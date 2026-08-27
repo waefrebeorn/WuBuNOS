@@ -176,3 +176,8 @@ test_genetic: tools/test_genetic.c wubu_genetic_kernels.c wubu_genetic_kernels.h
 test_online_learn: tools/test_online_learn.c wubu_online_learn.c wubu_online_learn.h wubu_cost_model.c wubu_cost_model.h wubu_auto_tune.c wubu_tgemm.c
 	$(CC) $(CFLAGS) -I. $< wubu_online_learn.c wubu_cost_model.c wubu_auto_tune.c wubu_tgemm.c -lm -o $@
 	./$@
+
+# FP16 + quantization test (precision format expansion)
+test_fp16: tools/test_fp16.c wubu_softfloat.c wubu_softfloat.h
+	$(CC) $(CFLAGS) -I. $< wubu_softfloat.c -lm -o $@
+	./$@
