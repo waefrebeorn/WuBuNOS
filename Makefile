@@ -161,3 +161,8 @@ test_crash_items: tools/test_crash_items.c
 test_auto_tune: tools/test_auto_tune.c wubu_auto_tune.c wubu_auto_tune.h wubu_tgemm.c wubu_tgemm.h
 	$(CC) $(CFLAGS) -I. $< wubu_auto_tune.c wubu_tgemm.c -lm -o $@
 	./$@
+
+# Learned cost model test
+test_cost_model: tools/test_cost_model.c wubu_cost_model.c wubu_cost_model.h wubu_auto_tune.c wubu_auto_tune.h wubu_tgemm.c wubu_tgemm.h
+	$(CC) $(CFLAGS) -I. $< wubu_cost_model.c wubu_auto_tune.c wubu_tgemm.c -lm -o $@
+	./$@
