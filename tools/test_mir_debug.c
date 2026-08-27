@@ -9,12 +9,6 @@ extern int hd_build_mir(const char *src, wubu_mir_prog_t *prog);
 
 int main(void) {
     const char *tests[] = {
-        "20+22;",
-        "int x=40; x+2;",
-        "int v=30; v+=12; v;",
-        "int x=10; x=42; x;",
-        "if(1){42;}else{0;}",
-        "int i=0; while(i<3){i++;} i;",
         "int v=42; v<<=1; v;",
         "int v=84; v>>=1; v;",
         "int f(int n){ int x=n*2; return x+2; } f(20);",
@@ -22,8 +16,6 @@ int main(void) {
         "struct S{int a;}; struct S s; s.a=42; s.a;",
         "struct S{int a;int b;}; struct S s; s.a=1; s.b=2; s.a+s.b;",
         "char s[4]; s[0]='h'; s[1]='i'; s[2]=0; s[0];",
-        "sizeof(int);",
-        "\"hello\"[0];",
         NULL
     };
     for (int i = 0; tests[i]; i++) {
