@@ -44,13 +44,18 @@ int main(int argc,char**argv){
 
     double t0=nowsec();naive_gemm(Cref,A,B,M,N,K);double t_ref=nowsec()-t0;
 
-    /* correctness: verify all entries via interpreter */
+    /* correctness: verify ALL entries via interpreter */
     int bad=0;
-    int verify_n = (M*N < 64) ? M*N : 8;
-    for(int idx=0;idx<verify_n;idx++){
+    int verify_n = M*N;
+    int mis_reported = 0;
+    for(int idx=0; idx<verify_n; idx++){
         wubu_mir_prog_t rp;build_prog(&rp,A,B,M,N,K,offA,offB,offC,total,idx);
         int64_t got=wubu_mir_interp(&rp);
-        if(got!=Cref[idx]){if(bad<3)printf("MISMATCH C[%d] interp=%lld ref=%lld\n",idx,(long long)got,(long long)Cref[idx]);bad++;}
+        if(got!=Cref[idx]){
+            if(mis_reported<5)printf("MISMATCH C[%d] interp=%lld ref=%lld\n",idx,(long long)got,(long long)Cref[idx]);
+            mis_reported++;
+            bad++;
+        }
         wubu_mir_free(&rp);
     }
 
