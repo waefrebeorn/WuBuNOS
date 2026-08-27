@@ -15,6 +15,13 @@ int main(void) {
         "int x=10; x=42; x;",
         "if(1){42;}else{0;}",
         "int i=0; while(i<3){i++;} i;",
+        "int v=42; v<<=1; v;",
+        "int v=84; v>>=1; v;",
+        "int f(int n){ int x=n*2; return x+2; } f(20);",
+        "int a[]={1,2,3}; a[2];",
+        "struct S{int a;}; struct S s; s.a=42; s.a;",
+        "struct S{int a;int b;}; struct S s; s.a=1; s.b=2; s.a+s.b;",
+        "char s[4]; s[0]='h'; s[1]='i'; s[2]=0; s[0];",
         "sizeof(int);",
         "\"hello\"[0];",
         NULL
@@ -26,7 +33,7 @@ int main(void) {
             printf("=== %s === BUILD FAILED (rc=%d)\n\n", tests[i]);
             continue;
         }
-        printf("=== %s === (%d instrs, %d funcs)\n", tests[i], prog.n, prog.n_funcs);
+        printf("=== %s === (%d instrs)\n", tests[i], prog.n);
         for (int j = 0; j < prog.n; j++) {
             const wubu_mir_instr_t *ins = &prog.ins[j];
             printf("  [%d] op=%d dst=%d a=%d b=%d imm=%lld label=%u func=%u\n",
