@@ -805,28 +805,12 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             /* rdi = &mem[0]  (lea rdi,[rbp-mem_off]; modrm 0xBD = mod10 reg7 rm5(rbp+disp32))
              * 0x3D (mod00 rm101) would wrongly encode [rip+disp32]. */
             rex(&e,1,0,0,0); e8(&e,0x8D); e8(&e,0xBD); e32(&e,(uint32_t)(-(int32_t)e.mem_off));
-            /* rsi = A, rdx = B, rcx = C — load constant values directly.
-             * The register allocator may reuse VR registers between the
-             * MIR_CONST and MIR_T_GEMM instructions (hundreds of MIR_STORE
-             * for array init). To guarantee correctness, scan backwards to
-             * find the MIR_CONST that produced each VR and emit the constant
-             * value directly via movabs. */
-            {
-                int64_t a_val = 0, b_val = 0, c_val = 0;
-                for (int si = (int)(in - p->ins) - 1; si >= 0; si--) {
-                    const wubu_mir_instr_t *ci = &p->ins[si];
-                    if (ci->op == 1) {
-                        if (ci->dst == in->a) a_val = ci->imm;
-                        if (ci->dst == in->b) b_val = ci->imm;
-                        if (ci->dst == in->dst) c_val = ci->imm;
-                    }
-                    if (a_val && b_val && c_val) break;
-                }
-                /* Emit 32-bit mov (zero-extends to 64-bit). Avoids peephole issues. */
-                e8(&e, 0xBE); e32(&e, (uint32_t)a_val);  /* mov esi, imm32 */
-                e8(&e, 0xBA); e32(&e, (uint32_t)b_val);  /* mov edx, imm32 */
-                e8(&e, 0xB9); e32(&e, (uint32_t)c_val);  /* mov ecx, imm32 */
-            }
+            /* rsi = A (vr value / slot index) */
+            if (sa>=0) emit_mov_reg(&e,6,sa);            else emit_load_rbp(&e,6,spill_off(assign, assign_count, &e, in->a));
+            /* rdx = B */
+            if (sb>=0) emit_mov_reg(&e,2,sb);            else emit_load_rbp(&e,2,spill_off(assign, assign_count, &e, in->b));
+            /* rcx = C */
+            if (sd>=0) emit_mov_reg(&e,1,sd);            else emit_load_rbp(&e,1,spill_off(assign, assign_count, &e, in->dst));
             /* r8d = M (41 B8)  — but 41 B8 matches shrink_movabs? No, B8 here is
              * a reg-load not movabs: shrink checks `code[i]==0x48` for the plain
              * case. 41 B8 is the `need_rex_b` (0x49) branch ONLY. 41 != 49, so

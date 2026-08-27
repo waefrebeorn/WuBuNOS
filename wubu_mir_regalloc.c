@@ -147,6 +147,13 @@ wubu_reg_assign_t *wubu_mir_alloc_regs(const wubu_mir_prog_t *p,
                 first_def[in->dst] = (int32_t)i;
             last_use[in->dst] = (int32_t)i;
         }
+        /* MIR_T_GEMM reads dst (C base address) AND writes to it —
+         * dst must stay live through the T_GEMM instruction. */
+        if (in->op == MIR_T_GEMM) {
+            if (first_def[in->dst] < 0)
+                first_def[in->dst] = (int32_t)i;
+            last_use[in->dst] = (int32_t)i;
+        }
         int ns = op_num_srcs(in->op);
         if (ns >= 1) last_use[in->a] = (int32_t)i;
         if (ns >= 2) last_use[in->b] = (int32_t)i;
