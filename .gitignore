@@ -18,3 +18,4 @@ hedge_verify
 /test_elf_cubin
 /test_fuzz_diff
 /peephole_superopt_bin
+.gitignore
