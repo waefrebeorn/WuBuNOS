@@ -5,19 +5,20 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include "holyd_codegen.h"
 
-extern void *jit_alloc_exec(size_t size) {
+void *jit_alloc_exec(size_t size) {
     void *p = mmap(NULL, size, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
     return p;
 }
 
-extern void jit_free_exec(void *ptr, size_t size) {
+void jit_free_exec(void *ptr, size_t size) {
     if (ptr) munmap(ptr, size);
 }
 
 /* jit_lock_exec: in standalone mode, buffers are already RWX (mmap above).
  * The full JIT uses this to flip permissions after codegen. Here it's a no-op. */
-extern void *jit_lock_exec(void *ptr, size_t size) {
+void *jit_lock_exec(void *ptr, size_t size) {
     (void)size;
     return ptr;
 }

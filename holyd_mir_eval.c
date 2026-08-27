@@ -178,6 +178,8 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n);
  * - DEREF  -> the pointer's held value */
 static wubu_vr_t mir_address_of(HDMirGen *g, const HDASTNode *n) {
     if (!n) return 0;
+    if (n->kind == HD_AST_STRING_LIT)
+        return mir_gen_expr(g, n);  /* returns the allocated address */
     if (n->kind == HD_AST_IDENT) {
         wubu_vr_t addr = mir_find_var_addr(g, n->ident);
         if (addr == 0) return 0;
@@ -606,6 +608,39 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         wubu_mir_place_label(g->prog, end_label);
         return merge;
     }
+    case HD_AST_SIZEOF: {
+        /* sizeof(type) or sizeof(expr) — emit the type size as a constant. */
+        int size = 8; /* default: pointer */
+        if (n->type) {
+            switch (n->type->kind) {
+            case HD_TYPE_VOID:   size = 1; break;
+            case HD_TYPE_I8:     size = 1; break;
+            case HD_TYPE_U8:     size = 1; break;
+            case HD_TYPE_I16:    size = 2; break;
+            case HD_TYPE_U16:    size = 2; break;
+            case HD_TYPE_I32:    size = 4; break;
+            case HD_TYPE_U32:    size = 4; break;
+            case HD_TYPE_I64:    size = 8; break;
+            case HD_TYPE_U64:    size = 8; break;
+            case HD_TYPE_F64:    size = 8; break;
+            case HD_TYPE_BOOL:   size = 1; break;
+            case HD_TYPE_PTR:    size = 8; break;
+            case HD_TYPE_ARRAY:  size = (int)(n->type->size > 0 ? n->type->size : 4); break;
+            case HD_TYPE_STRUCT: size = (int)(n->type->size > 0 ? n->type->size : 4); break;
+            default:             size = 8; break;
+            }
+        }
+        return wubu_mir_const(g->prog, (int64_t)size);
+    }
+    case HD_AST_STRING_LIT: {
+        /* Store string in memory and return address. */
+        size_t len = strlen(n->str_val) + 1; /* include NUL */
+        wubu_vr_t addr = wubu_mir_alloc(g->prog, (uint32_t)len);
+        for (size_t i = 0; i < len; i++)
+            wubu_mir_store(g->prog, wubu_mir_binop(g->prog, MIR_ADD, addr, wubu_mir_const(g->prog, (int64_t)i)),
+                           wubu_mir_const(g->prog, (int64_t)(unsigned char)n->str_val[i]));
+        return addr;
+    }
     case HD_AST_INDEX: {
         /* a[i] -> load from address_of(a) + i. array name decays to base;
          * pointer var loads its held value. */
@@ -729,12 +764,13 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
     mir_collect_funcs(&g, ast);
 
     /* Phase 2: generate top-level (module) statements, skipping function
-     * definitions (their bodies are emitted separately in Phase 3). */
+     * definitions (their bodies are emitted separately in Phase 3).
+     * Track the last expression result so the top-level RETURN carries it. */
     wubu_vr_t top_val = 0;
     if (ast->kind == HD_AST_BLOCK) {
         for (uint32_t i = 0; i < ast->n_stmts; i++)
             if (ast->stmts[i]->kind != HD_AST_FUNC_DECL)
-                mir_gen_stmt(&g, ast->stmts[i]);
+                top_val = mir_gen_stmt(&g, ast->stmts[i]);
     } else {
         top_val = mir_gen_expr(&g, ast);
     }

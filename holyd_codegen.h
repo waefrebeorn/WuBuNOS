@@ -9,6 +9,7 @@
 
 /* JIT Memory Management */
 void *jit_alloc_exec(size_t size);
+void *jit_lock_exec(void *ptr, size_t size);
 void jit_free_exec(void *ptr, size_t size);
 
 /* -- Executable Output -------------------------------------------- */
