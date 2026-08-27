@@ -171,3 +171,8 @@ test_cost_model: tools/test_cost_model.c wubu_cost_model.c wubu_cost_model.h wub
 test_genetic: tools/test_genetic.c wubu_genetic_kernels.c wubu_genetic_kernels.h wubu_genome.h wubu_tgemm.c wubu_tgemm.h
 	$(CC) $(CFLAGS) -I. $< wubu_genetic_kernels.c wubu_tgemm.c -lm -o $@
 	./$@
+
+# Online learning test (Phase 4: self-improving compiler)
+test_online_learn: tools/test_online_learn.c wubu_online_learn.c wubu_online_learn.h wubu_cost_model.c wubu_cost_model.h wubu_auto_tune.c wubu_tgemm.c
+	$(CC) $(CFLAGS) -I. $< wubu_online_learn.c wubu_cost_model.c wubu_auto_tune.c wubu_tgemm.c -lm -o $@
+	./$@
