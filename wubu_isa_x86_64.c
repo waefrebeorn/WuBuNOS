@@ -279,21 +279,17 @@ static void wubu_tgemm_avx512(int64_t *mem, int64_t A, int64_t B,
                         __m512i c3 = _mm512_setzero_si512();
 
                         for (int k = 0; k < kc; k++) {
-                            /* Load A[i:i+8, k] — contiguous in col-major layout */
                             __m512i a = _mm512_loadu_si512(A_packed + (size_t)k * MC + i);
-                            /* Broadcast B[k, j..j+3] to 4 separate vectors */
                             __m512i b0 = _mm512_set1_epi64(B_packed[(size_t)k * nc + j + 0]);
                             __m512i b1 = _mm512_set1_epi64(B_packed[(size_t)k * nc + j + 1]);
                             __m512i b2 = _mm512_set1_epi64(B_packed[(size_t)k * nc + j + 2]);
                             __m512i b3 = _mm512_set1_epi64(B_packed[(size_t)k * nc + j + 3]);
-                            /* Accumulate: c[col] += a * b[col] */
                             c0 = _mm512_add_epi64(c0, _mm512_mullo_epi64(a, b0));
                             c1 = _mm512_add_epi64(c1, _mm512_mullo_epi64(a, b1));
                             c2 = _mm512_add_epi64(c2, _mm512_mullo_epi64(a, b2));
                             c3 = _mm512_add_epi64(c3, _mm512_mullo_epi64(a, b3));
                         }
 
-                        /* Store accumulators to C[i3+i:i3+i+8, j3+j:j3+j+4] */
                         int64_t *c_base = mem + C + (int64_t)(i3 + i) * N + j3 + j;
                         int64_t tmp[4][8];
                         _mm512_storeu_si512(tmp[0], c0);
@@ -309,7 +305,7 @@ static void wubu_tgemm_avx512(int64_t *mem, int64_t A, int64_t B,
                     }
                 }
 
-                /* Handle remaining rows (mc % MR != 0) with scalar kernel */
+                /* Handle remaining rows (mc % MR != 0) with scalar */
                 int i_remain = (mc / MR) * MR;
                 for (int i = i_remain; i < mc; i++) {
                     for (int j = 0; j < nc; j++) {
@@ -357,7 +353,20 @@ void wubu_tgemm_parallel(int64_t *stack_mem, int64_t A, int64_t B,
     /* Use AVX-512 kernel if available — it has its own cache blocking
      * and micro-kernel. Otherwise fall back to scalar 4-row parallel. */
 #if HAS_AVX512
-    wubu_tgemm_avx512(mem, A, B, C, M, N, K);
+    /* Multi-threaded AVX-512: split M into bands, each thread processes
+     * one band. B is read-only (shared), C bands are independent. */
+    {
+        int nthreads = nt;
+        int rows_per = (M + nthreads - 1) / nthreads;
+        /* Round up to multiple of MR for clean micro-kernel boundaries */
+        rows_per = ((rows_per + MR - 1) / MR) * MR;
+        #pragma omp parallel for schedule(static)
+        for (int i0 = 0; i0 < M; i0 += rows_per) {
+            int mc = i0 + rows_per <= M ? rows_per : M - i0;
+            if (mc > 0)
+                wubu_tgemm_avx512(mem, A + (int64_t)i0*K, B, C + (int64_t)i0*N, mc, N, K);
+        }
+    }
 #else
     /* Parallelize over 4-row blocks. wubu_tgemm_scalar processes 4 rows
      * per call (plus a tail for M%4). Each block of rows is independent:
