@@ -183,7 +183,12 @@ test_fp16: tools/test_fp16.c wubu_softfloat.c wubu_softfloat.h
 	$(CC) $(CFLAGS) -I. $< wubu_softfloat.c -lm -o $@
 	./$@
 
+# HLIR test
+test_hlir: tools/test_hlir.c wubu_hlir.c wubu_hlir.h wubu_mir.c wubu_mir.h
+	$(CC) $(CFLAGS) -I. $< wubu_hlir.c wubu_mir.c -lm -o $@
+	./$@
+
 # WASM backend test
-test_wasm_backend: tools/test_wasm_backend.c jit/wubu_isa_wasm.c jit/wubu_isa_wasm.h $(MIR) $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) jit_stub.c jit_stubs_arm64.c
-	$(CC) $(CFLAGS) -I. -Ijit $^ $(LDFLAGS) -o $@
+test_wasm_backend: tools/test_wasm_backend.c jit/wubu_isa_wasm.c jit/wubu_isa_wasm.h wubu_isa_driver.h wubu_mir.h wubu_mir.c
+	$(CC) $(CFLAGS) -I. -Ijit $< jit/wubu_isa_wasm.c wubu_mir.c -lm -o $@
 	./$@
