@@ -166,3 +166,8 @@ test_auto_tune: tools/test_auto_tune.c wubu_auto_tune.c wubu_auto_tune.h wubu_tg
 test_cost_model: tools/test_cost_model.c wubu_cost_model.c wubu_cost_model.h wubu_auto_tune.c wubu_auto_tune.h wubu_tgemm.c wubu_tgemm.h
 	$(CC) $(CFLAGS) -I. $< wubu_cost_model.c wubu_auto_tune.c wubu_tgemm.c -lm -o $@
 	./$@
+
+# Genetic kernel evolution test (Phase 4: self-improving compiler)
+test_genetic: tools/test_genetic.c wubu_genetic_kernels.c wubu_genetic_kernels.h wubu_genome.h wubu_tgemm.c wubu_tgemm.h
+	$(CC) $(CFLAGS) -I. $< wubu_genetic_kernels.c wubu_tgemm.c -lm -o $@
+	./$@
