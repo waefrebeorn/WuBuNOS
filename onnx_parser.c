@@ -355,7 +355,7 @@ int onnx_load_model(const char *filepath, hlir_graph_t *g) {
                                 }
                             }
 
-                            /* Look up input nodes by name */
+                            /* Look up input nodes by name — create placeholder if missing */
                             hlir_node_t *inp_nodes[16];
                             int n_inp = 0;
                             for (int j = 0; j < n_in && n_inp < 16; j++) {
@@ -366,6 +366,15 @@ int onnx_load_model(const char *filepath, hlir_graph_t *g) {
                                         inp_nodes[n_inp] = nodes[k];
                                         break;
                                     }
+                                }
+                                /* Create placeholder for graph inputs not yet in nodes[] */
+                                if (!inp_nodes[n_inp]) {
+                                    hlir_tensor_t shape;
+                                    memset(&shape, 0, sizeof(shape));
+                                    shape.nelems = 1;
+                                    inp_nodes[n_inp] = hlir_placeholder(g, input_names[j], &shape);
+                                    if (inp_nodes[n_inp] && n_nodes < 256)
+                                        nodes[n_nodes++] = inp_nodes[n_inp];
                                 }
                                 n_inp++;
                             }
