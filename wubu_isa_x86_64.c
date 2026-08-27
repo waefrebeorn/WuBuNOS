@@ -170,6 +170,9 @@ static void x86_patch_push(x86_patch_t **patches, size_t *np, size_t *cap,
 static void wubu_tgemm_scalar(int64_t *mem, int64_t A, int64_t B,
                               int64_t C, int M, int N, int K)
 {
+    /* Cache-friendly order: iterate k on the middle level so B accesses
+     * are sequential (B[k*N+j] for fixed k, varying j). This reduces
+     * cache misses for large N where stride-N access washes out L1/L2. */
     int i;
     for (i = 0; i + 3 < M; i += 4) {
         const int64_t *a0 = &mem[A + (int64_t)(i+0) * K];
@@ -180,35 +183,26 @@ static void wubu_tgemm_scalar(int64_t *mem, int64_t A, int64_t B,
         int64_t       *c1 = &mem[C + (int64_t)(i+1) * N];
         int64_t       *c2 = &mem[C + (int64_t)(i+2) * N];
         int64_t       *c3 = &mem[C + (int64_t)(i+3) * N];
-        for (int j = 0; j < N; j++) {
-            int64_t s0 = c0[j], s1 = c1[j], s2 = c2[j], s3 = c3[j];
-            const int64_t *bk = &mem[B] + j;
-            for (int k = 0; k + 3 < K; k += 4) {
-                const int64_t b0 = bk[(size_t)(k+0) * N];
-                const int64_t b1 = bk[(size_t)(k+1) * N];
-                const int64_t b2 = bk[(size_t)(k+2) * N];
-                const int64_t b3 = bk[(size_t)(k+3) * N];
-                s0 += a0[k+0]*b0 + a0[k+1]*b1 + a0[k+2]*b2 + a0[k+3]*b3;
-                s1 += a1[k+0]*b0 + a1[k+1]*b1 + a1[k+2]*b2 + a1[k+3]*b3;
-                s2 += a2[k+0]*b0 + a2[k+1]*b1 + a2[k+2]*b2 + a2[k+3]*b3;
-                s3 += a3[k+0]*b0 + a3[k+1]*b1 + a3[k+2]*b2 + a3[k+3]*b3;
+        for (int k = 0; k < K; k++) {
+            const int64_t *bj = &mem[B + (int64_t)k * N];  /* B row k, sequential access */
+            const int64_t a0k = a0[k], a1k = a1[k], a2k = a2[k], a3k = a3[k];
+            for (int j = 0; j < N; j++) {
+                const int64_t b = bj[j];
+                c0[j] += a0k * b;
+                c1[j] += a1k * b;
+                c2[j] += a2k * b;
+                c3[j] += a3k * b;
             }
-            for (int k = K & ~3; k < K; k++) {
-                const int64_t b = bk[(size_t)k * N];
-                s0 += a0[k]*b; s1 += a1[k]*b; s2 += a2[k]*b; s3 += a3[k]*b;
-            }
-            c0[j] = s0; c1[j] = s1; c2[j] = s2; c3[j] = s3;
         }
     }
-    for (; i < M; i++) {                       /* tail rows */
+    for (; i < M; i++) {
         const int64_t *a0 = &mem[A + (int64_t)i * K];
         int64_t       *c0 = &mem[C + (int64_t)i * N];
-        for (int j = 0; j < N; j++) {
-            int64_t s0 = c0[j];
-            const int64_t *bk = &mem[B] + j;
-            for (int k = 0; k < K; k++)
-                s0 += a0[k] * bk[(size_t)k * N];
-            c0[j] = s0;
+        for (int k = 0; k < K; k++) {
+            const int64_t *bj = &mem[B + (int64_t)k * N];
+            const int64_t a0k = a0[k];
+            for (int j = 0; j < N; j++)
+                c0[j] += a0k * bj[j];
         }
     }
 }
