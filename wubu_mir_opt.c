@@ -499,6 +499,8 @@ static void cse_pass(wubu_mir_prog_t *p)
 /* ---- Main optimizer entry point ---- */
 void wubu_mir_optimize(wubu_mir_prog_t *p, mir_opt_flags_t flags)
 {
+    if (flags & MIR_OPT_SSA)     wubu_mir_to_ssa(p);
+    if (flags & MIR_OPT_SCCP)    wubu_mir_sccp(p);
     if (flags & MIR_OPT_FOLD)    fold_dce_pass(p);
     if (flags & MIR_OPT_STRENGTH) strength_pass(p);
     if (flags & MIR_OPT_DCE)     dce_pass(p);

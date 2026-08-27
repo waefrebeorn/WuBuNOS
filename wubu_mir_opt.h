@@ -27,18 +27,28 @@ typedef enum {
     MIR_OPT_UNROLL  = 16,  /* loop unrolling */
     MIR_OPT_COMBINE = 32,  /* instruction combining (algebraic identities) */
     MIR_OPT_CSE     = 64,  /* common subexpression elimination */
+    MIR_OPT_SCCP    = 128, /* sparse conditional constant propagation */
+    MIR_OPT_SSA     = 256, /* convert to SSA form */
 } mir_opt_flags_t;
 
 /* Run all requested optimization passes on program p.
  * Passes execute in a canonical order so later passes consume the
  * results of earlier ones:
- *   1. FOLD (if set)
- *   2. STRENGTH (if set)
- *   3. DCE (if set)
- *   4. LICM (if set)
- *   5. UNROLL (if set)
+ *   1. SSA (if set)
+ *   2. SCCP (if set)
+ *   3. FOLD (if set)
+ *   4. STRENGTH (if set)
+ *   5. DCE (if set)
+ *   6. LICM (if set)
+ *   7. UNROLL (if set)
  * Multiple passes of the same kind are NOT re-run; call again if you
  * want to iterate to a fixpoint. */
 void wubu_mir_optimize(wubu_mir_prog_t *p, mir_opt_flags_t flags);
+
+/* SSA construction */
+int wubu_mir_to_ssa(wubu_mir_prog_t *p);
+
+/* Sparse Conditional Constant Propagation */
+int wubu_mir_sccp(wubu_mir_prog_t *p);
 
 #endif /* WUBU_MIR_OPT_H */
