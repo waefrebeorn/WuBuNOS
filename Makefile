@@ -188,6 +188,11 @@ test_hlir: tools/test_hlir.c wubu_hlir.c wubu_hlir.h wubu_mir.c wubu_mir.h
 	$(CC) $(CFLAGS) -I. $< wubu_hlir.c wubu_mir.c -lm -o $@
 	./$@
 
+# HLIR→MIR lowering test
+test_hlir_lower: tools/test_hlir_lower.c wubu_hlir.c wubu_hlir.h wubu_mir.c wubu_mir_interp.c wubu_mir.h wubu_softfloat.c
+	$(CC) $(CFLAGS) -I. $< wubu_hlir.c wubu_mir.c wubu_mir_interp.c wubu_softfloat.c -lm -o $@
+	./$@
+
 # WASM backend test
 test_wasm_backend: tools/test_wasm_backend.c jit/wubu_isa_wasm.c jit/wubu_isa_wasm.h wubu_isa_driver.h wubu_mir.h wubu_mir.c
 	$(CC) $(CFLAGS) -I. -Ijit $< jit/wubu_isa_wasm.c wubu_mir.c -lm -o $@

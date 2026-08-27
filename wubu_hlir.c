@@ -266,130 +266,245 @@ int hlir_lower_mir(const hlir_graph_t *g, void *prog)
     int n_sorted = hlir_topo_sort(g, sorted);
     if (n_sorted == 0) return -1;
 
-    /* Constant pool: keep a small cache to avoid duplicate loads */
-    /* Map node pointer -> VR for this compilation */
-    int vr[256];
-    memset(vr, 0xFF, sizeof(vr));
+    /*
+     * Each HLIR node produces a tensor. We track:
+     *   base_vr[i]  = VR holding the base memory address of node i's output
+     *   off_vr[i]   = VR holding the element count (for tensor ops needing imm)
+     *
+     * For scalar/element-wise ops, we use the flat MIR model:
+     *   - Allocate memory for the output tensor
+     *   - For element-wise: loop over elements, emit scalar MIR ops
+     *   - For tensor ops: emit the MIR_T_* op directly
+     *
+     * Simplified model: for now, element-wise ops work on the first
+     * element (scalar test path). Full tensor loops come in the next pass.
+     */
 
+    wubu_vr_t base_vr[256];
+    int n_placeholders = 0;
+
+    /* First pass: allocate memory for each node's output */
     for (int i = 0; i < n_sorted; i++) {
         hlir_node_t *n = sorted[i];
+        int64_t nelems = n->output.nelems > 0 ? n->output.nelems : 1;
+
+        if (n->op == HLIR_PLACEHOLDER) {
+            /* Placeholders get sequential arg slots: v1, v2, ... */
+            base_vr[i] = wubu_mir_const(p, 0); /* will be filled at call time */
+            n_placeholders++;
+        } else if (n->op == HLIR_CONSTANT) {
+            /* Allocate + store constant data */
+            wubu_vr_t addr = wubu_mir_alloc(p, nelems);
+            base_vr[i] = addr;
+            /* Store first element as scalar for now (full loop later) */
+            if (n->data && n->output.dtype == 0) {
+                float valf = ((float *)n->data)[0];
+                wubu_vr_t val = wubu_mir_const(p, (int64_t)(*(int64_t *)&valf));
+                wubu_mir_store(p, addr, val);
+            } else {
+                wubu_vr_t zero = wubu_mir_const(p, 0);
+                wubu_mir_store(p, addr, zero);
+            }
+        } else {
+            /* Allocate output memory */
+            base_vr[i] = wubu_mir_alloc(p, nelems);
+        }
+    }
+
+    /* Set the number of function arguments */
+    wubu_mir_set_n_args(p, (uint32_t)n_placeholders);
+
+    /* Second pass: emit computation */
+    for (int i = 0; i < n_sorted; i++) {
+        hlir_node_t *n = sorted[i];
+        if (n->op == HLIR_PLACEHOLDER || n->op == HLIR_CONSTANT) continue;
+
+        wubu_vr_t dst = base_vr[i];
+        int64_t nelems = n->output.nelems > 0 ? n->output.nelems : 1;
 
         switch (n->op) {
-        case HLIR_PLACEHOLDER: {
-            /* Already represented by the input node's data; nothing to emit */
-            vr[i] = 0; /* v0 = first input */
-            break;
-        }
-        case HLIR_CONSTANT: {
-            /* Load constant data into VR */
-            if (n->data && n->output.dtype == 0) { /* F32 */
-                vr[i] = wubu_mir_const(p, (int64_t)((float *)n->data)[0]);
-            } else {
-                vr[i] = wubu_mir_const(p, 0);
-            }
-            break;
-        }
         case HLIR_ADD: {
-            wubu_vr_t a = (wubu_vr_t)vr[hlir_topo_order_of(g, n->inputs[0])];
-            wubu_vr_t b = (wubu_vr_t)vr[hlir_topo_order_of(g, n->inputs[1])];
-            vr[i] = wubu_mir_binop(p, MIR_ADD, a, b);
+            wubu_vr_t a = base_vr[hlir_topo_order_of(g, n->inputs[0])];
+            wubu_vr_t b = base_vr[hlir_topo_order_of(g, n->inputs[1])];
+            wubu_vr_t va = wubu_mir_load(p, a);
+            wubu_vr_t vb = wubu_mir_load(p, b);
+            wubu_vr_t sum = wubu_mir_binop(p, MIR_FADD, va, vb);
+            wubu_mir_store(p, dst, sum);
             break;
         }
         case HLIR_MUL: {
-            wubu_vr_t a = (wubu_vr_t)vr[hlir_topo_order_of(g, n->inputs[0])];
-            wubu_vr_t b = (wubu_vr_t)vr[hlir_topo_order_of(g, n->inputs[1])];
-            vr[i] = wubu_mir_binop(p, MIR_MUL, a, b);
+            wubu_vr_t a = base_vr[hlir_topo_order_of(g, n->inputs[0])];
+            wubu_vr_t b = base_vr[hlir_topo_order_of(g, n->inputs[1])];
+            wubu_vr_t va = wubu_mir_load(p, a);
+            wubu_vr_t vb = wubu_mir_load(p, b);
+            wubu_vr_t prod = wubu_mir_binop(p, MIR_FMUL, va, vb);
+            wubu_mir_store(p, dst, prod);
+            break;
+        }
+        case HLIR_SUB: {
+            wubu_vr_t a = base_vr[hlir_topo_order_of(g, n->inputs[0])];
+            wubu_vr_t b = base_vr[hlir_topo_order_of(g, n->inputs[1])];
+            wubu_vr_t va = wubu_mir_load(p, a);
+            wubu_vr_t vb = wubu_mir_load(p, b);
+            wubu_vr_t diff = wubu_mir_binop(p, MIR_FSUB, va, vb);
+            wubu_mir_store(p, dst, diff);
+            break;
+        }
+        case HLIR_DIV: {
+            wubu_vr_t a = base_vr[hlir_topo_order_of(g, n->inputs[0])];
+            wubu_vr_t b = base_vr[hlir_topo_order_of(g, n->inputs[1])];
+            wubu_vr_t va = wubu_mir_load(p, a);
+            wubu_vr_t vb = wubu_mir_load(p, b);
+            wubu_vr_t quot = wubu_mir_binop(p, MIR_FDIV, va, vb);
+            wubu_mir_store(p, dst, quot);
             break;
         }
         case HLIR_RELU: {
-            wubu_vr_t a = (wubu_vr_t)vr[hlir_topo_order_of(g, n->inputs[0])];
-            /* relu = max(0, x) => x > 0 ? x : 0 */
-            wubu_vr_t c = wubu_mir_const(p, 0);
-            wubu_vr_t gt = wubu_mir_binop(p, MIR_GT, a, c);
-            wubu_vr_t zero = wubu_mir_const(p, 0);
-            wubu_vr_t one = wubu_mir_const(p, 1);
-            /* Conditional: (gt ? x : 0) — simplified via arithmetic for now */
-            vr[i] = wubu_mir_binop(p, MIR_MUL, a, gt);
+            wubu_vr_t a = base_vr[hlir_topo_order_of(g, n->inputs[0])];
+            wubu_vr_t b = base_vr[hlir_topo_order_of(g, n->inputs[0])]; /* same */
+            wubu_mir_trelu(p, a, b, dst, nelems);
             break;
         }
         case HLIR_SIGMOID: {
-            wubu_vr_t a = (wubu_vr_t)vr[hlir_topo_order_of(g, n->inputs[0])];
-            /* sigmoid = 1 / (1 + exp(-a)) — use softfloat */
-            vr[i] = a;
+            wubu_vr_t a = base_vr[hlir_topo_order_of(g, n->inputs[0])];
+            wubu_vr_t b = base_vr[hlir_topo_order_of(g, n->inputs[0])];
+            wubu_mir_tsigmoid(p, a, b, dst, nelems);
             break;
         }
         case HLIR_GELU: {
-            wubu_vr_t a = (wubu_vr_t)vr[hlir_topo_order_of(g, n->inputs[0])];
-            vr[i] = a;
+            wubu_vr_t a = base_vr[hlir_topo_order_of(g, n->inputs[0])];
+            wubu_vr_t b = base_vr[hlir_topo_order_of(g, n->inputs[0])];
+            wubu_mir_tgelu(p, a, b, dst, nelems);
+            break;
+        }
+        case HLIR_TANH: {
+            wubu_vr_t a = base_vr[hlir_topo_order_of(g, n->inputs[0])];
+            wubu_vr_t b = base_vr[hlir_topo_order_of(g, n->inputs[0])];
+            wubu_mir_ttanh(p, a, b, dst, nelems);
             break;
         }
         case HLIR_RMSNORM: {
-            wubu_vr_t a = (wubu_vr_t)vr[hlir_topo_order_of(g, n->inputs[0])];
-            /* rmsnorm = x / sqrt(mean(x*x) + eps) — simplified: pass x through */
-            vr[i] = a;
+            wubu_vr_t a = base_vr[hlir_topo_order_of(g, n->inputs[0])];
+            wubu_vr_t b = base_vr[hlir_topo_order_of(g, n->inputs[0])];
+            wubu_mir_trms_norm(p, a, b, dst, nelems);
             break;
         }
         case HLIR_LAYERNORM: {
-            wubu_vr_t a = (wubu_vr_t)vr[hlir_topo_order_of(g, n->inputs[0])];
-            vr[i] = a;
+            wubu_vr_t a = base_vr[hlir_topo_order_of(g, n->inputs[0])];
+            wubu_vr_t b = base_vr[hlir_topo_order_of(g, n->inputs[0])];
+            wubu_mir_tlayernorm(p, a, b, dst, nelems);
             break;
         }
         case HLIR_MATMUL: {
-            /* GEMM: emit T_GEMM call via the host dispatch path */
-            wubu_vr_t a = (wubu_vr_t)vr[hlir_topo_order_of(g, n->inputs[0])];
-            wubu_vr_t b = (wubu_vr_t)vr[hlir_topo_order_of(g, n->inputs[1])];
-            vr[i] = wubu_mir_binop(p, MIR_ADD, a, b); /* placeholder */
+            wubu_vr_t a = base_vr[hlir_topo_order_of(g, n->inputs[0])];
+            wubu_vr_t b = base_vr[hlir_topo_order_of(g, n->inputs[1])];
+            /* GEMM: for now use the first dimension as a rough size */
+            int M = (n->output.n_dims >= 1) ? (int)n->output.dims[0] : 1;
+            int N = (n->output.n_dims >= 2) ? (int)n->output.dims[1] : 1;
+            int K = (n->inputs[0]->output.n_dims >= 2) ?
+                    (int)n->inputs[0]->output.dims[1] : 1;
+            wubu_mir_tgemm(p, a, b, dst, M, N, K);
             break;
         }
         case HLIR_SOFTMAX: {
-            wubu_vr_t a = (wubu_vr_t)vr[hlir_topo_order_of(g, n->inputs[0])];
-            vr[i] = a;
+            wubu_vr_t a = base_vr[hlir_topo_order_of(g, n->inputs[0])];
+            wubu_vr_t b = base_vr[hlir_topo_order_of(g, n->inputs[0])];
+            wubu_mir_tsoftmax(p, a, b, dst, nelems);
             break;
         }
         case HLIR_ATTENTION: {
-            wubu_vr_t q = (wubu_vr_t)vr[hlir_topo_order_of(g, n->inputs[0])];
-            wubu_vr_t k = (wubu_vr_t)vr[hlir_topo_order_of(g, n->inputs[1])];
-            wubu_vr_t v = (wubu_vr_t)vr[hlir_topo_order_of(g, n->inputs[2])];
-            vr[i] = wubu_mir_binop(p, MIR_ADD, q, k);
+            wubu_vr_t q = base_vr[hlir_topo_order_of(g, n->inputs[0])];
+            wubu_vr_t k = base_vr[hlir_topo_order_of(g, n->inputs[1])];
+            wubu_vr_t v = base_vr[hlir_topo_order_of(g, n->inputs[2])];
+            /* Attention: use Q and K for the op, V as value */
+            wubu_mir_tattention(p, q, k, dst, nelems);
+            /* Note: full attention needs Q,K,V — the 3-arg form is simplified */
+            (void)v;
             break;
         }
         case HLIR_SWIGLU: {
-            wubu_vr_t x = (wubu_vr_t)vr[hlir_topo_order_of(g, n->inputs[0])];
-            vr[i] = x;
+            wubu_vr_t a = base_vr[hlir_topo_order_of(g, n->inputs[0])];
+            wubu_vr_t b = base_vr[hlir_topo_order_of(g, n->inputs[0])];
+            wubu_mir_tswiglu(p, a, b, dst, nelems);
             break;
         }
         case HLIR_ROPE: {
-            wubu_vr_t x = (wubu_vr_t)vr[hlir_topo_order_of(g, n->inputs[0])];
-            vr[i] = x;
+            wubu_vr_t a = base_vr[hlir_topo_order_of(g, n->inputs[0])];
+            wubu_vr_t b = base_vr[hlir_topo_order_of(g, n->inputs[0])];
+            wubu_mir_trope(p, a, b, dst, nelems);
             break;
         }
-        case HLIR_CAST: {
-            wubu_vr_t a = (wubu_vr_t)vr[hlir_topo_order_of(g, n->inputs[0])];
-            /* dtype conversion via MIR_F32_TO_F16 / MIR_F16_TO_F32 */
-            vr[i] = a;
+        case HLIR_EXP: {
+            wubu_vr_t a = base_vr[hlir_topo_order_of(g, n->inputs[0])];
+            wubu_vr_t b = base_vr[hlir_topo_order_of(g, n->inputs[0])];
+            wubu_mir_texp(p, a, b, dst, nelems);
+            break;
+        }
+        case HLIR_SQRT: {
+            wubu_vr_t a = base_vr[hlir_topo_order_of(g, n->inputs[0])];
+            wubu_vr_t b = base_vr[hlir_topo_order_of(g, n->inputs[0])];
+            wubu_mir_tsqrt(p, a, b, dst, nelems);
+            break;
+        }
+        case HLIR_LOG: {
+            wubu_vr_t a = base_vr[hlir_topo_order_of(g, n->inputs[0])];
+            wubu_vr_t b = base_vr[hlir_topo_order_of(g, n->inputs[0])];
+            /* log via exp inverse — use tsqrt as placeholder */
+            wubu_mir_tsqrt(p, a, b, dst, nelems);
+            break;
+        }
+        case HLIR_CLAMP: {
+            wubu_vr_t a = base_vr[hlir_topo_order_of(g, n->inputs[0])];
+            wubu_vr_t b = base_vr[hlir_topo_order_of(g, n->inputs[0])];
+            wubu_mir_tclamp(p, a, b, dst, nelems);
             break;
         }
         case HLIR_RESIDUAL_ADD: {
-            wubu_vr_t x = (wubu_vr_t)vr[hlir_topo_order_of(g, n->inputs[0])];
-            wubu_vr_t r = (wubu_vr_t)vr[hlir_topo_order_of(g, n->inputs[1])];
-            vr[i] = wubu_mir_binop(p, MIR_ADD, x, r);
+            wubu_vr_t x = base_vr[hlir_topo_order_of(g, n->inputs[0])];
+            wubu_vr_t r = base_vr[hlir_topo_order_of(g, n->inputs[1])];
+            wubu_vr_t vx = wubu_mir_load(p, x);
+            wubu_vr_t vr = wubu_mir_load(p, r);
+            wubu_vr_t sum = wubu_mir_binop(p, MIR_FADD, vx, vr);
+            wubu_mir_store(p, dst, sum);
+            break;
+        }
+        case HLIR_CAST_F16: {
+            wubu_vr_t a = base_vr[hlir_topo_order_of(g, n->inputs[0])];
+            wubu_vr_t va = wubu_mir_load(p, a);
+            wubu_vr_t cvt = wubu_mir_unop(p, MIR_F32_TO_F16, va);
+            wubu_mir_store(p, dst, cvt);
+            break;
+        }
+        case HLIR_CAST_F32: {
+            wubu_vr_t a = base_vr[hlir_topo_order_of(g, n->inputs[0])];
+            wubu_vr_t va = wubu_mir_load(p, a);
+            wubu_vr_t cvt = wubu_mir_unop(p, MIR_F16_TO_F32, va);
+            wubu_mir_store(p, dst, cvt);
             break;
         }
         default: {
-            /* Unimplemented: passthrough the first input */
-            if (n->n_inputs > 0)
-                vr[i] = (wubu_vr_t)vr[hlir_topo_order_of(g, n->inputs[0])];
-            else
-                vr[i] = wubu_mir_const(p, 0);
+            /* Passthrough first input */
+            if (n->n_inputs > 0) {
+                wubu_vr_t a = base_vr[hlir_topo_order_of(g, n->inputs[0])];
+                wubu_vr_t va = wubu_mir_load(p, a);
+                wubu_mir_store(p, dst, va);
+            }
             break;
         }
         }
     }
 
-    /* Emit return for last VR */
+    /* Emit return: load first element of last output */
     if (n_sorted > 0) {
-        wubu_vr_t last = (wubu_vr_t)vr[n_sorted - 1];
-        if (last >= 0) wubu_mir_ret(p, last);
+        /* Find the last non-placeholder, non-constant node */
+        for (int i = n_sorted - 1; i >= 0; i--) {
+            hlir_node_t *n = sorted[i];
+            if (n->op != HLIR_PLACEHOLDER && n->op != HLIR_CONSTANT) {
+                wubu_vr_t last = wubu_mir_load(p, base_vr[i]);
+                wubu_mir_ret(p, last);
+                break;
+            }
+        }
     }
 
     return 0;
