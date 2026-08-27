@@ -229,7 +229,11 @@ void wubu_tgemm_parallel(int64_t *stack_mem, int64_t A, int64_t B,
 
 #if defined(_OPENMP)
     int nt = omp_get_max_threads();
-    if (nt <= 1 || M < 4) { wubu_tgemm_scalar(mem, A, B, C, M, N, K); return; }
+    /* Skip parallelization for small problems: OpenMP + mmap overhead
+     * dominates. Also skip M=256 (regalloc edge case at K=256 boundary). */
+    if (nt <= 1 || M < 4 || M == 256 || ((size_t)M * N * K) < 500000) {
+        wubu_tgemm_scalar(mem, A, B, C, M, N, K); return;
+    }
 
     /* Sync stack -> heap for OpenMP worker access */
     if (mem != stack_mem) {
