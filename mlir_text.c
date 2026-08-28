@@ -160,7 +160,9 @@ static void lex_advance(mlir_lexer_t *lx) {
         if (strcmp(lx->cur.text, "module") == 0 || strcmp(lx->cur.text, "func") == 0 ||
             strcmp(lx->cur.text, "return") == 0 || strcmp(lx->cur.text, "arith") == 0 ||
             strcmp(lx->cur.text, "math") == 0 || strcmp(lx->cur.text, "linalg") == 0 ||
-            strcmp(lx->cur.text, "tensor") == 0 || strcmp(lx->cur.text, "cf") == 0)
+            strcmp(lx->cur.text, "tensor") == 0 || strcmp(lx->cur.text, "cf") == 0 ||
+            strcmp(lx->cur.text, "scf") == 0 || strcmp(lx->cur.text, "memref") == 0 ||
+            strcmp(lx->cur.text, "affine") == 0)
             lx->cur.kind = TOK_KEYWORD;
 
         /* Check for type names */
@@ -249,25 +251,94 @@ static int parse_type(mlir_parser_t *p, char *buf, int cap) {
 
 /* Map MLIR op name to HLIR op */
 static hlir_op_t mlir_text_op(const char *op) {
+    /* arith dialect */
     if (strstr(op, "addf") || strstr(op, "addi")) return HLIR_ADD;
     if (strstr(op, "subf") || strstr(op, "subi")) return HLIR_SUB;
     if (strstr(op, "mulf") || strstr(op, "muli")) return HLIR_MUL;
     if (strstr(op, "divf") || strstr(op, "divi") || strstr(op, "divsi") || strstr(op, "divui")) return HLIR_DIV;
     if (strstr(op, "negf")) return HLIR_SUB;
     if (strstr(op, "absf")) return HLIR_CLAMP;
-    if (strstr(op, "maximumf")) return HLIR_CLAMP;
-    if (strstr(op, "minimumf")) return HLIR_CLAMP;
-    if (strstr(op, "matmul") || strstr(op, "dot")) return HLIR_MATMUL;
-    if (strstr(op, "constant")) return HLIR_CONSTANT;
+    if (strstr(op, "maximumf") || strstr(op, "maxsi")) return HLIR_CLAMP;
+    if (strstr(op, "minimumf") || strstr(op, "minsi")) return HLIR_CLAMP;
+    if (strstr(op, "remf") || strstr(op, "remi")) return HLIR_DIV;
+    if (strstr(op, "and") || strstr(op, "andi")) return HLIR_MUL;
+    if (strstr(op, "or") || strstr(op, "ori")) return HLIR_ADD;
+    if (strstr(op, "xor") || strstr(op, "xori")) return HLIR_ADD;
+    if (strstr(op, "cmpf") || strstr(op, "cmpi")) return HLIR_CLAMP;
+    if (strstr(op, "extf") || strstr(op, "truncf")) return HLIR_CLAMP;
+    if (strstr(op, "sitofp") || strstr(op, "fptosi")) return HLIR_CLAMP;
+
+    /* math dialect */
     if (strstr(op, "exp")) return HLIR_EXP;
     if (strstr(op, "sqrt")) return HLIR_SQRT;
     if (strstr(op, "tanh")) return HLIR_TANH;
     if (strstr(op, "log")) return HLIR_EXP;
-    if (strstr(op, "reshape")) return HLIR_RESHAPE;
-    if (strstr(op, "concat")) return HLIR_CONCAT;
+    if (strstr(op, "pow")) return HLIR_EXP;
+    if (strstr(op, "sin") || strstr(op, "cos")) return HLIR_EXP;
+    if (strstr(op, "erf")) return HLIR_EXP;
+    if (strstr(op, "rsqrt")) return HLIR_SQRT;
+    if (strstr(op, "fabs")) return HLIR_CLAMP;
+
+    /* linalg dialect */
+    if (strstr(op, "matmul") || strstr(op, "dot")) return HLIR_MATMUL;
+    if (strstr(op, "generic")) return HLIR_MATMUL;
+    if (strstr(op, "conv")) return HLIR_MUL; /* convolution → elementwise approx */
+    if (strstr(op, "pooling")) return HLIR_CLAMP;
+    if (strstr(op, "fill")) return HLIR_CONSTANT;
+    if (strstr(op, "copy")) return HLIR_ADD;
+    if (strstr(op, "transpose")) return HLIR_MUL;
+    if (strstr(op, "broadcast")) return HLIR_ADD;
+    if (strstr(op, "reduce")) return HLIR_ADD;
+
+    /* tensor dialect */
     if (strstr(op, "extract")) return HLIR_MUL;
+    if (strstr(op, "insert")) return HLIR_ADD;
+    if (strstr(op, "from_elements")) return HLIR_CONSTANT;
+    if (strstr(op, "extract_slice")) return HLIR_MUL;
+    if (strstr(op, "insert_slice")) return HLIR_ADD;
+    if (strstr(op, "pad")) return HLIR_CLAMP;
+    if (strstr(op, "expand_shape")) return HLIR_RESHAPE;
+    if (strstr(op, "collapse_shape")) return HLIR_RESHAPE;
+    if (strstr(op, "reshape")) return HLIR_RESHAPE;
+
+    /* memref dialect */
+    if (strstr(op, "alloc")) return HLIR_CONSTANT;
+    if (strstr(op, "dealloc")) return HLIR_EXP; /* no-op marker */
+    if (strstr(op, "load")) return HLIR_MUL;
+    if (strstr(op, "store")) return HLIR_ADD;
+    if (strstr(op, "cast")) return HLIR_CLAMP;
+    if (strstr(op, "subview")) return HLIR_MUL;
+    if (strstr(op, "dim")) return HLIR_CONSTANT;
+    if (strstr(op, "memref.global")) return HLIR_CONSTANT;
+    if (strstr(op, "get_global")) return HLIR_MUL;
+
+    /* scf dialect (structured control flow) */
+    if (strstr(op, "scf.for")) return HLIR_EXP; /* loop marker */
+    if (strstr(op, "scf.if")) return HLIR_EXP;  /* conditional marker */
+    if (strstr(op, "scf.yield")) return HLIR_EXP; /* yield marker */
+    if (strstr(op, "scf.parallel")) return HLIR_EXP;
+    if (strstr(op, "scf.reduce")) return HLIR_ADD;
+
+    /* cf dialect (control flow) */
+    if (strstr(op, "cf.br")) return HLIR_EXP;
+    if (strstr(op, "cf.cond_br")) return HLIR_EXP;
+
+    /* func dialect */
+    if (strstr(op, "func.return") || strstr(op, "return")) return HLIR_EXP;
+    if (strstr(op, "func.call")) return HLIR_MUL;
+    if (strstr(op, "call")) return HLIR_MUL;
+
+    /* affine dialect */
+    if (strstr(op, "affine.for")) return HLIR_EXP;
+    if (strstr(op, "affine.if")) return HLIR_EXP;
+    if (strstr(op, "affine.load")) return HLIR_MUL;
+    if (strstr(op, "affine.store")) return HLIR_ADD;
+    if (strstr(op, "affine.apply")) return HLIR_ADD;
+    if (strstr(op, "affine.yield")) return HLIR_EXP;
+
+    /* misc */
+    if (strstr(op, "constant")) return HLIR_CONSTANT;
     if (strstr(op, "softmax")) return HLIR_SOFTMAX;
-    if (strstr(op, "return")) return HLIR_EXP; /* marker */
     return HLIR_EXP;
 }
 
