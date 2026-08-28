@@ -504,6 +504,27 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
     if (e.frame > 0) {
         e8(&e, 0x48); e8(&e, 0x81); e8(&e, 0xEC); e32(&e, (uint32_t)e.frame);
     }
+    /* Copy prog.mem data into JIT frame memory.
+     * If prog->mem is set, copy mem_bytes from prog->mem to [rbp-mem_off]. */
+    if (p->mem && mem_bytes > 0) {
+            /* rdi = rbp - mem_off (destination = JIT frame mem) */
+        rex(&e,1,0,0,0); e8(&e, 0x8D); e8(&e, 0xBD); e32(&e, (uint32_t)(-(int32_t)e.mem_off));
+        /* rsi = prog->mem (source) — movabs rsi, imm64 */
+        rex(&e,1,0,0,0); e8(&e, 0xBE); e64(&e, (uint64_t)p->mem);
+        /* rcx = mem_bytes / 8 (qword count) */
+        { size_t qwords = mem_bytes / 8;
+          if (qwords <= 0x7F) {
+            /* mov rcx, imm8 sign-extended: 48 C1 E1 00 + imm8? No. */
+            /* Use: mov ecx, imm32 (no REX for 32-bit) */
+            e8(&e, 0xB9); e32(&e, (uint32_t)qwords);
+          } else {
+            /* mov rcx, imm64 */
+            rex(&e,1,0,0,0); e8(&e, 0xB9); e64(&e, (uint64_t)qwords);
+          }
+        }
+        /* rep movsq */
+        e8(&e, 0xF3); rex(&e,1,0,0,0); e8(&e, 0xA5);
+    }
 
     /* entry trampoline: jmp rel32 over function bodies to main */
     if (p->n_funcs > 0) {

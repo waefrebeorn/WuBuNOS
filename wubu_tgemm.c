@@ -249,7 +249,7 @@ void wubu_tgemm_f32_mir(int64_t *mem, int64_t a, int64_t b, int64_t c,
     float *A = (float*)malloc(nA * sizeof(float));
     float *B = (float*)malloc(nB * sizeof(float));
     float *C = (float*)calloc(nC, sizeof(float));
-    if (!A || !B || C) {
+    if (A && B && C) {
         /* Extract floats from MIR memory (lower 32 bits of each cell) */
         for (size_t i = 0; i < nA; i++) {
             union { float f; int32_t i; } u;
