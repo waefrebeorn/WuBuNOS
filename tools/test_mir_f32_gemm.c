@@ -1,5 +1,8 @@
 /*
  * tools/test_mir_f32_gemm.c — Test float32 GEMM through the JIT pipeline.
+ *
+ * Builds a MIR program with T_GEMM_F32, runs it through the interpreter
+ * and the x86-64 JIT, and verifies correctness against naive C.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,10 +15,9 @@
 int main(void) {
     printf("=== MIR Float32 GEMM Test ===\n\n");
 
-    int N = 32;
+    int N = 64;
     int n2 = N * N;
 
-    /* Initialize matrices */
     float *A = (float*)malloc(n2 * sizeof(float));
     float *B = (float*)malloc(n2 * sizeof(float));
 
@@ -38,18 +40,14 @@ int main(void) {
     /* Build MIR program */
     wubu_mir_prog_t prog;
     wubu_mir_init(&prog);
-
-    /* Allocate: each float in one int64 cell (lower 32 bits).
-     * wubu_mir_alloc returns VR containing base cell index. */
     wubu_vr_t addr_a = wubu_mir_alloc(&prog, n2);
     wubu_vr_t addr_b = wubu_mir_alloc(&prog, n2);
     wubu_vr_t addr_c = wubu_mir_alloc(&prog, n2);
-
     wubu_mir_tgemm_f32(&prog, addr_a, addr_b, addr_c, N, N, N);
     wubu_vr_t result = wubu_mir_load(&prog, addr_c);
     wubu_mir_ret(&prog, result);
 
-    /* Setup memory: store floats in lower 32 bits of int64 cells */
+    /* Setup memory: floats stored in lower 32 bits of int64 cells */
     int ncells = 3 * n2 + 1;
     int64_t *mem = (int64_t*)calloc(ncells, sizeof(int64_t));
     for (int i = 0; i < n2; i++) {
@@ -65,16 +63,26 @@ int main(void) {
     wubu_mir_interp(&prog);
 
     /* Read result */
-    union { float f; int32_t i; } res;
-    res.i = (int32_t)mem[1 + 2*n2];
-    float diff = fabsf(res.f - C_naive[0]);
-
-    printf("Interpreter: C[0] = %.6f (expected %.6f, diff=%e) %s\n",
-           res.f, C_naive[0], diff, diff < 1e-3 ? "PASS" : "FAIL");
+    double max_err_interp = 0;
+    int errors_interp = 0;
+    for (int i = 0; i < N; i++)
+        for (int j = 0; j < N; j++) {
+            union { float f; int32_t i; } r;
+            r.i = (int32_t)mem[1 + 2*n2 + i*N + j];
+            double err = fabs((double)r.f - (double)C_naive[i*N + j]);
+            if (err > 1e-2 && errors_interp < 3)
+                printf("  INTERP C[%d,%d] = %.4f (expected %.4f)\n", i, j, r.f, C_naive[i*N+j]);
+            if (err > 1e-2) errors_interp++;
+            if (err > max_err_interp) max_err_interp = err;
+        }
+    printf("Interpreter: %d errors (max_err=%e) %s\n",
+           errors_interp, max_err_interp, errors_interp == 0 ? "PASS" : "FAIL");
 
     /* Run via x86-64 JIT */
     const wubu_isa_driver_t *jit = wubu_isa_find("x86-64");
-    int jit_pass = 0;
+    int errors_jit = 0;
+    double max_err_jit = 0;
+
     if (jit && jit->compile && jit->run) {
         /* Reset memory */
         for (int i = 0; i < n2; i++) {
@@ -100,21 +108,30 @@ int main(void) {
         size_t code_size = 0;
         int rc = jit->compile(&prog2, &code, &code_size);
         if (rc == 0 && code) {
+            printf("JIT code: %zu bytes\n", code_size);
             jit->run(code, code_size, 0);
-            union { float f; int32_t i; } res_jit;
-            res_jit.i = (int32_t)mem[1 + 2*n2];
-            float jit_diff = fabsf(res_jit.f - C_naive[0]);
-            printf("JIT:         C[0] = %.6f (expected %.6f, diff=%e) %s\n",
-                   res_jit.f, C_naive[0], jit_diff,
-                   jit_diff < 1e-3 ? "PASS" : "FAIL");
-            jit_pass = (jit_diff < 1e-3);
+
+            for (int i = 0; i < N; i++)
+                for (int j = 0; j < N; j++) {
+                    union { float f; int32_t i; } r;
+                    r.i = (int32_t)mem[1 + 2*n2 + i*N + j];
+                    double err = fabs((double)r.f - (double)C_naive[i*N + j]);
+                    if (err > 1e-2 && errors_jit < 3)
+                        printf("  JIT C[%d,%d] = %.4f (expected %.4f)\n", i, j, r.f, C_naive[i*N+j]);
+                    if (err > 1e-2) errors_jit++;
+                    if (err > max_err_jit) max_err_jit = err;
+                }
+            printf("JIT: %d errors (max_err=%e) %s\n",
+                   errors_jit, max_err_jit, errors_jit == 0 ? "PASS" : "FAIL");
             free(code);
         } else {
-            printf("JIT: compile failed (rc=%d)\n", rc);
+            printf("JIT compile failed: rc=%d\n", rc);
+            errors_jit = -1;
         }
         wubu_mir_free(&prog2);
     } else {
         printf("JIT: not available\n");
+        errors_jit = -1;
     }
 
     free(mem);
@@ -123,7 +140,7 @@ int main(void) {
     free(C_naive);
     wubu_mir_free(&prog);
 
-    int pass = (diff < 1e-3) && (jit_pass || !jit);
+    int pass = (errors_interp == 0) && (errors_jit == 0);
     printf("\n=== %s ===\n", pass ? "ALL PASS" : "FAILURES");
     return pass ? 0 : 1;
 }

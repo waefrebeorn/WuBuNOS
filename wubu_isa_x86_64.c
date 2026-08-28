@@ -187,9 +187,11 @@ static void x86_patch_push(x86_patch_t **patches, size_t *np, size_t *cap,
 /* ---- Float32 GEMM parallel wrapper -------------------------------- */
 void wubu_tgemm_f32_parallel(int64_t *stack_mem, int64_t A, int64_t B,
                               int64_t C, int M, int N, int K) {
-    int64_t *mem = wubu_jit_mem_ptr ? wubu_jit_mem_ptr : stack_mem;
-    float *fmem = (float *)mem;
-    wubu_tgemm_f32(fmem + A, fmem + B, fmem + C, M, N, K);
+    /* Use the passed memory pointer directly.
+     * wubu_jit_mem_ptr is used by the int64 T_GEMM path for thread safety;
+     * for float32, we use the MIR-compatible wrapper which handles the
+     * int64-cell memory layout. */
+    wubu_tgemm_f32_mir(stack_mem, A, B, C, M, N, K);
 }
 
 static void wubu_tgemm_scalar(int64_t *mem, int64_t A, int64_t B,
