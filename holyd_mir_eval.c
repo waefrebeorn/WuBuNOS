@@ -29,7 +29,20 @@ typedef struct {
     int is_unsigned;
     int is_array;
     int array_size;
+    int is_struct;                  /* 1 if this variable is a struct instance */
+    char struct_name[HD_MAX_IDENT_LEN]; /* struct type name */
 } mir_var_t;
+
+/* struct member offset table */
+#define MAX_STRUCTS 64
+#define MAX_MEMBERS 32
+typedef struct {
+    char name[HD_MAX_IDENT_LEN];
+    char member_names[MAX_MEMBERS][HD_MAX_IDENT_LEN];
+    int member_offsets[MAX_MEMBERS];
+    int n_members;
+    int total_size;
+} mir_struct_t;
 
 typedef struct {
     wubu_mir_prog_t *prog;
@@ -37,6 +50,8 @@ typedef struct {
     int has_error;
     mir_var_t vars[MIRGEN_MAX_VARS];
     int n_vars;
+    mir_struct_t structs[MAX_STRUCTS];
+    int n_structs;
     /* loop stack for break/continue resolution */
     uint32_t loop_top[MIRGEN_MAX_VARS];   /* continue target */
     uint32_t loop_done[MIRGEN_MAX_VARS];  /* break target */
@@ -68,6 +83,26 @@ static wubu_vr_t mir_find_var_addr(HDMirGen *g, const char *name) {
     for (int i = 0; i < g->n_vars; i++)
         if (strcmp(g->vars[i].name, name) == 0) return g->vars[i].addr;
     return 0;
+}
+
+/* struct helpers */
+static mir_struct_t *mir_find_struct(HDMirGen *g, const char *name) {
+    for (int i = 0; i < g->n_structs; i++)
+        if (strcmp(g->structs[i].name, name) == 0) return &g->structs[i];
+    return NULL;
+}
+static int mir_struct_member_offset(HDMirGen *g, const char *struct_name, const char *member) {
+    mir_struct_t *s = mir_find_struct(g, struct_name);
+    if (!s) return -1;
+    for (int i = 0; i < s->n_members; i++)
+        if (strcmp(s->member_names[i], member) == 0) return s->member_offsets[i];
+    return -1;
+}
+static const char *mir_find_var_struct_name(HDMirGen *g, const char *name) {
+    for (int i = 0; i < g->n_vars; i++)
+        if (strcmp(g->vars[i].name, name) == 0 && g->vars[i].is_struct)
+            return g->vars[i].struct_name;
+    return NULL;
 }
 
 /* symbol table: is the named variable an array? */
@@ -209,6 +244,21 @@ static wubu_vr_t mir_lvalue_addr(HDMirGen *g, const HDASTNode *n) {
         wubu_vr_t idx = mir_gen_expr(g, n->right);
         return wubu_mir_binop(g->prog, MIR_ADD, base, idx);
     }
+    if (n->kind == HD_AST_DOT || n->kind == HD_AST_MEMBER) {
+        /* s.a = val — compute address of struct member */
+        if (n->left && n->left->kind == HD_AST_IDENT && n->ident[0]) {
+            const char *varname = n->left->ident;
+            wubu_vr_t base = mir_find_var_addr(g, varname);
+            fprintf(stderr, "DOT lvalue: var=%s base=%d\n", varname, base);
+            if (base == 0) return 0;
+            const char *struct_type = mir_find_var_struct_name(g, varname);
+            fprintf(stderr, "DOT lvalue: struct_type=%s\n", struct_type ? struct_type : "NULL");
+            int offset = mir_struct_member_offset(g, struct_type ? struct_type : "", n->ident);
+            fprintf(stderr, "DOT lvalue: offset=%d\n", offset);
+            if (offset < 0) return 0;
+            return wubu_mir_binop(g->prog, MIR_ADD, base, wubu_mir_const(g->prog, (int64_t)offset));
+        }
+    }
     return 0;  /* not an lvalue we can take address of */
 }
 
@@ -223,29 +273,86 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
             last = mir_gen_stmt(g, n->stmts[i]);
         return last;
     }
+    case HD_AST_STRUCT_DECL: {
+        /* Register the struct type and its member offsets.
+         * Member info is in n->type (HDType) which has members[]. */
+        if (g->n_structs < MAX_STRUCTS && n->ident[0]) {
+            mir_struct_t *s = &g->structs[g->n_structs++];
+            strncpy(s->name, n->ident, HD_MAX_IDENT_LEN - 1);
+            s->name[HD_MAX_IDENT_LEN - 1] = '\0';
+            s->n_members = 0;
+            s->total_size = 0;
+            if (n->type && n->type->kind == HD_TYPE_STRUCT) {
+                fprintf(stderr, "STRUCT_DECL: %s n_members=%d\n", n->ident, n->type->n_members);
+                for (int i = 0; i < n->type->n_members && s->n_members < MAX_MEMBERS; i++) {
+                    fprintf(stderr, "  member[%d] name='%s' offset=%lld\n", i, n->type->members[i].name, (long long)n->type->members[i].offset);
+                    strncpy(s->member_names[s->n_members], n->type->members[i].name, HD_MAX_IDENT_LEN - 1);
+                    s->member_names[s->n_members][HD_MAX_IDENT_LEN - 1] = '\0';
+                    s->member_offsets[s->n_members] = (int)n->type->members[i].offset;
+                    s->n_members++;
+                }
+            }
+            s->total_size = s->n_members;
+        }
+        return 0;
+    }
     case HD_AST_VAR_DECL: {
         int is_uns = 0;
         int arr_size = 0;
+        int is_struct_var = 0;
+        char struct_type_name[HD_MAX_IDENT_LEN] = {0};
         if (n->type) {
             HDTypeKind k = n->type->kind;
+            if (k == HD_TYPE_STRUCT) fprintf(stderr, "STRUCT_VAR_DECL: %s type=%s n_members=%d\n", n->ident, n->type->name, n->type->n_members);
             if (k == HD_TYPE_U8 || k == HD_TYPE_U16 || k == HD_TYPE_U32 || k == HD_TYPE_U64)
                 is_uns = 1;
             /* array type carries an element count in n->type->array_size */
             if (k == HD_TYPE_ARRAY && n->type->array_size > 0) arr_size = (int)n->type->array_size;
+            /* struct type: allocate memory for all members */
+            if (k == HD_TYPE_STRUCT) {
+                is_struct_var = 1;
+                if (n->type->name[0])
+                    strncpy(struct_type_name, n->type->name, HD_MAX_IDENT_LEN - 1);
+                /* Look up struct size from registered structs */
+                int struct_size = 0;
+                for (int si = 0; si < g->n_structs; si++) {
+                    if (strcmp(g->structs[si].name, struct_type_name) == 0) {
+                        struct_size = g->structs[si].total_size;
+                        break;
+                    }
+                }
+                if (struct_size > 0) arr_size = struct_size;
+            }
         }
         wubu_vr_t vr = mir_decl_var_unsigned(g, n->ident, is_uns);
-        /* Allocate memory for the variable (arrays get arr_size cells, scalars 1). */
+        /* Allocate memory for the variable (arrays get arr_size cells, scalars 1, structs = total_size). */
         wubu_vr_t addr = wubu_mir_alloc(g->prog, arr_size > 0 ? arr_size : 1);
         for (int i = 0; i < g->n_vars; i++)
             if (strcmp(g->vars[i].name, n->ident) == 0) {
                 g->vars[i].addr = addr;
-                g->vars[i].is_array = (arr_size > 0);
+                g->vars[i].is_array = (arr_size > 0 && !is_struct_var);
                 g->vars[i].array_size = arr_size;
+                g->vars[i].is_struct = is_struct_var;
+                if (is_struct_var)
+                    strncpy(g->vars[i].struct_name, struct_type_name, HD_MAX_IDENT_LEN - 1);
                 break;
             }
         if (n->init) {
-            if (arr_size > 0 && n->init->kind == HD_AST_BRACE_INIT) {
+            if (n->init->kind == HD_AST_BRACE_INIT) {
                 /* array initializer list: store each element */
+                int n_elems = (int)n->init->n_args;
+                /* Reallocate if the initializer determines the size */
+                if (arr_size == 0 && n_elems > 0) {
+                    arr_size = n_elems;
+                    addr = wubu_mir_alloc(g->prog, arr_size);
+                    for (int i = 0; i < g->n_vars; i++)
+                        if (strcmp(g->vars[i].name, n->ident) == 0) {
+                            g->vars[i].addr = addr;
+                            g->vars[i].is_array = 1;
+                            g->vars[i].array_size = arr_size;
+                            break;
+                        }
+                }
                 for (uint32_t e = 0; e < n->init->n_args && e < (uint32_t)arr_size; e++) {
                     wubu_vr_t ev = mir_gen_expr(g, n->init->args[e]);
                     wubu_vr_t elem_addr = wubu_mir_binop(g->prog, MIR_ADD, addr,
@@ -362,6 +469,7 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
     if (!n) return 0;
     switch (n->kind) {
     case HD_AST_INT_LIT:
+    case HD_AST_CHAR_LIT:
         return wubu_mir_const(g->prog, n->int_val);
     case HD_AST_IDENT: {
         wubu_vr_t addr = mir_find_var_addr(g, n->ident);
@@ -372,9 +480,36 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             return addr;
         return wubu_mir_load(g->prog, addr);
     }
+    case HD_AST_DOT:
+    case HD_AST_MEMBER: {
+        /* s.a — struct member access */
+        if (n->left && n->left->kind == HD_AST_IDENT && n->ident[0]) {
+            const char *var_name = n->left->ident;
+            const char *member_name = n->ident;
+            wubu_vr_t base = mir_find_var_addr(g, var_name);
+            fprintf(stderr, "DOT expr: var=%s member=%s base=%d\n", var_name, member_name, base);
+            if (base == 0) return wubu_mir_const(g->prog, 0);
+            const char *struct_type = NULL;
+            for (int i = 0; i < g->n_vars; i++) {
+                if (strcmp(g->vars[i].name, var_name) == 0 && g->vars[i].is_struct) {
+                    struct_type = g->vars[i].struct_name;
+                    break;
+                }
+            }
+            int offset = mir_struct_member_offset(g, struct_type ? struct_type : "", member_name);
+            fprintf(stderr, "DOT expr: struct=%s offset=%d\n", struct_type ? struct_type : "NULL", offset);
+            if (offset < 0) return wubu_mir_const(g->prog, 0);
+            wubu_vr_t member_addr = wubu_mir_binop(g->prog, MIR_ADD, base,
+                                                    wubu_mir_const(g->prog, (int64_t)offset));
+            return wubu_mir_load(g->prog, member_addr);
+        }
+        return 0;
+    }
     case HD_AST_ASSIGN: {
         wubu_vr_t val = mir_gen_expr(g, n->right);
         wubu_vr_t addr = mir_lvalue_addr(g, n->left);
+        if (n->left && n->left->kind == HD_AST_MEMBER)
+            fprintf(stderr, "ASSIGN to MEMBER: val=%d addr=%d\n", val, addr);
         if (addr) { wubu_mir_store(g->prog, addr, val); return val; }
         return val;
     }
@@ -759,6 +894,25 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
     g.has_error = 0;
     prog->next_vr_hi = g.next_vr;  /* reserve mem up to the high-vr param-slot range */
 
+    /* Register struct types from the parser's named_types table */
+    for (int i = 0; i < parse.n_named_types && g.n_structs < MAX_STRUCTS; i++) {
+        HDType *t = parse.named_types[i];
+        if (t && t->kind == HD_TYPE_STRUCT && t->n_members > 0) {
+            mir_struct_t *s = &g.structs[g.n_structs++];
+            strncpy(s->name, parse.named_type_names[i], HD_MAX_IDENT_LEN - 1);
+            s->name[HD_MAX_IDENT_LEN - 1] = '\0';
+            s->n_members = 0;
+            s->total_size = 0;
+            for (int j = 0; j < t->n_members && s->n_members < MAX_MEMBERS; j++) {
+                strncpy(s->member_names[s->n_members], t->members[j].name, HD_MAX_IDENT_LEN - 1);
+                s->member_names[s->n_members][HD_MAX_IDENT_LEN - 1] = '\0';
+                s->member_offsets[s->n_members] = (int)t->members[j].offset;
+                s->n_members++;
+            }
+            s->total_size = s->n_members;
+        }
+    }
+
     /* Phase 1: collect top-level function definitions into the func table
      * (assign stable ids so CALL sites resolve regardless of order). */
     mir_collect_funcs(&g, ast);
@@ -790,6 +944,7 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
 
     for (int fi = 0; fi < g.n_funcs; fi++) {
         const HDASTNode *fn = g.func_ast[fi];
+        fprintf(stderr, "FUNC_BODY[%d]: %s body_kind=%d n_params=%d body_n_stmts=%d\n", fi, fn->ident, fn->body ? fn->body->kind : -1, fn->n_params, fn->body && fn->body->kind == HD_AST_BLOCK ? (int)fn->body->n_stmts : 0);
         prog->funcs[fi].start = prog->n;
         /* bind parameters: use HIGH virtual registers for both the address
          * slot and the value so they NEVER collide with v1..vN (the argument

@@ -171,7 +171,7 @@ static void strength_pass(wubu_mir_prog_t *p)
         }
         /* x * 1 -> x ; x / 1 -> x ; x % 1 -> 0 ; x << 0 -> x ; x >> 0 -> x */
         else if (in->op == MIR_MUL && bv == 1) { in->op = MIR_MOV; in->b = 0; }
-        else if ((in->op == MIR_DIV || in->op == MIR_SHR || in->op == MIR_SHL) && bv == 1) {
+        else if ((in->op == MIR_DIV || in->op == MIR_SHR || in->op == MIR_SHL) && bv == 0) {
             in->op = MIR_MOV; in->b = 0;
         }
         else if (in->op == MIR_MOD && bv == 1) { in->op = MIR_CONST; in->imm = 0; in->a = 0; in->b = 0; }
