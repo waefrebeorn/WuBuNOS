@@ -504,6 +504,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
     if (e.frame > 0) {
         e8(&e, 0x48); e8(&e, 0x81); e8(&e, 0xEC); e32(&e, (uint32_t)e.frame);
     }
+
     /* Copy prog.mem data into JIT frame memory.
      * If prog->mem is set, copy mem_bytes from prog->mem to [rbp-mem_off]. */
     if (p->mem && mem_bytes > 0) {
@@ -1018,8 +1019,8 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             int sa = VR_ENC(in->a);
             int sb = VR_ENC(in->b);
             int sd = VR_ENC(in->dst);
-            /* rdi = &mem[0] */
-            rex(&e,1,0,0,0); e8(&e,0x8D); e8(&e,0xBD); e32(&e,(uint32_t)(-(int32_t)e.mem_off));
+            /* rdi = prog->mem (base of MIR memory) */
+            rex(&e,1,0,0,0); e8(&e, 0xBF); e64(&e, (uint64_t)p->mem);
             /* rsi = A */
             if (sa>=0) emit_mov_reg(&e,6,sa);  else emit_load_rbp(&e,6,spill_off(assign, assign_count, &e, in->a));
             /* rdx = B */

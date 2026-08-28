@@ -232,6 +232,11 @@ bench_f32_gemm: tools/bench_f32_gemm.c wubu_tgemm.c wubu_tgemm.h
 test_mir_f32_gemm: tools/test_mir_f32_gemm.c $(MIR) $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) jit_stub.c jit_stub_arm64.c
 	$(CC) $(CFLAGS) -I. -I$(OS_ROOT) -o $@ $^ -lm
 	./$@
+# JIT float32 GEMM performance benchmark
+bench_jit_f32: tools/bench_jit_f32.c $(MIR) $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) jit_stub.c jit_stub_arm64.c
+	$(CC) $(CFLAGS) -O2 -I. -I$(OS_ROOT) -mavx2 -mfma -o $@ $^ -lm
+	./$@
+
 # Speed benchmark: interpreter performance
 bench_speed: tools/bench_speed.c $(MIR) $(FRONT) jit_stub.c
 	$(CC) $(CFLAGS) -I. $< $(MIR) $(FRONT) jit_stub.c -lm -o $@
