@@ -7,20 +7,18 @@
 #include <omp.h>
 #endif
 
-
-/* ---- AVX2 / AVX-512 fast path (x86-64 only) ------------------------
- * AVX2: 4 columns via 256-bit vectors; 64-bit mul emulated via 32-bit halves.
- * AVX-512DQ: 8 columns via 512-bit vectors; native vpmullq for 64-bit mul.
- */
 #if defined(__x86_64__)
 #include <immintrin.h>
 
+/* ---- AVX2 fast path ------------------------------------------------
+ * 4 columns of B are broadcast; each j-iteration accumulates 4 int64
+ * products per row. AVX2 lacks 64-bit integer mul; emulate via 32-bit halves.
+ */
 __attribute__((target("avx2")))
 static void tgemm_avx2(int64_t *mem, int64_t A, int64_t B,
                        int64_t C, int M, int N, int K)
 {
     const __m256i zero = _mm256_setzero_si256();
-    #pragma omp parallel for schedule(static) if(M >= 8)
     for (int i = 0; i < M; i++) {
         const int64_t *a = &mem[A + (int64_t)i * K];
         int64_t       *c = &mem[C + (int64_t)i * N];
@@ -43,6 +41,39 @@ static void tgemm_avx2(int64_t *mem, int64_t A, int64_t B,
                 acc = _mm256_add_epi64(acc, prod);
             }
             _mm256_storeu_si256((__m256i *)&c[j], acc);
+        }
+        for (; j < N; j++) {
+            int64_t s = c[j];
+            const int64_t *bk = &mem[B] + j;
+            for (int k = 0; k < K; k++)
+                s += a[k] * bk[(size_t)k * N];
+            c[j] = s;
+        }
+    }
+}
+
+/* ---- AVX-512DQ fast path (Zen 4) ----------------------------------
+ * 8 columns of B are loaded; each j-iteration accumulates 8 int64
+ * products per row via native vpmullq (AVX-512DQ instruction).
+ * Compiled with target("avx512dq") so GCC emits vpmullq directly.
+ */
+__attribute__((target("avx512dq")))
+void tgemm_avx512(int64_t *mem, int64_t A, int64_t B,
+                         int64_t C, int M, int N, int K)
+{
+    for (int i = 0; i < M; i++) {
+        const int64_t *a = &mem[A + (int64_t)i * K];
+        int64_t       *c = &mem[C + (int64_t)i * N];
+        int j = 0;
+        for (; j + 8 <= N; j += 8) {
+            __m512i acc = _mm512_loadu_si512(&c[j]);
+            for (int k = 0; k < K; k++) {
+                __m512i bv = _mm512_loadu_si512(&mem[B + (int64_t)k * N + j]);
+                __m512i av = _mm512_set1_epi64(a[k]);
+                __m512i prod = _mm512_mullo_epi64(av, bv);
+                acc = _mm512_add_epi64(acc, prod);
+            }
+            _mm512_storeu_si512(&c[j], acc);
         }
         for (; j < N; j++) {
             int64_t s = c[j];
@@ -77,6 +108,7 @@ void wubu_tgemm(int64_t *mem, int64_t A, int64_t B,
                 int64_t C, int M, int N, int K)
 {
 #if defined(__x86_64__)
+    if (have_avx512()) { tgemm_avx512(mem, A, B, C, M, N, K); return; }
     if (have_avx2()) { tgemm_avx2(mem, A, B, C, M, N, K); return; }
 #endif
     /* OpenMP parallel over 4-row blocks */
