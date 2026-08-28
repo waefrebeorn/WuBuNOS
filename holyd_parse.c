@@ -89,6 +89,13 @@ static HDType *parse_type(HDParser *p) {
     HDType *t = (HDType *)calloc(1, sizeof(HDType));
     t->kind = HD_TYPE_I64; /* HolyD default */
 
+    /* auto type inference */
+    if (peek(p) == HD_KW_AUTO) {
+        advance(p);
+        t->kind = HD_TYPE_AUTO;
+        return t;
+    }
+
     switch (peek(p)) {
         case HD_TOK_IDENT: {
             /* A typedef'd name is a type: `typedef int MyInt; MyInt x;`.
@@ -1005,7 +1012,7 @@ static HDASTNode *parse_stmt(HDParser *p) {
     /* Variable declaration (type followed by ident) */
     {
         HDTokenType _t = peek(p);
-        if (_t >= HD_KW_I0 && _t <= HD_KW_VOLATILE) {
+        if (_t >= HD_KW_I0 && _t <= HD_KW_AUTO) {
             return hd_parse_decl(p);
         }
     }

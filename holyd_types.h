@@ -64,6 +64,7 @@ typedef enum {
     HD_KW_CONST,
     HD_KW_VOLATILE,
     HD_KW_INLINE,
+    HD_KW_AUTO,             /* auto type inference */
     HD_KW_SIZEOF,  /* dummy to keep enum open (was HD_KW_UNUSED) */
 
     /* Operators */
@@ -157,6 +158,7 @@ typedef enum {
     HD_TYPE_UNION,
     HD_TYPE_ENUM,
     HD_TYPE_FUNC,
+    HD_TYPE_AUTO,          /* auto — inferred from initializer */
 } HDTypeKind;
 
 typedef struct HDType HDType;

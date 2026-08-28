@@ -284,6 +284,7 @@ static wubu_vr_t mir_lvalue_addr(HDMirGen *g, const HDASTNode *n) {
 }
 
 static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n);
+static HDTypeKind mir_infer_type(HDMirGen *g, const HDASTNode *n);
 
 static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
     if (!n) return 0;
@@ -341,6 +342,14 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
             if (k == HD_TYPE_U8 || k == HD_TYPE_U16 || k == HD_TYPE_U32 || k == HD_TYPE_U64)
                 is_uns = 1;
             if (k == HD_TYPE_F64) is_float = 1;
+            /* auto type inference from initializer */
+            if (k == HD_TYPE_AUTO && n->init) {
+                HDTypeKind inferred = mir_infer_type(g, n->init);
+                if (inferred == HD_TYPE_F64) is_float = 1;
+                else if (inferred == HD_TYPE_U8 || inferred == HD_TYPE_U16 ||
+                         inferred == HD_TYPE_U32 || inferred == HD_TYPE_U64) is_uns = 1;
+                n->type->kind = inferred;
+            }
             /* array type carries an element count in n->type->array_size */
             if (k == HD_TYPE_ARRAY && n->type->array_size > 0) arr_size = (int)n->type->array_size;
             /* struct type: allocate memory for all members */
@@ -498,6 +507,39 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
         return 0;
     default:
         return mir_gen_expr(g, n);
+    }
+}
+
+/* Infer the type of an AST expression node for auto type deduction */
+static HDTypeKind mir_infer_type(HDMirGen *g, const HDASTNode *n) {
+    if (!n) return HD_TYPE_I32;
+    switch (n->kind) {
+    case HD_AST_INT_LIT: return HD_TYPE_I32;
+    case HD_AST_FLOAT_LIT: return HD_TYPE_F64;
+    case HD_AST_BOOL_LIT: return HD_TYPE_BOOL;
+    case HD_AST_CHAR_LIT: return HD_TYPE_I8;
+    case HD_AST_IDENT: {
+        /* Look up the variable's declared type */
+        for (int i = 0; i < g->n_vars; i++)
+            if (strcmp(g->vars[i].name, n->ident) == 0) {
+                if (g->vars[i].is_float) return HD_TYPE_F64;
+                if (g->vars[i].is_unsigned) return HD_TYPE_U32;
+                return HD_TYPE_I32;
+            }
+        return HD_TYPE_I32;
+    }
+    case HD_AST_ADD: case HD_AST_SUB: case HD_AST_MUL: case HD_AST_DIV: {
+        /* If either operand is float, result is float */
+        HDTypeKind lt = mir_infer_type(g, n->left);
+        HDTypeKind rt = mir_infer_type(g, n->right);
+        if (lt == HD_TYPE_F64 || rt == HD_TYPE_F64) return HD_TYPE_F64;
+        return HD_TYPE_I32;
+    }
+    case HD_AST_CALL:
+        /* For function calls, try to find the return type */
+        return HD_TYPE_I32; /* default */
+    default:
+        return HD_TYPE_I32;
     }
 }
 

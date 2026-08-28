@@ -92,6 +92,9 @@ static const Probe PROBES[] = {
     {"deep nest", "int f(int x){return x+1;} f(f(f(f(f(0)))));", 5},
     {"scope shadow", "int x=1; {int x=2; x;} x;", 1},
     {"comma op", "int a=0,b=0; (a=1,b=2); a+b;", 3},
+    {"auto int", "auto x = 42; x;", 42},
+    {"auto float", "auto y = 3.14; y;", 1078523331},
+    {"auto add", "auto a = 20; auto b = 22; a+b;", 42},
     {NULL, NULL, 0}
 };
 

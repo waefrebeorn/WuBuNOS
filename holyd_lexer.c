@@ -64,6 +64,7 @@ static const HDKeyword hd_keywords[] = {
     {"float",    HD_KW_F64},
     {"double",   HD_KW_F64},
     {"bool",     HD_KW_BOOL},
+    {"auto",     HD_KW_AUTO},
 
     /* Struct/class */
     {"class",    HD_KW_CLASS},
