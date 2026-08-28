@@ -15,7 +15,7 @@
 CC      = gcc
 OS_ROOT ?= /home/wubu/wubuos/src
 CFLAGS  = -O0 -g -std=c11 -D_POSIX_C_SOURCE=200809L -DWUBU_HOSTED \
-          -include wubu_gnu_compat.h -I. -I$(OS_ROOT)/jit -I$(OS_ROOT)/runtime
+          -include wubu_gnu_compat.h -I. -I$(OS_ROOT)/jit -I$(OS_ROOT)/runtime -fopenmp
 LDFLAGS = -lm
 
 # ---- Source groups ----
@@ -114,10 +114,10 @@ test_peephole: x86_peephole.c x86_peephole.h tools/test_x86_peephole.c
 # MIR-level float ops through the soft-float runtime
 test_mir_float: wubu_mir.c wubu_mir_interp.c wubu_mir_opt.c wubu_mir_lower.c \
                 wubu_mir_regalloc.c wubu_mir_ssa.c wubu_mir_sccp.c wubu_mir_gvn.c wubu_mir_fuse.c \
-                x86_peephole.c wubu_softfloat.c tools/test_mir_float.c
+                x86_peephole.c wubu_softfloat.c wubu_tgemm.c tools/test_mir_float.c
 	$(CC) $(CFLAGS) -I. -o $@ tools/test_mir_float.c wubu_mir.c wubu_mir_interp.c \
 		wubu_mir_opt.c wubu_mir_lower.c wubu_mir_regalloc.c wubu_mir_ssa.c wubu_mir_sccp.c \
-		wubu_mir_gvn.c wubu_mir_fuse.c x86_peephole.c wubu_softfloat.c -lm
+		wubu_mir_gvn.c wubu_mir_fuse.c x86_peephole.c wubu_softfloat.c wubu_tgemm.c -lm
 	./$@
 
 # Differential fuzz oracle: random-MIR cross-check across backends
@@ -226,7 +226,7 @@ test_mlir_parser: tools/test_mlir_parser.c mlir_parser.c mlir_parser.h wubu_hlir
 	./$@
 # Float32 GEMM benchmark
 bench_f32_gemm: tools/bench_f32_gemm.c wubu_tgemm.c wubu_tgemm.h
-	$(CC) $(CFLAGS) -I. -mavx2 -mfma $< wubu_tgemm.c -lm -o $@
+	$(CC) -O3 -std=c11 -mavx2 -mfma -fopenmp -I. $< wubu_tgemm.c -lm -o $@
 	./$@
 # MIR float32 GEMM test (interpreter + JIT)
 test_mir_f32_gemm: tools/test_mir_f32_gemm.c $(MIR) $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) jit_stub.c jit_stub_arm64.c
