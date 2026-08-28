@@ -302,14 +302,17 @@ int hlir_lower_mir(const hlir_graph_t *g, void *prog)
             base_vr[i] = wubu_mir_const(p, 0); /* will be filled at call time */
             n_placeholders++;
         } else if (n->op == HLIR_CONSTANT) {
-            /* Allocate + store constant data */
+            /* Allocate + store ALL constant data */
             wubu_vr_t addr = wubu_mir_alloc(p, nelems);
             base_vr[i] = addr;
-            /* Store first element as scalar for now (full loop later) */
             if (n->data && n->output.dtype == 0) {
-                float valf = ((float *)n->data)[0];
-                wubu_vr_t val = wubu_mir_const(p, (int64_t)(*(int64_t *)&valf));
-                wubu_mir_store(p, addr, val);
+                float *data = (float *)n->data;
+                for (int64_t e = 0; e < nelems; e++) {
+                    wubu_vr_t elem_addr = wubu_mir_binop(p, MIR_ADD, addr,
+                                                          wubu_mir_const(p, e));
+                    wubu_vr_t val = wubu_mir_const(p, (int64_t)(*(int64_t *)&data[e]));
+                    wubu_mir_store(p, elem_addr, val);
+                }
             } else {
                 wubu_vr_t zero = wubu_mir_const(p, 0);
                 wubu_mir_store(p, addr, zero);
