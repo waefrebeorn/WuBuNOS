@@ -17,4 +17,13 @@ void wubu_tgemm(int64_t *mem, int64_t A, int64_t B,
 void wubu_tgemm_mem8(uint8_t *mem, uint32_t A, uint32_t B, uint32_t C,
                      int M, int N, int K);
 
+/* Float32 GEMM for ML inference: C += A*B, float32 row-major.
+ * Uses AVX2+FMA when available, scalar fallback otherwise. */
+void wubu_tgemm_f32(const float *A, const float *B, float *C,
+                    int M, int N, int K);
+
+/* Dispatch: mode=0 int64, mode=1 float32 */
+void wubu_tgemm_dispatch(int mode, int64_t *mem, int64_t A, int64_t B,
+                         int64_t C, int M, int N, int K);
+
 #endif /* WUBU_TGEMM_H */

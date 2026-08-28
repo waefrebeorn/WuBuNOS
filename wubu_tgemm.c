@@ -152,3 +152,105 @@ void wubu_tgemm_mem8(uint8_t *mem, uint32_t A, uint32_t B, uint32_t C,
 #undef RD64
 #undef WR64
 }
+
+/* ---- Float32 GEMM (for ML inference) ------------------------------- */
+/* wubu_tgemm_f32: C += A*B where A,B,C are float32 row-major matrices.
+ * Uses AVX2 256-bit vectors (8 floats per vector) with FMA when available.
+ * Implements tiled GEMM with 32-column micro-kernel for cache efficiency.
+ * This is the hot path for transformer inference. */
+void wubu_tgemm_f32(const float *A, const float *B, float *C,
+                    int M, int N, int K) {
+#if defined(__AVX2__)
+    #include <immintrin.h>
+    /* Tile sizes: MC=16 rows, NC=128 cols, KC=32 k-iterations.
+     * L1: 32KB = 8192 floats. 16*32 + 32*128 + 16*128 = 512+4096+2048 = 6656 < 8192 */
+    const int MC = 16, NC = 128, KC = 32;
+    for (int i0 = 0; i0 < M; i0 += MC) {
+        int imax = i0 + MC; if (imax > M) imax = M;
+        for (int k0 = 0; k0 < K; k0 += KC) {
+            int kmax = k0 + KC; if (kmax > K) kmax = K;
+            for (int j0 = 0; j0 < N; j0 += NC) {
+                int jmax = j0 + NC; if (jmax > N) jmax = N;
+                /* Micro-kernel: process 8 columns per AVX2 vector */
+                for (int i = i0; i < imax; i++) {
+                    const float *a_row = A + (int64_t)i * K;
+                    float *c_row = C + (int64_t)i * N;
+                    int j = j0;
+#if defined(__FMA__)
+                    /* 32-column unrolled FMA path */
+                    for (; j + 31 < jmax; j += 32) {
+                        __m256 c0 = _mm256_loadu_ps(&c_row[j]);
+                        __m256 c1 = _mm256_loadu_ps(&c_row[j+8]);
+                        __m256 c2 = _mm256_loadu_ps(&c_row[j+16]);
+                        __m256 c3 = _mm256_loadu_ps(&c_row[j+24]);
+                        for (int k = k0; k < kmax; k++) {
+                            __m256 a_val = _mm256_set1_ps(a_row[k]);
+                            c0 = _mm256_fmadd_ps(a_val, _mm256_loadu_ps(&B[(int64_t)k*N+j]), c0);
+                            c1 = _mm256_fmadd_ps(a_val, _mm256_loadu_ps(&B[(int64_t)k*N+j+8]), c1);
+                            c2 = _mm256_fmadd_ps(a_val, _mm256_loadu_ps(&B[(int64_t)k*N+j+16]), c2);
+                            c3 = _mm256_fmadd_ps(a_val, _mm256_loadu_ps(&B[(int64_t)k*N+j+24]), c3);
+                        }
+                        _mm256_storeu_ps(&c_row[j], c0);
+                        _mm256_storeu_ps(&c_row[j+8], c1);
+                        _mm256_storeu_ps(&c_row[j+16], c2);
+                        _mm256_storeu_ps(&c_row[j+24], c3);
+                    }
+#endif
+                    /* 8-column standard path */
+                    for (; j + 7 < jmax; j += 8) {
+                        __m256 acc = _mm256_loadu_ps(&c_row[j]);
+                        for (int k = k0; k < kmax; k++) {
+                            __m256 a_val = _mm256_set1_ps(a_row[k]);
+                            __m256 b_val = _mm256_loadu_ps(&B[(int64_t)k * N + j]);
+#if defined(__FMA__)
+                            acc = _mm256_fmadd_ps(a_val, b_val, acc);
+#else
+                            acc = _mm256_add_ps(acc, _mm256_mul_ps(a_val, b_val));
+#endif
+                        }
+                        _mm256_storeu_ps(&c_row[j], acc);
+                    }
+                    /* Scalar tail */
+                    for (; j < jmax; j++) {
+                        float acc = c_row[j];
+                        for (int k = k0; k < kmax; k++)
+                            acc += a_row[k] * B[(int64_t)k * N + j];
+                        c_row[j] = acc;
+                    }
+                }
+            }
+        }
+    }
+#else
+    /* Scalar fallback with cache-friendly k-j ordering */
+    for (int i = 0; i < M; i++) {
+        const float *a_row = A + (int64_t)i * K;
+        float *c_row = C + (int64_t)i * N;
+        for (int k = 0; k < K; k++) {
+            float a_val = a_row[k];
+            const float *b_row = B + (int64_t)k * N;
+            for (int j = 0; j < N; j++)
+                c_row[j] += a_val * b_row[j];
+        }
+    }
+#endif
+}
+
+/* ---- Hybrid int64/float32 dispatch ---------------------------------- */
+/* wubu_tgemm_dispatch: picks the right kernel based on a mode flag.
+ * mode=0: int64 (original), mode=1: float32 (ML inference) */
+void wubu_tgemm_dispatch(int mode, int64_t *mem, int64_t A, int64_t B,
+                         int64_t C, int M, int N, int K) {
+    if (mode == 1) {
+        /* Float32: treat memory as float arrays */
+        float *fmem = (float *)mem;
+        int64_t fA = A * 2; /* int64 cells -> float cells (2 floats per int64) */
+        int64_t fB = B * 2;
+        int64_t fC = C * 2;
+        /* Actually, float32 uses 1 cell per element, not 2.
+         * The caller should pass float-indexed offsets. */
+        wubu_tgemm_f32(fmem + A, fmem + B, fmem + C, M, N, K);
+    } else {
+        wubu_tgemm(mem, A, B, C, M, N, K);
+    }
+}

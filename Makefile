@@ -224,6 +224,10 @@ test_mlir_text: tools/test_mlir_text.c mlir_text.c mlir_text.h wubu_hlir.c wubu_
 test_mlir_parser: tools/test_mlir_parser.c mlir_parser.c mlir_parser.h wubu_hlir.c wubu_hlir.h wubu_mir.c wubu_mir_interp.c wubu_softfloat.c wubu_memplan.c wubu_memplan.h
 	$(CC) $(CFLAGS) -I. $< mlir_parser.c wubu_hlir.c wubu_mir.c wubu_mir_interp.c wubu_softfloat.c wubu_memplan.c -lm -o $@
 	./$@
+# Float32 GEMM benchmark
+bench_f32_gemm: tools/bench_f32_gemm.c wubu_tgemm.c wubu_tgemm.h
+	$(CC) $(CFLAGS) -I. -mavx2 -mfma $< wubu_tgemm.c -lm -o $@
+	./$@
 # Speed benchmark: interpreter performance
 bench_speed: tools/bench_speed.c $(MIR) $(FRONT) jit_stub.c
 	$(CC) $(CFLAGS) -I. $< $(MIR) $(FRONT) jit_stub.c -lm -o $@
