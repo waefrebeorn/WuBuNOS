@@ -242,6 +242,16 @@ bench_speed: tools/bench_speed.c $(MIR) $(FRONT) jit_stub.c
 	$(CC) $(CFLAGS) -I. $< $(MIR) $(FRONT) jit_stub.c -lm -o $@
 	./$@
 
+# WASM SIMD test
+test_wasm_simd: tools/test_wasm_simd.c jit/wubu_isa_wasm.c jit/wubu_isa_wasm.h wubu_isa_driver.h wubu_mir.h wubu_mir.c
+	$(CC) $(CFLAGS) -I. -Ijit $< jit/wubu_isa_wasm.c wubu_mir.c -lm -o $@
+	./$@
+
+# Mini MLP model inference test (interpreter only)
+test_model_mini: tools/test_model_mini.c wubu_hlir.c wubu_hlir.h wubu_mir.c wubu_mir.h wubu_mir_interp.c wubu_softfloat.c wubu_tgemm.c wubu_host_tensor.c wubu_memplan.c wubu_memplan.h
+	$(CC) $(CFLAGS) -I. $< wubu_hlir.c wubu_mir.c wubu_mir_interp.c wubu_softfloat.c wubu_tgemm.c wubu_host_tensor.c wubu_memplan.c -lm -o $@
+	./$@
+
 # WASM backend test (self-contained: no driver registry needed)
 test_wasm_backend: tools/test_wasm_backend.c jit/wubu_isa_wasm.c jit/wubu_isa_wasm.h wubu_mir.h wubu_mir.c
 	$(CC) $(CFLAGS) -I. -Ijit $< jit/wubu_isa_wasm.c wubu_mir.c -lm -o $@
