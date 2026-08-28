@@ -184,18 +184,18 @@ test_fp16: tools/test_fp16.c wubu_softfloat.c wubu_softfloat.h
 	./$@
 
 # HLIR test
-test_hlir: tools/test_hlir.c wubu_hlir.c wubu_hlir.h wubu_mir.c wubu_mir.h
-	$(CC) $(CFLAGS) -I. $< wubu_hlir.c wubu_mir.c -lm -o $@
+test_hlir: tools/test_hlir.c wubu_hlir.c wubu_hlir.h wubu_mir.c wubu_mir.h wubu_memplan.c wubu_memplan.h
+	$(CC) $(CFLAGS) -I. $< wubu_hlir.c wubu_mir.c wubu_memplan.c -lm -o $@
 	./$@
 
 # HLIR→MIR lowering test
-test_hlir_lower: tools/test_hlir_lower.c wubu_hlir.c wubu_hlir.h wubu_mir.c wubu_mir_interp.c wubu_mir.h wubu_softfloat.c
-	$(CC) $(CFLAGS) -I. $< wubu_hlir.c wubu_mir.c wubu_mir_interp.c wubu_softfloat.c -lm -o $@
+test_hlir_lower: tools/test_hlir_lower.c wubu_hlir.c wubu_hlir.h wubu_mir.c wubu_mir_interp.c wubu_mir.h wubu_softfloat.c wubu_memplan.c wubu_memplan.h
+	$(CC) $(CFLAGS) -I. $< wubu_hlir.c wubu_mir.c wubu_mir_interp.c wubu_softfloat.c wubu_memplan.c -lm -o $@
 	./$@
 
 # ONNX parser test
-test_onnx_parser: tools/test_onnx_parser.c onnx_parser.c onnx_parser.h wubu_hlir.c wubu_hlir.h wubu_mir.c wubu_mir_interp.c wubu_softfloat.c
-	$(CC) $(CFLAGS) -I. $< onnx_parser.c wubu_hlir.c wubu_mir.c wubu_mir_interp.c wubu_softfloat.c -lm -o $@
+test_onnx_parser: tools/test_onnx_parser.c onnx_parser.c onnx_parser.h wubu_hlir.c wubu_hlir.h wubu_mir.c wubu_mir_interp.c wubu_softfloat.c wubu_memplan.c wubu_memplan.h
+	$(CC) $(CFLAGS) -I. $< onnx_parser.c wubu_hlir.c wubu_mir.c wubu_mir_interp.c wubu_softfloat.c wubu_memplan.c -lm -o $@
 	./$@
 
 # Memory planning test
@@ -204,8 +204,8 @@ test_memplan: tools/test_memplan.c wubu_memplan.c wubu_memplan.h wubu_hlir.c wub
 	./$@
 
 # MLIR bytecode parser test
-test_mlir_parser: tools/test_mlir_parser.c mlir_parser.c mlir_parser.h wubu_hlir.c wubu_hlir.h wubu_mir.c wubu_mir_interp.c wubu_softfloat.c
-	$(CC) $(CFLAGS) -I. $< mlir_parser.c wubu_hlir.c wubu_mir.c wubu_mir_interp.c wubu_softfloat.c -lm -o $@
+test_mlir_parser: tools/test_mlir_parser.c mlir_parser.c mlir_parser.h wubu_hlir.c wubu_hlir.h wubu_mir.c wubu_mir_interp.c wubu_softfloat.c wubu_memplan.c wubu_memplan.h
+	$(CC) $(CFLAGS) -I. $< mlir_parser.c wubu_hlir.c wubu_mir.c wubu_mir_interp.c wubu_softfloat.c wubu_memplan.c -lm -o $@
 	./$@
 
 # WASM backend test

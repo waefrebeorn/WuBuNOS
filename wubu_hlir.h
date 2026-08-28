@@ -159,6 +159,10 @@ int hlir_topo_sort(const hlir_graph_t *g, hlir_node_t **sorted);
 /* Lower graph to canonical MIR */
 int hlir_lower_mir(const hlir_graph_t *g, void *prog);
 
+/* Memory planning: compute buffer reuse plan for the graph */
+typedef struct memplan memplan_t;
+memplan_t *hlir_memplan(const hlir_graph_t *g);
+
 /* Debug: dump graph as text */
 void hlir_dump(const hlir_graph_t *g);
 

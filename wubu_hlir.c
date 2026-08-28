@@ -6,10 +6,16 @@
  */
 #include "wubu_hlir.h"
 #include "wubu_mir.h"
+#include "wubu_memplan.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdio.h>
 #include <math.h>
+
+/* ─── Memory planning ─── */
+memplan_t *hlir_memplan(const hlir_graph_t *g) {
+    return memplan_create(g);
+}
 
 /* ---- internal helpers ---- */
 static int tensor_nelems(const hlir_tensor_t *t)

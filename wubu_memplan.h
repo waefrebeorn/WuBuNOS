@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 /* Memory plan: maps each HLIR node to a buffer, with reuse */
-typedef struct {
+typedef struct memplan {
     int      n_nodes;
     int     *node_buf;     /* buffer_id for each node, -1 = no alloc */
     int64_t *node_size;    /* size in bytes for each node's output */
