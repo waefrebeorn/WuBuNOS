@@ -77,7 +77,6 @@ void wubu_tgemm(int64_t *mem, int64_t A, int64_t B,
                 int64_t C, int M, int N, int K)
 {
 #if defined(__x86_64__)
-    if (have_avx512()) { tgemm_avx512(mem, A, B, C, M, N, K); return; }
     if (have_avx2()) { tgemm_avx2(mem, A, B, C, M, N, K); return; }
 #endif
     /* OpenMP parallel over 4-row blocks */
