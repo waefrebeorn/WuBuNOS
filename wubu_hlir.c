@@ -298,8 +298,8 @@ int hlir_lower_mir(const hlir_graph_t *g, void *prog)
         int64_t nelems = n->output.nelems > 0 ? n->output.nelems : 1;
 
         if (n->op == HLIR_PLACEHOLDER) {
-            /* Placeholders get sequential arg slots: v1, v2, ... */
-            base_vr[i] = wubu_mir_const(p, 0); /* will be filled at call time */
+            /* Placeholders get allocated memory for their input data */
+            base_vr[i] = wubu_mir_alloc(p, nelems);
             n_placeholders++;
         } else if (n->op == HLIR_CONSTANT) {
             /* Allocate + store ALL constant data */
@@ -410,12 +410,16 @@ int hlir_lower_mir(const hlir_graph_t *g, void *prog)
         case HLIR_MATMUL: {
             wubu_vr_t a = base_vr[hlir_topo_order_of(g, n->inputs[0])];
             wubu_vr_t b = base_vr[hlir_topo_order_of(g, n->inputs[1])];
-            /* GEMM: for now use the first dimension as a rough size */
             int M = (n->output.n_dims >= 1) ? (int)n->output.dims[0] : 1;
             int N = (n->output.n_dims >= 2) ? (int)n->output.dims[1] : 1;
             int K = (n->inputs[0]->output.n_dims >= 2) ?
                     (int)n->inputs[0]->output.dims[1] : 1;
-            wubu_mir_tgemm(p, a, b, dst, M, N, K);
+            /* Use float GEMM for F32 output, int GEMM otherwise */
+            if (n->output.dtype == 0) { /* F32 */
+                wubu_mir_tgemm_f32(p, a, b, dst, M, N, K);
+            } else {
+                wubu_mir_tgemm(p, a, b, dst, M, N, K);
+            }
             break;
         }
         case HLIR_SOFTMAX: {
