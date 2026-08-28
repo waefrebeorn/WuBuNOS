@@ -8,9 +8,9 @@
 #endif
 
 
-/* ---- AVX2 fast path (x86-64 only) ------------------------------------
- * 4 columns of B are broadcast; each j-iteration accumulates 4 int64
- * products per row. AVX2 lacks 64-bit integer mul; emulate via 32-bit halves.
+/* ---- AVX2 / AVX-512 fast path (x86-64 only) ------------------------
+ * AVX2: 4 columns via 256-bit vectors; 64-bit mul emulated via 32-bit halves.
+ * AVX-512DQ: 8 columns via 512-bit vectors; native vpmullq for 64-bit mul.
  */
 #if defined(__x86_64__)
 #include <immintrin.h>
@@ -54,7 +54,7 @@ static void tgemm_avx2(int64_t *mem, int64_t A, int64_t B,
     }
 }
 
-static int avx2_ok = -1;
+static int avx2_ok = -1, avx512_ok = -1;
 static int have_avx2(void) {
     if (avx2_ok < 0) {
         __builtin_cpu_init();
@@ -62,12 +62,22 @@ static int have_avx2(void) {
     }
     return avx2_ok;
 }
+static int have_avx512(void) {
+    if (avx512_ok < 0) {
+        __builtin_cpu_init();
+        avx512_ok = (__builtin_cpu_supports("avx512f") &&
+                     __builtin_cpu_supports("avx512dq") &&
+                     __builtin_cpu_supports("avx512vl")) ? 1 : 0;
+    }
+    return avx512_ok;
+}
 #endif /* __x86_64__ */
 
 void wubu_tgemm(int64_t *mem, int64_t A, int64_t B,
                 int64_t C, int M, int N, int K)
 {
 #if defined(__x86_64__)
+    if (have_avx512()) { tgemm_avx512(mem, A, B, C, M, N, K); return; }
     if (have_avx2()) { tgemm_avx2(mem, A, B, C, M, N, K); return; }
 #endif
     /* OpenMP parallel over 4-row blocks */

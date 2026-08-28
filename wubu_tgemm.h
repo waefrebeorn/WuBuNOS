@@ -12,6 +12,12 @@
 void wubu_tgemm(int64_t *mem, int64_t A, int64_t B,
                 int64_t C, int M, int N, int K);
 
+/* AVX-512DQ native path — separate TU compiled with -mavx512dq (x86-64 only). */
+#if defined(__x86_64__)
+void tgemm_avx512(int64_t *mem, int64_t A, int64_t B,
+                  int64_t C, int M, int N, int K);
+#endif
+
 /* Byte-addressed variant (8-bit retro ISAs): cells are little-endian
  * int64 at byte offset cell*8 within mem. */
 void wubu_tgemm_mem8(uint8_t *mem, uint32_t A, uint32_t B, uint32_t C,

@@ -225,15 +225,19 @@ test_mlir_parser: tools/test_mlir_parser.c mlir_parser.c mlir_parser.h wubu_hlir
 	$(CC) $(CFLAGS) -I. $< mlir_parser.c wubu_hlir.c wubu_mir.c wubu_mir_interp.c wubu_softfloat.c wubu_tgemm.c wubu_host_tensor.c wubu_memplan.c -lm -o $@
 	./$@
 # Float32 GEMM benchmark
-bench_f32_gemm: tools/bench_f32_gemm.c wubu_tgemm.c wubu_tgemm.h
-	$(CC) -O3 -std=c11 -mavx2 -mfma -fopenmp -I. $< wubu_tgemm.c -lm -o $@
+bench_f32_gemm: tools/bench_f32_gemm.c wubu_tgemm.c wubu_tgemm.h wubu_tgemm_avx512.o
+	$(CC) -O3 -std=c11 -mavx2 -mfma -fopenmp -I. $< wubu_tgemm.c wubu_tgemm_avx512.o -lm -o $@
 	./$@
 # MIR float32 GEMM test (interpreter + JIT)
 test_mir_f32_gemm: tools/test_mir_f32_gemm.c $(MIR) $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) jit_stub.c jit_stub_arm64.c
 	$(CC) $(CFLAGS) -I. -I$(OS_ROOT) -o $@ $^ -lm
 	./$@
+# AVX-512DQ int64 GEMM (Zen 4+) — separate TU, separate flags
+wubu_tgemm_avx512.o: wubu_tgemm_avx512.c wubu_tgemm.h
+	$(CC) $(CFLAGS) -mavx512dq -mavx512f -mavx512vl -c $< -o $@
+
 # JIT float32 GEMM performance benchmark
-bench_jit_f32: tools/bench_jit_f32.c $(MIR) $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) jit_stub.c jit_stub_arm64.c
+bench_jit_f32: tools/bench_jit_f32.c $(MIR) $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) jit_stub.c jit_stub_arm64.c wubu_tgemm_avx512.o
 	$(CC) $(CFLAGS) -O2 -I. -I$(OS_ROOT) -mavx2 -mfma -o $@ $^ -lm
 	./$@
 
