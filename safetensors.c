@@ -161,7 +161,6 @@ int safetensors_load(const char *filepath, safetensors_t *st) {
     memset(st, 0, sizeof(*st));
     strncpy(st->filename, filepath, sizeof(st->filename) - 1);
 
-    /* Read entire file */
     FILE *f = fopen(filepath, "rb");
     if (!f) { snprintf(st->error, sizeof(st->error), "cannot open %s", filepath); return -1; }
     fseek(f, 0, SEEK_END);
@@ -172,23 +171,33 @@ int safetensors_load(const char *filepath, safetensors_t *st) {
     if ((long)fread(data, 1, fsize, f) != fsize) { free(data); fclose(f); snprintf(st->error, sizeof(st->error), "short read"); return -1; }
     fclose(f);
 
-    /* Parse header size (8 bytes, uint64 LE) */
-    if (fsize < 8) { free(data); snprintf(st->error, sizeof(st->error), "file too small"); return -1; }
+    int rc = safetensors_load_from_memory(data, (size_t)fsize, st);
+    if (rc != 0) free(data);
+    return rc;
+}
+
+int safetensors_load_from_memory(const uint8_t *buffer, size_t sz, safetensors_t *st) {
+    memset(st, 0, sizeof(*st));
+    strncpy(st->filename, "<memory>", sizeof(st->filename) - 1);
+
+    if (sz < 8) { snprintf(st->error, sizeof(st->error), "buffer too small"); return -1; }
     uint64_t header_size = 0;
     for (int i = 0; i < 8; i++)
-        header_size |= ((uint64_t)data[i]) << (i * 8);
+        header_size |= ((uint64_t)buffer[i]) << (i * 8);
 
-    if (header_size == 0 || header_size > (uint64_t)(fsize - 8)) {
-        free(data);
+    if (header_size == 0 || header_size > (uint64_t)(sz - 8)) {
         snprintf(st->error, sizeof(st->error), "invalid header size: %llu", (unsigned long long)header_size);
         return -1;
     }
 
-    /* Parse JSON header */
     char *json = (char *)malloc(header_size + 1);
-    if (!json) { free(data); snprintf(st->error, sizeof(st->error), "malloc failed"); return -1; }
-    memcpy(json, data + 8, header_size);
+    if (!json) { snprintf(st->error, sizeof(st->error), "malloc failed"); return -1; }
+    memcpy(json, buffer + 8, header_size);
     json[header_size] = '\0';
+
+    uint8_t *data = (uint8_t *)malloc(sz);
+    if (!data) { free(json); snprintf(st->error, sizeof(st->error), "malloc failed"); return -1; }
+    memcpy(data, buffer, sz);
 
     json_parser_t jp = { .src = json, .pos = 0, .len = (int)header_size };
 
@@ -199,8 +208,7 @@ int safetensors_load(const char *filepath, safetensors_t *st) {
         return -1;
     }
 
-    /* Parse each tensor entry */
-    jp.pos++; /* skip '{' */
+    jp.pos++;
     json_skip_ws(&jp);
 
     while (jp.pos < jp.len && jp.src[jp.pos] != '}') {
@@ -216,8 +224,7 @@ int safetensors_load(const char *filepath, safetensors_t *st) {
 
         if (jp.pos >= jp.len || jp.src[jp.pos] != '{') { json_skip_value(&jp); goto next; }
 
-        /* Parse tensor info object */
-        jp.pos++; /* skip '{' */
+        jp.pos++;
         char dtype[32] = "F32";
         int64_t shape[16] = {0};
         int n_dims = 0;
@@ -233,22 +240,17 @@ int safetensors_load(const char *filepath, safetensors_t *st) {
             if (strcmp(key, "dtype") == 0) {
                 json_get_string_value(&jp, dtype, sizeof(dtype));
             } else if (strcmp(key, "shape") == 0) {
-                /* Parse array of ints */
                 json_skip_ws(&jp);
                 if (jp.pos < jp.len && jp.src[jp.pos] == ':') jp.pos++;
                 json_skip_ws(&jp);
                 if (jp.pos < jp.len && jp.src[jp.pos] == '[') {
-                    jp.pos++;
-                    json_skip_ws(&jp);
-                    n_dims = 0;
+                    jp.pos++; json_skip_ws(&jp); n_dims = 0;
                     while (jp.pos < jp.len && jp.src[jp.pos] != ']' && n_dims < 16) {
                         json_skip_ws(&jp);
-                        int64_t val = 0;
-                        int neg = 0;
+                        int64_t val = 0; int neg = 0;
                         if (jp.pos < jp.len && jp.src[jp.pos] == '-') { neg = 1; jp.pos++; }
                         while (jp.pos < jp.len && isdigit((unsigned char)jp.src[jp.pos])) {
-                            val = val * 10 + (jp.src[jp.pos] - '0');
-                            jp.pos++;
+                            val = val * 10 + (jp.src[jp.pos] - '0'); jp.pos++;
                         }
                         if (neg) val = -val;
                         shape[n_dims++] = val;
@@ -262,10 +264,7 @@ int safetensors_load(const char *filepath, safetensors_t *st) {
                 if (jp.pos < jp.len && jp.src[jp.pos] == ':') jp.pos++;
                 json_skip_ws(&jp);
                 if (jp.pos < jp.len && jp.src[jp.pos] == '[') {
-                    jp.pos++;
-                    json_skip_ws(&jp);
-                    /* Parse first int */
-                    json_skip_ws(&jp);
+                    jp.pos++; json_skip_ws(&jp);
                     int64_t val = 0; int neg = 0;
                     if (jp.pos < jp.len && jp.src[jp.pos] == '-') { neg = 1; jp.pos++; }
                     while (jp.pos < jp.len && isdigit((unsigned char)jp.src[jp.pos])) {
@@ -276,7 +275,6 @@ int safetensors_load(const char *filepath, safetensors_t *st) {
                     json_skip_ws(&jp);
                     if (jp.pos < jp.len && jp.src[jp.pos] == ',') jp.pos++;
                     json_skip_ws(&jp);
-                    /* Parse second int */
                     val = 0; neg = 0;
                     if (jp.pos < jp.len && jp.src[jp.pos] == '-') { neg = 1; jp.pos++; }
                     while (jp.pos < jp.len && isdigit((unsigned char)jp.src[jp.pos])) {
@@ -288,7 +286,6 @@ int safetensors_load(const char *filepath, safetensors_t *st) {
                     if (jp.pos < jp.len && jp.src[jp.pos] == ']') jp.pos++;
                 }
             } else {
-                /* Skip unknown key's value */
                 json_skip_value(&jp);
             }
 
@@ -297,7 +294,6 @@ int safetensors_load(const char *filepath, safetensors_t *st) {
         }
         if (jp.pos < jp.len && jp.src[jp.pos] == '}') jp.pos++;
 
-        /* Store tensor info */
         if (st->n_tensors < SAFETENSORS_MAX_TENSORS) {
             safetensors_tensor_t *t = &st->tensors[st->n_tensors];
             strncpy(t->name, tensor_name, sizeof(t->name) - 1);
@@ -318,11 +314,13 @@ next:
     }
 
     st->file_data = data;
-    st->file_size = fsize;
+    st->file_size = sz;
     st->header_json = json;
     st->header_size = (size_t)header_size;
     return 0;
 }
+
+
 
 void safetensors_free(safetensors_t *st) {
     if (st->file_data) free(st->file_data);

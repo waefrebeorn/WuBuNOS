@@ -37,6 +37,11 @@ typedef struct {
 /* Load a .safetensors file. Returns 0 on success, -1 on error (st->error set). */
 int safetensors_load(const char *filepath, safetensors_t *st);
 
+/* Load safetensors from memory buffer (no file I/O).
+ * buffer/sz: the raw safetensors data in memory.
+ * Returns 0 on success, -1 on error (st->error set). */
+int safetensors_load_from_memory(const uint8_t *buffer, size_t sz, safetensors_t *st);
+
 /* Free resources */
 void safetensors_free(safetensors_t *st);
 
