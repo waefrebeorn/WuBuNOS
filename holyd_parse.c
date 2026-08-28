@@ -1390,6 +1390,35 @@ HDASTNode *hd_parse_decl(HDParser *p) {
     if (match(p, HD_TOK_ASSIGN)) {
         var->init = parse_assignment_expr(p);
     }
+
+    /* Check for additional declarators: int a=0, b=0, c=0; */
+    if (peek(p) == HD_TOK_COMMA) {
+        /* Wrap first decl in a BLOCK for multi-declarator.
+         * Mark as no-scope-pop so vars persist after the block. */
+        HDASTNode *block = hd_ast_new(HD_AST_BLOCK);
+        block->no_scope_pop = 1;
+        hd_ast_add_stmt(block, var);
+        while (match(p, HD_TOK_COMMA)) {
+            /* Parse next declarator: name [= init] */
+            HDASTNode *var2 = hd_ast_new(HD_AST_VAR_DECL);
+            if (peek(p) != HD_TOK_IDENT) {
+                parse_error(p, "expected identifier in multi-declarator");
+                return block;
+            }
+            strncpy(var2->ident, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
+            advance(p);
+            var2->type = type; /* same base type as first declarator */
+            /* Handle pointer: int *a, b; → a is pointer, b is not */
+            /* For simplicity, only support non-pointer multi-decl */
+            if (match(p, HD_TOK_ASSIGN)) {
+                var2->init = parse_assignment_expr(p);
+            }
+            hd_ast_add_stmt(block, var2);
+        }
+        expect(p, HD_TOK_SEMI);
+        return block;
+    }
+
     expect(p, HD_TOK_SEMI);
     return var;
 }

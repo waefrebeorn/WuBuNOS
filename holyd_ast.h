@@ -56,6 +56,9 @@ struct HDASTNode {
     /* Function call target */
     void *func_ptr;
     HDASTNode *callee;
+
+    /* Scope control: if set, BLOCK does not pop scope on exit */
+    int no_scope_pop;
 };
 
 /* AST utilities */

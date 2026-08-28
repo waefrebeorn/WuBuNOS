@@ -289,9 +289,21 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
     if (!n) return 0;
     switch (n->kind) {
     case HD_AST_BLOCK: {
+        /* Push scope: save current var count and the vars themselves
+         * so we can restore outer scope on block exit (shadowing). */
+        int saved_n_vars = g->n_vars;
+        mir_var_t saved_vars[MIRGEN_MAX_VARS];
+        memcpy(saved_vars, g->vars, (size_t)saved_n_vars * sizeof(mir_var_t));
         wubu_vr_t last = 0;
         for (uint32_t i = 0; i < n->n_stmts; i++)
             last = mir_gen_stmt(g, n->stmts[i]);
+        /* Pop scope unless:
+         * - we're in a function body (params must survive)
+         * - this is a multi-decl block (vars must persist) */
+        if (!g->in_function_body && !n->no_scope_pop) {
+            memcpy(g->vars, saved_vars, (size_t)saved_n_vars * sizeof(mir_var_t));
+            g->n_vars = saved_n_vars;
+        }
         return last;
     }
     case HD_AST_STRUCT_DECL: {
@@ -609,9 +621,9 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         return mir_gen_expr(g, n->right);
     }
     case HD_AST_FLOAT_LIT: {
-        union { double d; int64_t i; } u;
-        u.d = n->float_val;
-        return wubu_mir_const(g->prog, u.i);
+        union { float f; uint32_t i; } u;
+        u.f = (float)n->float_val;
+        return wubu_mir_const(g->prog, (int64_t)u.i);
     }
     case HD_AST_BOOL_LIT:
         return wubu_mir_const(g->prog, n->int_val ? 1 : 0);
@@ -1007,7 +1019,9 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
          * and returns. This makes `if(c) return x; return y;` correct. */
         g.fn_ret_vr = mir_new_vr(&g);
         g.fn_ret_label = wubu_mir_new_label(prog);
+        g.in_function_body = 1;
         mir_gen_stmt(&g, fn->body);
+        g.in_function_body = 0;
         wubu_mir_place_label(prog, g.fn_ret_label);
         wubu_mir_mov_to(prog, 0, g.fn_ret_vr);   /* callee returns in vr0 */
         wubu_mir_ret(prog, 0);
