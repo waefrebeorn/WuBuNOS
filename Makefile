@@ -228,6 +228,10 @@ test_mlir_parser: tools/test_mlir_parser.c mlir_parser.c mlir_parser.h wubu_hlir
 bench_f32_gemm: tools/bench_f32_gemm.c wubu_tgemm.c wubu_tgemm.h
 	$(CC) $(CFLAGS) -I. -mavx2 -mfma $< wubu_tgemm.c -lm -o $@
 	./$@
+# MIR float32 GEMM test (interpreter + JIT)
+test_mir_f32_gemm: tools/test_mir_f32_gemm.c $(MIR) $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) jit_stub.c jit_stub_arm64.c
+	$(CC) $(CFLAGS) -I. -I$(OS_ROOT) -o $@ $^ -lm
+	./$@
 # Speed benchmark: interpreter performance
 bench_speed: tools/bench_speed.c $(MIR) $(FRONT) jit_stub.c
 	$(CC) $(CFLAGS) -I. $< $(MIR) $(FRONT) jit_stub.c -lm -o $@

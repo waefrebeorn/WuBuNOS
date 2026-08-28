@@ -194,7 +194,11 @@ typedef enum {
     MIR_FUSED_AFFINE,
     /* T_LAYERNORM_APPLY: fused layer norm application (gamma, beta).
      * dst=output, a=centered, b=params; imm packs gamma/beta indices. */
-    MIR_T_LAYERNORM_APPLY
+    MIR_T_LAYERNORM_APPLY,
+    /* T_GEMM_F32: float32 tensor matrix multiply C += A*B.
+     * Same encoding as T_GEMM but operates on float32 data.
+     * Dispatches to wubu_tgemm_f32() for optimized AVX2+FMA execution. */
+    MIR_T_GEMM_F32,
 } wubu_mir_op_t;
 
 #define MIR_MAX_FUNCTIONS 256
@@ -260,6 +264,10 @@ void wubu_mir_ret(wubu_mir_prog_t *p, wubu_vr_t v);
  * a=Abase, b=Bbase, dst=Cbase, M/N/K are the matrix shapes. */
 void wubu_mir_tgemm(wubu_mir_prog_t *p, wubu_vr_t a, wubu_vr_t b,
                    wubu_vr_t dst, int M, int N, int K);
+/* Emit MIR_T_GEMM_F32: float32 matrix multiply C += A*B.
+ * Same encoding as T_GEMM but operates on float32 data. */
+void wubu_mir_tgemm_f32(wubu_mir_prog_t *p, wubu_vr_t a, wubu_vr_t b,
+                        wubu_vr_t dst, int M, int N, int K);
 /* AGI tensor ops */
 void wubu_mir_tsoftmax(wubu_mir_prog_t *p, wubu_vr_t a, wubu_vr_t b, wubu_vr_t dst, int64_t imm);
 void wubu_mir_trms_norm(wubu_mir_prog_t *p, wubu_vr_t a, wubu_vr_t b, wubu_vr_t dst, int64_t imm);

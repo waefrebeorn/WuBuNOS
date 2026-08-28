@@ -152,6 +152,17 @@ void wubu_mir_tgemm(wubu_mir_prog_t *p, wubu_vr_t a, wubu_vr_t b,
     }
 }
 
+void wubu_mir_tgemm_f32(wubu_mir_prog_t *p, wubu_vr_t a, wubu_vr_t b,
+                        wubu_vr_t dst, int M, int N, int K)
+{
+    wubu_mir_instr_t *i = emit(p);
+    if (i) {
+        i->op = MIR_T_GEMM_F32;
+        i->a = a; i->b = b; i->dst = dst;
+        i->imm = ((uint64_t)M << 22) | ((uint64_t)N << 11) | (uint64_t)K;
+    }
+}
+
 /* ---- AGI tensor op builders ---- */
 static inline wubu_mir_instr_t* emit_tensor(wubu_mir_prog_t *p, wubu_mir_op_t op,
                                             wubu_vr_t a, wubu_vr_t b, wubu_vr_t dst,

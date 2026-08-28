@@ -225,6 +225,15 @@ int64_t wubu_mir_interp(const wubu_mir_prog_t *p)
                 }
             pc++; break;
         }
+        case MIR_T_GEMM_F32: {
+            /* C += A*B, float32, row-major. Uses optimized kernel. */
+            int M = (int)(in->imm >> 22);
+            int N = (int)((in->imm >> 11) & 0x7FF);
+            int K = (int)(in->imm & 0x7FF);
+            int64_t a = vr[in->a], b = vr[in->b], c = vr[in->dst];
+            wubu_tgemm_f32((float*)(mem + a), (float*)(mem + b), (float*)(mem + c), M, N, K);
+            pc++; break;
+        }
         case MIR_RET:
             if (call_sp > 0) {
                 /* returning from a called function: restore the caller's

@@ -22,6 +22,7 @@
  * C11, self-contained.
  */
 #include "wubu_isa_driver.h"
+#include "wubu_tgemm.h"
 #include "wubu_mir_regalloc.h"
 #include "../jit/jit.h"
 #include <stdio.h>
@@ -182,6 +183,15 @@ static void x86_patch_push(x86_patch_t **patches, size_t *np, size_t *cap,
  * Tiled kernel (H4): 4-row register blocking — one pass over B[k][j] feeds
  * four A rows' accumulators (4x fewer B loads), plus K-unroll-by-4 with
  * hoisted row pointers. Bit-identical to the naive reference loop below. */
+
+/* ---- Float32 GEMM parallel wrapper -------------------------------- */
+void wubu_tgemm_f32_parallel(int64_t *stack_mem, int64_t A, int64_t B,
+                              int64_t C, int M, int N, int K) {
+    int64_t *mem = wubu_jit_mem_ptr ? wubu_jit_mem_ptr : stack_mem;
+    float *fmem = (float *)mem;
+    wubu_tgemm_f32(fmem + A, fmem + B, fmem + C, M, N, K);
+}
+
 static void wubu_tgemm_scalar(int64_t *mem, int64_t A, int64_t B,
                               int64_t C, int M, int N, int K)
 {
@@ -973,6 +983,36 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             /* call r11 (FF D3 with REX.B → 41 FF D3; without 0x41 it decodes as call rbx!) */
             e8(&e,0x41); e8(&e,0xFF); e8(&e,0xD3);
             /* add rsp,8 (restore stack for K arg) */
+            e8(&e,0x48); e8(&e,0x83); e8(&e,0xC4); e8(&e,0x08);
+            break;
+        }
+        case MIR_T_GEMM_F32: {
+            /* Float32 GEMM via optimized AVX2+FMA kernel.
+             * Same calling convention as T_GEMM but calls wubu_tgemm_f32_parallel. */
+            int M = (int)(in->imm >> 22);
+            int N = (int)((in->imm >> 11) & 0x7FF);
+            int K = (int)(in->imm & 0x7FF);
+            int sa = VR_ENC(in->a);
+            int sb = VR_ENC(in->b);
+            int sd = VR_ENC(in->dst);
+            /* rdi = &mem[0] */
+            rex(&e,1,0,0,0); e8(&e,0x8D); e8(&e,0xBD); e32(&e,(uint32_t)(-(int32_t)e.mem_off));
+            /* rsi = A */
+            if (sa>=0) emit_mov_reg(&e,6,sa);  else emit_load_rbp(&e,6,spill_off(assign, assign_count, &e, in->a));
+            /* rdx = B */
+            if (sb>=0) emit_mov_reg(&e,2,sb);  else emit_load_rbp(&e,2,spill_off(assign, assign_count, &e, in->b));
+            /* rcx = C */
+            if (sd>=0) emit_mov_reg(&e,1,sd);  else emit_load_rbp(&e,1,spill_off(assign, assign_count, &e, in->dst));
+            /* r8d = M, r9d = N */
+            e8(&e,0x41); e8(&e,0xB8); e32(&e,(uint32_t)M);
+            e8(&e,0x41); e8(&e,0xB9); e32(&e,(uint32_t)N);
+            /* push K */
+            if ((uint32_t)K < 0x80u) { e8(&e,0x6A); e8(&e,(uint8_t)K); }
+            else                     { e8(&e,0x68); e32(&e,(uint32_t)K); }
+            /* movabs r11, &wubu_tgemm_f32_parallel; call r11 */
+            rex(&e,1,0,0,1); e8(&e,0xBB); e64(&e,(uint64_t)&wubu_tgemm_f32_parallel);
+            e8(&e,0x41); e8(&e,0xFF); e8(&e,0xD3);
+            /* add rsp,8 */
             e8(&e,0x48); e8(&e,0x83); e8(&e,0xC4); e8(&e,0x08);
             break;
         }
