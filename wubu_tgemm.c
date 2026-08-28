@@ -236,6 +236,43 @@ void wubu_tgemm_f32(const float *A, const float *B, float *C,
 #endif
 }
 
+/* ---- MIR-compatible float32 GEMM ---------------------------------- */
+/* wubu_tgemm_f32_mir: GEMM for MIR memory layout where each float is
+ * stored as a 32-bit IEEE-754 value in the lower half of an int64 cell.
+ * Extracts floats, computes, and stores back. */
+void wubu_tgemm_f32_mir(int64_t *mem, int64_t a, int64_t b, int64_t c,
+                                int M, int N, int K) {
+    /* Allocate temporary float buffers */
+    size_t nA = (size_t)M * K;
+    size_t nB = (size_t)K * N;
+    size_t nC = (size_t)M * N;
+    float *A = (float*)malloc(nA * sizeof(float));
+    float *B = (float*)malloc(nB * sizeof(float));
+    float *C = (float*)calloc(nC, sizeof(float));
+    if (!A || !B || C) {
+        /* Extract floats from MIR memory (lower 32 bits of each cell) */
+        for (size_t i = 0; i < nA; i++) {
+            union { float f; int32_t i; } u;
+            u.i = (int32_t)mem[a + i];
+            A[i] = u.f;
+        }
+        for (size_t i = 0; i < nB; i++) {
+            union { float f; int32_t i; } u;
+            u.i = (int32_t)mem[b + i];
+            B[i] = u.f;
+        }
+        /* Compute */
+        wubu_tgemm_f32(A, B, C, M, N, K);
+        /* Store back to MIR memory */
+        for (size_t i = 0; i < nC; i++) {
+            union { float f; int32_t i; } u;
+            u.f = C[i];
+            mem[c + i] = (int64_t)u.i;
+        }
+    }
+    free(A); free(B); free(C);
+}
+
 /* ---- Hybrid int64/float32 dispatch ---------------------------------- */
 /* wubu_tgemm_dispatch: picks the right kernel based on a mode flag.
  * mode=0: int64 (original), mode=1: float32 (ML inference) */

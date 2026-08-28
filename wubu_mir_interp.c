@@ -226,12 +226,15 @@ int64_t wubu_mir_interp(const wubu_mir_prog_t *p)
             pc++; break;
         }
         case MIR_T_GEMM_F32: {
-            /* C += A*B, float32, row-major. Uses optimized kernel. */
+            /* Float32 GEMM. MIR memory is int64 cells; floats are stored
+             * as raw 32-bit IEEE-754 bits in the lower half of each cell.
+             * Use memcpy to safely load/store float values. */
             int M = (int)(in->imm >> 22);
-            int N = (int)((in->imm >> 11) & 0x7FF);
+            int Ndim = (int)((in->imm >> 11) & 0x7FF);
             int K = (int)(in->imm & 0x7FF);
             int64_t a = vr[in->a], b = vr[in->b], c = vr[in->dst];
-            wubu_tgemm_f32((float*)(mem + a), (float*)(mem + b), (float*)(mem + c), M, N, K);
+            /* Use the optimized kernel with proper float extraction */
+            wubu_tgemm_f32_mir(mem, a, b, c, M, Ndim, K);
             pc++; break;
         }
         case MIR_RET:
