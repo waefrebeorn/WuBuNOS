@@ -191,8 +191,8 @@ test_hlir: tools/test_hlir.c wubu_hlir.c wubu_hlir.h wubu_mir.c wubu_mir.h wubu_
 	./$@
 
 # HLIR→MIR lowering test
-test_hlir_lower: tools/test_hlir_lower.c wubu_hlir.c wubu_hlir.h wubu_mir.c wubu_mir_interp.c wubu_mir.h wubu_softfloat.c wubu_memplan.c wubu_memplan.h
-	$(CC) $(CFLAGS) -I. $< wubu_hlir.c wubu_mir.c wubu_mir_interp.c wubu_softfloat.c wubu_memplan.c -lm -o $@
+test_hlir_lower: tools/test_hlir_lower.c wubu_hlir.c wubu_hlir.h wubu_mir.c wubu_mir_interp.c wubu_mir.h wubu_softfloat.c wubu_tgemm.c wubu_host_tensor.c wubu_memplan.c wubu_memplan.h
+	$(CC) $(CFLAGS) -I. $< wubu_hlir.c wubu_mir.c wubu_mir_interp.c wubu_softfloat.c wubu_tgemm.c wubu_host_tensor.c wubu_memplan.c -lm -o $@
 	./$@
 
 # ONNX parser test
@@ -221,8 +221,8 @@ test_mlir_text: tools/test_mlir_text.c mlir_text.c mlir_text.h wubu_hlir.c wubu_
 	./$@
 
 # MLIR bytecode parser test
-test_mlir_parser: tools/test_mlir_parser.c mlir_parser.c mlir_parser.h wubu_hlir.c wubu_hlir.h wubu_mir.c wubu_mir_interp.c wubu_softfloat.c wubu_memplan.c wubu_memplan.h
-	$(CC) $(CFLAGS) -I. $< mlir_parser.c wubu_hlir.c wubu_mir.c wubu_mir_interp.c wubu_softfloat.c wubu_memplan.c -lm -o $@
+test_mlir_parser: tools/test_mlir_parser.c mlir_parser.c mlir_parser.h wubu_hlir.c wubu_hlir.h wubu_mir.c wubu_mir_interp.c wubu_softfloat.c wubu_tgemm.c wubu_host_tensor.c wubu_memplan.c wubu_memplan.h
+	$(CC) $(CFLAGS) -I. $< mlir_parser.c wubu_hlir.c wubu_mir.c wubu_mir_interp.c wubu_softfloat.c wubu_tgemm.c wubu_host_tensor.c wubu_memplan.c -lm -o $@
 	./$@
 # Float32 GEMM benchmark
 bench_f32_gemm: tools/bench_f32_gemm.c wubu_tgemm.c wubu_tgemm.h
