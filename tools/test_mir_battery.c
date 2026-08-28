@@ -74,6 +74,7 @@ static const Probe PROBES[] = {
     /* ---- structs ---- */
     {"struct decl", "struct S{int a;}; struct S s; s.a=42; s.a;", 42},
     {"struct member", "struct S{int a;int b;}; struct S s; s.a=1; s.b=2; s.a+s.b;", 3},
+    {"struct packing", "struct Packed{char a; int b; char c;}; sizeof(struct Packed);", 8},
     /* ---- sizeof ---- */
     {"sizeof int", "sizeof(int);", 4},
     /* ---- string ---- */

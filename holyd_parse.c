@@ -309,6 +309,43 @@ static HDType *parse_type(HDParser *p) {
                     expect(p, HD_TOK_SEMI);
                 }
                 expect(p, HD_TOK_RBRACE);
+                /* Struct packing: reorder members by size (largest first)
+                 * to minimize padding. This is the standard C compiler
+                 * optimization for struct layout. */
+                if (comp_kind == HD_TYPE_STRUCT && t->n_members > 1) {
+                    /* Sort members by type size descending (bubble sort) */
+                    for (int i = 0; i < t->n_members - 1; i++) {
+                        for (int j = 0; j < t->n_members - i - 1; j++) {
+                            size_t szj = hd_type_size(t->members[j].type);
+                            size_t szj1 = hd_type_size(t->members[j+1].type);
+                            if (szj < szj1) {
+                                /* Swap member names, types, and offsets */
+                                char tmp_name[HD_MAX_IDENT_LEN];
+                                memcpy(tmp_name, t->members[j].name, HD_MAX_IDENT_LEN);
+                                memcpy(t->members[j].name, t->members[j+1].name, HD_MAX_IDENT_LEN);
+                                memcpy(t->members[j+1].name, tmp_name, HD_MAX_IDENT_LEN);
+                                HDType *tmp_type = t->members[j].type;
+                                t->members[j].type = t->members[j+1].type;
+                                t->members[j+1].type = tmp_type;
+                            }
+                        }
+                    }
+                    /* Recompute offsets after reordering */
+                    t->size = 0;
+                    t->align = 1;
+                    for (int i = 0; i < t->n_members; i++) {
+                        size_t msz = hd_type_size(t->members[i].type);
+                        int align = (int)msz;
+                        if (align < 1) align = 1;
+                        if (align > t->align) t->align = align;
+                        if ((t->size % align) != 0)
+                            t->size += align - (t->size % align);
+                        t->members[i].offset = t->size;
+                        t->size += msz;
+                    }
+                    if (t->align > 0 && (t->size % t->align) != 0)
+                        t->size += t->align - (t->size % t->align);
+                }
                 t->kind = comp_kind;
                 if (comp_kind == HD_TYPE_UNION) {
                     t->size = max_size;
