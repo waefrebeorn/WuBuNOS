@@ -81,6 +81,17 @@ static const Probe PROBES[] = {
     {"char array", "char s[4]; s[0]='h'; s[1]='i'; s[2]=0; s[0];", 104},
     /* ---- globals ---- */
     {"global var", "int g=7; int f(){return g;} f();", 7},
+    {"nested call", "int f(int x){return x+1;} f(f(f(0)));", 3},
+    {"recursion", "int fact(int n){ if(n<=1) return 1; return n*fact(n-1); } fact(5);", 120},
+    {"break", "int i=0; while(1){i++; if(i>=3) break;} i;", 3},
+    {"continue", "int s=0; for(int i=0;i<5;i++){ if(i==2) continue; s+=i; } s;", 8},
+    {"do-while", "int i=0; do{i++;}while(i<3); i;", 3},
+    {"float add", "float a=1.5; float b=2.5; a+b;", 4},
+    {"nested struct", "struct A{int x;}; struct A a; a.x=42; a.x;", 42},
+    {"multi-arg call", "int f(int a,int b,int c){return a+b+c;} f(10,20,12);", 42},
+    {"deep nest", "int f(int x){return x+1;} f(f(f(f(f(0)))));", 5},
+    {"scope shadow", "int x=1; {int x=2; x;} x;", 1},
+    {"comma op", "int a=0,b=0; (a=1,b=2); a+b;", 3},
     {NULL, NULL, 0}
 };
 

@@ -220,6 +220,7 @@ typedef enum {
     HD_AST_TERNARY,
     HD_AST_ASSIGN,
     HD_AST_COMPOUND_ASSIGN,
+    HD_AST_COMMA,
     HD_AST_PRE_INC,
     HD_AST_PRE_DEC,
     HD_AST_POST_INC,

@@ -31,7 +31,13 @@ typedef struct {
     int array_size;
     int is_struct;                  /* 1 if this variable is a struct instance */
     char struct_name[HD_MAX_IDENT_LEN]; /* struct type name */
+    int is_float;                   /* 1 if variable is F64 */
 } mir_var_t;
+
+/* scope stack entry */
+typedef struct {
+    int var_start;                  /* n_vars at scope entry */
+} scope_entry_t;
 
 /* struct member offset table */
 #define MAX_STRUCTS 64
@@ -52,7 +58,10 @@ typedef struct {
     int n_vars;
     mir_struct_t structs[MAX_STRUCTS];
     int n_structs;
-    /* loop stack for break/continue resolution */
+    /* scope stack for block-level shadowing */
+    int scope_var_start[MIRGEN_MAX_VARS];
+    int n_scopes;
+    int in_function_body;
     uint32_t loop_top[MIRGEN_MAX_VARS];   /* continue target */
     uint32_t loop_done[MIRGEN_MAX_VARS];  /* break target */
     int n_loops;
@@ -136,9 +145,21 @@ static wubu_vr_t mir_decl_var_unsigned(HDMirGen *g, const char *name, int is_uns
         g->vars[g->n_vars].is_unsigned = is_unsigned;
         g->vars[g->n_vars].is_array = 0;
         g->vars[g->n_vars].array_size = 0;
+        g->vars[g->n_vars].is_float = 0;
         g->n_vars++;
     }
     return vr;
+}
+
+static void mir_mark_var_float(HDMirGen *g, const char *name) {
+    for (int i = 0; i < g->n_vars; i++)
+        if (strcmp(g->vars[i].name, name) == 0) { g->vars[i].is_float = 1; return; }
+}
+
+static int mir_var_is_float(HDMirGen *g, const char *name) {
+    for (int i = 0; i < g->n_vars; i++)
+        if (strcmp(g->vars[i].name, name) == 0) return g->vars[i].is_float;
+    return 0;
 }
 
 /* Register a variable name -> (vr, addr) directly, WITHOUT allocating a new
@@ -298,6 +319,7 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
     }
     case HD_AST_VAR_DECL: {
         int is_uns = 0;
+        int is_float = 0;
         int arr_size = 0;
         int is_struct_var = 0;
         char struct_type_name[HD_MAX_IDENT_LEN] = {0};
@@ -306,6 +328,7 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
             if (k == HD_TYPE_STRUCT) fprintf(stderr, "STRUCT_VAR_DECL: %s type=%s n_members=%d\n", n->ident, n->type->name, n->type->n_members);
             if (k == HD_TYPE_U8 || k == HD_TYPE_U16 || k == HD_TYPE_U32 || k == HD_TYPE_U64)
                 is_uns = 1;
+            if (k == HD_TYPE_F64) is_float = 1;
             /* array type carries an element count in n->type->array_size */
             if (k == HD_TYPE_ARRAY && n->type->array_size > 0) arr_size = (int)n->type->array_size;
             /* struct type: allocate memory for all members */
@@ -325,6 +348,7 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
             }
         }
         wubu_vr_t vr = mir_decl_var_unsigned(g, n->ident, is_uns);
+        if (is_float) { mir_mark_var_float(g, n->ident); }
         /* Allocate memory for the variable (arrays get arr_size cells, scalars 1, structs = total_size). */
         wubu_vr_t addr = wubu_mir_alloc(g->prog, arr_size > 0 ? arr_size : 1);
         for (int i = 0; i < g->n_vars; i++)
@@ -594,27 +618,47 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
     case HD_AST_ADD: {
         wubu_vr_t a = mir_gen_expr(g, n->left);
         wubu_vr_t b = mir_gen_expr(g, n->right);
-        return wubu_mir_binop(g->prog, MIR_ADD, a, b);
+        int is_float = (n->left && n->left->type && n->left->type->kind == HD_TYPE_F64) ||
+                       (n->right && n->right->type && n->right->type->kind == HD_TYPE_F64);
+        if (n->left && n->left->kind == HD_AST_IDENT && mir_var_is_float(g, n->left->ident)) is_float = 1;
+        if (n->right && n->right->kind == HD_AST_IDENT && mir_var_is_float(g, n->right->ident)) is_float = 1;
+        return wubu_mir_binop(g->prog, is_float ? MIR_FADD : MIR_ADD, a, b);
     }
     case HD_AST_SUB: {
         wubu_vr_t a = mir_gen_expr(g, n->left);
         wubu_vr_t b = mir_gen_expr(g, n->right);
-        return wubu_mir_binop(g->prog, MIR_SUB, a, b);
+        int is_float = (n->left && n->left->type && n->left->type->kind == HD_TYPE_F64) ||
+                       (n->right && n->right->type && n->right->type->kind == HD_TYPE_F64);
+        if (n->left && n->left->kind == HD_AST_IDENT && mir_var_is_float(g, n->left->ident)) is_float = 1;
+        if (n->right && n->right->kind == HD_AST_IDENT && mir_var_is_float(g, n->right->ident)) is_float = 1;
+        return wubu_mir_binop(g->prog, is_float ? MIR_FSUB : MIR_SUB, a, b);
     }
     case HD_AST_MUL: {
         wubu_vr_t a = mir_gen_expr(g, n->left);
         wubu_vr_t b = mir_gen_expr(g, n->right);
-        return wubu_mir_binop(g->prog, MIR_MUL, a, b);
+        int is_float = (n->left && n->left->type && n->left->type->kind == HD_TYPE_F64) ||
+                       (n->right && n->right->type && n->right->type->kind == HD_TYPE_F64);
+        if (n->left && n->left->kind == HD_AST_IDENT && mir_var_is_float(g, n->left->ident)) is_float = 1;
+        if (n->right && n->right->kind == HD_AST_IDENT && mir_var_is_float(g, n->right->ident)) is_float = 1;
+        return wubu_mir_binop(g->prog, is_float ? MIR_FMUL : MIR_MUL, a, b);
     }
     case HD_AST_DIV: {
         wubu_vr_t a = mir_gen_expr(g, n->left);
         wubu_vr_t b = mir_gen_expr(g, n->right);
-        return wubu_mir_binop(g->prog, MIR_DIV, a, b);
+        int is_float = (n->left && n->left->type && n->left->type->kind == HD_TYPE_F64) ||
+                       (n->right && n->right->type && n->right->type->kind == HD_TYPE_F64);
+        if (n->left && n->left->kind == HD_AST_IDENT && mir_var_is_float(g, n->left->ident)) is_float = 1;
+        if (n->right && n->right->kind == HD_AST_IDENT && mir_var_is_float(g, n->right->ident)) is_float = 1;
+        return wubu_mir_binop(g->prog, is_float ? MIR_FDIV : MIR_DIV, a, b);
     }
     case HD_AST_MOD: {
         wubu_vr_t a = mir_gen_expr(g, n->left);
         wubu_vr_t b = mir_gen_expr(g, n->right);
         return wubu_mir_binop(g->prog, MIR_MOD, a, b);
+    }
+    case HD_AST_COMMA: {
+        mir_gen_expr(g, n->left);
+        return mir_gen_expr(g, n->right);
     }
     case HD_AST_AND: {
         /* short-circuit: a && b  ==  (a!=0) ? (b!=0) : 0 */

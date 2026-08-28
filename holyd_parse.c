@@ -77,6 +77,8 @@ static void expect(HDParser *p, HDTokenType type) {
 /* -- Forward Declarations ----------------------------------------- */
 
 static HDASTNode *parse_expr(HDParser *p);
+static HDASTNode *parse_comma(HDParser *p);
+static HDASTNode *parse_assign(HDParser *p);
 static HDASTNode *parse_stmt(HDParser *p);
 static HDASTNode *parse_decl(HDParser *p);
 
@@ -456,7 +458,7 @@ static HDASTNode *parse_primary(HDParser *p) {
             HDASTNode *init = hd_ast_new(HD_AST_BRACE_INIT);
             if (!init) { p->has_error = true; return NULL; }
             while (peek(p) != HD_TOK_RBRACE && peek(p) != HD_TOK_EOF) {
-                hd_ast_add_arg(init, parse_expr(p));
+                hd_ast_add_arg(init, parse_assign(p));
                 if (peek(p) == HD_TOK_COMMA) {
                     advance(p);
                     if (peek(p) == HD_TOK_RBRACE) break;
@@ -483,9 +485,9 @@ static HDASTNode *parse_postfix(HDParser *p) {
             HDASTNode *call = hd_ast_new(HD_AST_FUNC_CALL);
             call->callee = expr;
             if (peek(p) != HD_TOK_RPAREN) {
-                hd_ast_add_arg(call, parse_expr(p));
+                hd_ast_add_arg(call, parse_assign(p));
                 while (match(p, HD_TOK_COMMA))
-                    hd_ast_add_arg(call, parse_expr(p));
+                    hd_ast_add_arg(call, parse_assign(p));
             }
             expect(p, HD_TOK_RPAREN);
             expr = call;
@@ -774,7 +776,21 @@ static HDASTNode *parse_assign(HDParser *p) {
 /* -- Parse Expression --------------------------------------------- */
 
 static HDASTNode *parse_expr(HDParser *p) {
-    return parse_assign(p);
+    return parse_comma(p);
+}
+
+static HDASTNode *parse_comma(HDParser *p) {
+    HDASTNode *left = parse_assign(p);
+    while (peek(p) == HD_TOK_COMMA) {
+        advance(p);
+        HDASTNode *right = parse_assign(p);
+        HDASTNode *n = hd_ast_new(HD_AST_COMMA);
+        n->left = left;
+        n->right = right;
+        n->type = right->type;
+        left = n;
+    }
+    return left;
 }
 
 /* -- Parse Block -------------------------------------------------- */
