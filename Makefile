@@ -15,7 +15,8 @@
 CC      = gcc
 OS_ROOT ?= /home/wubu/wubuos/src
 CFLAGS  = -O3 -std=c11 -D_POSIX_C_SOURCE=200809L -DWUBU_HOSTED \
-          -mavx2 -mfma -include wubu_gnu_compat.h -I. -I$(OS_ROOT)/jit -I$(OS_ROOT)/runtime -fopenmp
+          -mavx2 -mfma -frename-registers -funroll-loops \
+          -include wubu_gnu_compat.h -I. -I$(OS_ROOT)/jit -I$(OS_ROOT)/runtime -fopenmp
 LDFLAGS = -lm
 
 # ---- Source groups ----
