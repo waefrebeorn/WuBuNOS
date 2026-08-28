@@ -79,15 +79,15 @@ GAUN    = test_gauntlet/wubu_test_gauntlet.c test_gauntlet_runner.c \
 all: test_isa_driver test_mir_opt
 
 # ISA driver differential test (10 interpreter-based drivers)
-test_isa_driver: $(MIR) $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) test_isa_driver.c jit_stub.c jit_stubs_arm64.c
+test_isa_driver: $(MIR) wubu_tgemm_avx512.o $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) test_isa_driver.c jit_stub.c jit_stubs_arm64.c
 	$(CC) $(CFLAGS) -I. $^ $(LDFLAGS) -o $@
 
 # MIR optimizer test
-test_mir_opt: $(MIR) $(ISA) $(INTERP) $(OS_INTERP) isa-test/test_mir_opt.c
+test_mir_opt: $(MIR) wubu_tgemm_avx512.o $(ISA) $(INTERP) $(OS_INTERP) isa-test/test_mir_opt.c
 	$(CC) $(CFLAGS) -I. $^ $(LDFLAGS) -o $@
 
 # Universal test gauntlet (needs full JIT runtime — see OS Makefile for canonical build)
-gauntlet: $(FRONT) $(MIR) $(ISA) $(INTERP) $(OS_INTERP) $(JIT_SRC) $(GAUN)
+gauntlet: $(FRONT) $(MIR) wubu_tgemm_avx512.o $(ISA) $(INTERP) $(OS_INTERP) $(JIT_SRC) $(GAUN)
 	$(CC) $(CFLAGS) -I. -Itest_gauntlet $^ $(LDFLAGS) -o gauntlet_runner
 
 # ---- Run targets ----
@@ -117,13 +117,13 @@ test_mir_float: wubu_mir.c wubu_mir_interp.c wubu_mir_opt.c wubu_mir_lower.c \
                 x86_peephole.c wubu_softfloat.c wubu_tgemm.c tools/test_mir_float.c
 	$(CC) $(CFLAGS) -I. -o $@ tools/test_mir_float.c wubu_mir.c wubu_mir_interp.c \
 		wubu_mir_opt.c wubu_mir_lower.c wubu_mir_regalloc.c wubu_mir_ssa.c wubu_mir_sccp.c \
-		wubu_mir_gvn.c wubu_mir_fuse.c x86_peephole.c wubu_softfloat.c wubu_tgemm.c -lm
+		wubu_mir_gvn.c wubu_mir_fuse.c x86_peephole.c wubu_softfloat.c wubu_tgemm.c wubu_tgemm_avx512.o -lm
 	./$@
 
 # Differential fuzz oracle: random-MIR cross-check across backends
 # (x86-64 JIT, 8086, interpreter) — finds correctness bugs via differential
 # comparison, no per-case oracle needed.
-test_fuzz_diff: tools/test_fuzz_diff.c $(MIR) $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) jit_stub.c jit_stubs_arm64.c
+test_fuzz_diff: tools/test_fuzz_diff.c $(MIR) wubu_tgemm_avx512.o $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) jit_stub.c jit_stubs_arm64.c
 	$(CC) $(CFLAGS) -I. -o $@ $^ -lm
 	./$@ 3000
 
@@ -131,21 +131,21 @@ test_fuzz_diff: tools/test_fuzz_diff.c $(MIR) $(filter-out wubu_isa_jit_stubs.c,
 # Lean build: real x86-64 JIT driver + all interp drivers + jit_stub for exec alloc.
 # NOTE: filter out wubu_isa_jit_stubs.c (which provides a stub wubu_isa_x86_64)
 # so the real JIT in wubu_isa_x86_64.c links instead.
-test_tgemm: tools/test_tgemm.c $(MIR) $(filter-out wubu_isa_jit_stubs.c,$(ISA)) \
+test_tgemm: tools/test_tgemm.c $(MIR) wubu_tgemm_avx512.o $(filter-out wubu_isa_jit_stubs.c,$(ISA)) \
             $(INTERP) $(OS_INTERP) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c \
             jit_stub.c jit_stub_arm64.c
 	$(CC) $(CFLAGS) -I. -I$(OS_ROOT) -o $@ $^ -lm
 	./$@ 24 24 24
 # Gap audit: adversarial 9P frame fuzzer (2000 inputs across 20 categories)
-test_gap_audit: isa-test/gap_audit.c $(MIR)
-	$(CC) $(CFLAGS) -I. -o $@ isa-test/gap_audit.c $(MIR) -lm
+test_gap_audit: isa-test/gap_audit.c $(MIR) wubu_tgemm_avx512.o
+	$(CC) $(CFLAGS) -I. -o $@ isa-test/gap_audit.c $(MIR) wubu_tgemm_avx512.o -lm
 	./$@
 
 # Self-hosting battery: every C11 construct the compiler must support
 # Uses x86-64 JIT + all available interpreter backends.
 # Links ALL ISA drivers to satisfy wubu_isa_driver.c's registry,
 # including the vulkan stub and jit_stub.c for arm64.
-test_selfhost_battery: isa-test/selfhost_battery.c $(FRONT) $(MIR) $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) jit_stub.c jit_stubs_arm64.c
+test_selfhost_battery: isa-test/selfhost_battery.c $(FRONT) $(MIR) wubu_tgemm_avx512.o $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) jit_stub.c jit_stubs_arm64.c
 	$(CC) $(CFLAGS) -I. -I$(OS_ROOT) $^ -o $@ -lm
 	./$@
 
@@ -229,7 +229,7 @@ bench_f32_gemm: tools/bench_f32_gemm.c wubu_tgemm.c wubu_tgemm.h wubu_tgemm_avx5
 	$(CC) -O3 -std=c11 -mavx2 -mfma -fopenmp -I. $< wubu_tgemm.c wubu_tgemm_avx512.o -lm -o $@
 	./$@
 # MIR float32 GEMM test (interpreter + JIT)
-test_mir_f32_gemm: tools/test_mir_f32_gemm.c $(MIR) $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) jit_stub.c jit_stub_arm64.c
+test_mir_f32_gemm: tools/test_mir_f32_gemm.c $(MIR) wubu_tgemm_avx512.o $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) jit_stub.c jit_stub_arm64.c
 	$(CC) $(CFLAGS) -I. -I$(OS_ROOT) -o $@ $^ -lm
 	./$@
 # AVX-512DQ int64 GEMM (Zen 4+) — separate TU, separate flags
@@ -237,18 +237,18 @@ wubu_tgemm_avx512.o: wubu_tgemm_avx512.c wubu_tgemm.h
 	$(CC) $(CFLAGS) -mavx512dq -mavx512f -mavx512vl -c $< -o $@
 
 # JIT float32 GEMM performance benchmark
-bench_jit_f32: tools/bench_jit_f32.c $(MIR) $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) jit_stub.c jit_stub_arm64.c wubu_tgemm_avx512.o
+bench_jit_f32: tools/bench_jit_f32.c $(MIR) wubu_tgemm_avx512.o $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) jit_stub.c jit_stub_arm64.c wubu_tgemm_avx512.o
 	$(CC) $(CFLAGS) -O2 -I. -I$(OS_ROOT) -mavx2 -mfma -o $@ $^ -lm
 	./$@
 
 # Dot product benchmark
-bench_dotprod: tools/bench_dotprod.c $(filter-out wubu_softfloat.c,$(MIR)) $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) jit_stub.c jit_stub_arm64.c
-	$(CC) $(CFLAGS) -O2 -I. -I$(OS_ROOT) $< $(filter-out wubu_softfloat.c,$(MIR)) $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) jit_stub.c jit_stub_arm64.c -lm -o $@
+bench_dotprod: tools/bench_dotprod.c $(filter-out wubu_softfloat.c,$(MIR) wubu_tgemm_avx512.o) $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) jit_stub.c jit_stub_arm64.c
+	$(CC) $(CFLAGS) -O2 -I. -I$(OS_ROOT) $< $(filter-out wubu_softfloat.c,$(MIR) wubu_tgemm_avx512.o) $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) jit_stub.c jit_stub_arm64.c -lm -o $@
 	./$@
 
 # Speed benchmark: interpreter performance
-bench_speed: tools/bench_speed.c $(MIR) $(FRONT) jit_stub.c
-	$(CC) $(CFLAGS) -I. $< $(MIR) $(FRONT) jit_stub.c -lm -o $@
+bench_speed: tools/bench_speed.c $(MIR) wubu_tgemm_avx512.o $(FRONT) jit_stub.c
+	$(CC) $(CFLAGS) -I. $< $(MIR) wubu_tgemm_avx512.o $(FRONT) jit_stub.c -lm -o $@
 	./$@
 
 # WASM SIMD test
@@ -269,15 +269,15 @@ test_wasm_backend: tools/test_wasm_backend.c jit/wubu_isa_wasm.c jit/wubu_isa_wa
 # MIR pipeline self-hosting battery
 # Uses hd_eval_mir() (MIR path) instead of hd_eval() (legacy direct codegen)
 # Links ALL ISA drivers to satisfy wubu_isa_driver.c's registry.
-test_mir_battery: tools/test_mir_battery.c $(MIR) $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) holyd_mir_eval.c holyd_lexer.c holyd_parse.c holyd_parse_ast.c holyd_codegen.c holyd_codegen_emit.c holyd_codegen_expr.c holyd_codegen_stmt.c holyd_codegen_api.c holyd_runtime.c wubu_preproc.c jit_stub.c jit_stubs_arm64.c
+test_mir_battery: tools/test_mir_battery.c $(MIR) wubu_tgemm_avx512.o $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) holyd_mir_eval.c holyd_lexer.c holyd_parse.c holyd_parse_ast.c holyd_codegen.c holyd_codegen_emit.c holyd_codegen_expr.c holyd_codegen_stmt.c holyd_codegen_api.c holyd_runtime.c wubu_preproc.c jit_stub.c jit_stubs_arm64.c
 	$(CC) $(CFLAGS) -I. $^ $(LDFLAGS) -o $@
 	./$@
 
 # Debug: dump MIR for failing battery cases
-test_mir_dump: tools/test_mir_dump.c $(MIR) $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) holyd_mir_eval.c holyd_lexer.c holyd_parse.c holyd_parse_ast.c holyd_codegen.c holyd_codegen_emit.c holyd_codegen_expr.c holyd_codegen_stmt.c holyd_codegen_api.c holyd_runtime.c wubu_preproc.c jit_stub.c jit_stubs_arm64.c
+test_mir_dump: tools/test_mir_dump.c $(MIR) wubu_tgemm_avx512.o $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) holyd_mir_eval.c holyd_lexer.c holyd_parse.c holyd_parse_ast.c holyd_codegen.c holyd_codegen_emit.c holyd_codegen_expr.c holyd_codegen_stmt.c holyd_codegen_api.c holyd_runtime.c wubu_preproc.c jit_stub.c jit_stubs_arm64.c
 	$(CC) $(CFLAGS) -I. $^ $(LDFLAGS) -o $@
 	./$@
 
-test_mir_debug: tools/test_mir_debug.c $(MIR) $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) holyd_mir_eval.c holyd_lexer.c holyd_parse.c holyd_parse_ast.c holyd_codegen.c holyd_codegen_emit.c holyd_codegen_expr.c holyd_codegen_stmt.c holyd_codegen_api.c holyd_runtime.c wubu_preproc.c jit_stub.c jit_stubs_arm64.c
+test_mir_debug: tools/test_mir_debug.c $(MIR) wubu_tgemm_avx512.o $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) holyd_mir_eval.c holyd_lexer.c holyd_parse.c holyd_parse_ast.c holyd_codegen.c holyd_codegen_emit.c holyd_codegen_expr.c holyd_codegen_stmt.c holyd_codegen_api.c holyd_runtime.c wubu_preproc.c jit_stub.c jit_stubs_arm64.c
 	$(CC) $(CFLAGS) -I. $^ $(LDFLAGS) -o $@
 	./$@
