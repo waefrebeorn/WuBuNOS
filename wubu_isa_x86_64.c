@@ -459,21 +459,20 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
         }
     }
 
-    /* Variable memory model: MIR programs address a flat int64[] array
-     * (cell 0 reserved as null). Reserve space for it on the stack so
-     * MIR_LOAD/MIR_STORE can mirror the interpreter exactly. */
-    size_t n_mem_cells = (p->total_mem > 0) ? (size_t)(p->total_mem + 1) : 1;
-    size_t mem_bytes = n_mem_cells * 8;
+    /* Variable memory model: MIR programs address a flat int64[] array.
+     * Memory is accessed via prog.mem (embedded pointer), NOT stack frame.
+     * Only spilled registers need stack space. */
+    size_t mem_bytes = 0; /* memory accessed via prog.mem, not stack */
 
     x86_emitter_t e;
     memset(&e, 0, sizeof(e));
-    e.frame = n_spilled * 8 + mem_bytes + 8;      /* spills + var mem + spare */
+    e.frame = n_spilled * 8 + 16;  /* spills + alignment padding */
     /* Ensure 16-byte stack alignment for host calls (wubu_tgemm_parallel etc.).
      * SysV ABI requires %rsp ≡ 0 (mod 16) at call sites. The JIT prologue does
      * `push rbp` (8 bytes), making %rsp ≡ 8 (mod 16). So e.frame must be ≡ 8 (mod 16). */
     e.frame = (e.frame + 7) & ~7ULL;      /* round up to 8 */
     if ((e.frame % 16) == 0) e.frame += 8; /* force ≡ 8 mod 16 */
-    e.spare_off = -(int32_t)(n_spilled * 8 + mem_bytes + 8);
+    e.spare_off = -(int32_t)(n_spilled * 8 + 16);
     e.mem_off = (int32_t)(n_spilled * 8 + mem_bytes); /* offset to mem[0] */
     e.n_labels = p->n_labels;
     e.label_offsets = calloc(e.n_labels, sizeof(size_t));
@@ -957,9 +956,8 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             int sa = VR_ENC(in->a);
             int sb = VR_ENC(in->b);
             int sd = VR_ENC(in->dst);
-            /* rdi = &mem[0]  (lea rdi,[rbp-mem_off]; modrm 0xBD = mod10 reg7 rm5(rbp+disp32))
-             * 0x3D (mod00 rm101) would wrongly encode [rip+disp32]. */
-            rex(&e,1,0,0,0); e8(&e,0x8D); e8(&e,0xBD); e32(&e,(uint32_t)(-(int32_t)e.mem_off));
+            /* rdi = prog.mem (embedded pointer) */
+            rex(&e,1,0,0,0); e8(&e, 0xBF); e64(&e, (uint64_t)p->mem);
             /* rsi = A (vr value / slot index) */
             if (sa>=0) emit_mov_reg(&e,6,sa);            else emit_load_rbp(&e,6,spill_off(assign, assign_count, &e, in->a));
             /* rdx = B */
@@ -1064,14 +1062,13 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
         case MIR_ALLOC:
             break;  /* home base already emitted as a CONST vr */
         case MIR_LOAD: {
-            /* dst = mem[addr]; addr is a vr holding the cell index.
-             * Mirror the interpreter's flat int64[] array on the stack. */
+            /* dst = mem[addr]; use prog.mem directly (no stack frame) */
             int sa = VR_ENC(in->a);
             if (sa >= 0) emit_mov_reg(&e, 0, sa);          /* rax = addr */
             else emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
             rex(&e,1,0,0,0); e8(&e, 0xC1); e8(&e, 0xE0); e8(&e, 0x03); /* shl rax,3 */
-            rex(&e,1,0,0,0); e8(&e, 0x8D); e8(&e, 0xB5);   /* lea rsi,[rbp-mem_off] */
-            e32(&e, (uint32_t)(-(int32_t)e.mem_off));
+            /* rsi = prog.mem + rax */
+            rex(&e,1,0,0,0); e8(&e, 0xBE); e64(&e, (uint64_t)p->mem); /* movabs rsi, prog.mem */
             rex(&e,1,0,0,0); e8(&e, 0x01); e8(&e, 0xC6);   /* add rsi, rax */
             int sd = VR_ENC(in->dst);
             if (sd >= 0) {
@@ -1084,7 +1081,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             break;
         }
         case MIR_STORE: {
-            /* mem[addr] = val */
+            /* mem[addr] = val; use prog.mem directly */
             int sa = VR_ENC(in->a);
             if (sa >= 0) emit_mov_reg(&e, 0, sa);          /* rax = addr */
             else emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
@@ -1092,8 +1089,8 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             if (sb >= 0) emit_mov_reg(&e, 7, sb);          /* rdi = val */
             else emit_load_rbp(&e, 7, spill_off(assign, assign_count, &e, in->b));
             rex(&e,1,0,0,0); e8(&e, 0xC1); e8(&e, 0xE0); e8(&e, 0x03); /* shl rax,3 */
-            rex(&e,1,0,0,0); e8(&e, 0x8D); e8(&e, 0xB5);   /* lea rsi,[rbp-mem_off] */
-            e32(&e, (uint32_t)(-(int32_t)e.mem_off));
+            /* rsi = prog.mem + rax */
+            rex(&e,1,0,0,0); e8(&e, 0xBE); e64(&e, (uint64_t)p->mem); /* movabs rsi, prog.mem */
             rex(&e,1,0,0,0); e8(&e, 0x01); e8(&e, 0xC6);   /* add rsi, rax */
             rex(&e,1,0,0,0); e8(&e, 0x89); e8(&e, 0x3E);   /* mov [rsi], rdi */
             break;
@@ -1117,8 +1114,8 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
         case MIR_T_CLAMP: {
             /* Tensor ops: emit call to wubu_tensor_dispatch(op, mem, a, b, dst, N).
              * Use same pattern as T_GEMM: movabs r11, &wubu_tensor_dispatch; call r11. */
-            /* rdi = mem_base */
-            emit_mov_mem0_rdi(&e);
+            /* rdi = prog.mem (embedded pointer) */
+            rex(&e,1,0,0,0); e8(&e, 0xBF); e64(&e, (uint64_t)p->mem);
             int sa = VR_ENC(in->a);
             if (sa >= 0) emit_mov_reg(&e, 6, sa);
             else emit_load_rbp(&e, 6, spill_off(assign, assign_count, &e, in->a));
