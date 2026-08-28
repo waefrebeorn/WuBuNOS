@@ -136,27 +136,34 @@ static void buf_free(wasm_buf_t *b) { free(b->buf); }
 static size_t sec_start(wasm_buf_t *b, uint8_t sec_id)
 {
     buf_byte(b, sec_id);
-    return b->pos; /* patch point for size */
+    size_t patch = b->pos;
+    buf_leb_u(b, 0); /* placeholder for size (1 byte, patched in sec_end) */
+    return patch;
 }
 
 static void sec_end(wasm_buf_t *b, size_t patch_pos)
 {
-    /* Write LEB128 size at patch_pos, overwriting placeholder */
-    size_t payload_size = b->pos - patch_pos - 5;
+    /* Compute content size (between placeholder and current pos) */
+    size_t payload_size = b->pos - patch_pos - 1;
+    /* Encode LEB128 size */
     uint8_t tmp[5]; int n = 0;
     {
         uint32_t v = (uint32_t)payload_size;
         do { tmp[n++] = (v & 0x7F); v >>= 7; if (v) tmp[n-1] |= 0x80; } while (v);
     }
-    /* Shift data right to make room if needed */
-    int shift = n - 1; /* we reserved 1 byte for LEB */
-    if (shift > 0) {
+    if (n <= 1) {
+        /* Fits in the 1-byte placeholder */
+        b->buf[patch_pos] = tmp[0];
+    } else {
+        /* Need more bytes: shift content right to make room */
+        int extra = n - 1;
+        while (b->cap < b->pos + extra) { b->cap *= 2; b->buf = realloc(b->buf, b->cap); }
         for (size_t i = b->pos; i > patch_pos + 1; i--)
-            b->buf[i + shift - 1] = b->buf[i - 1];
-        b->pos += shift;
+            b->buf[i + extra - 1] = b->buf[i - 1];
+        b->pos += extra;
+        for (int i = 0; i < n; i++)
+            b->buf[patch_pos + i] = tmp[i];
     }
-    for (int i = 0; i < n; i++)
-        b->buf[patch_pos + 1 + i] = tmp[i];
 }
 
 /* ---- High-level emit helpers ---- */
@@ -468,3 +475,8 @@ const wubu_isa_driver_t wubu_isa_wasm = {
     .run = wasm_run,
     .describe = wasm_describe,
 };
+
+/* Public API: compile MIR to WASM without needing the driver registry */
+int wubu_isa_wasm_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size) {
+    return wasm_compile(p, out, out_size);
+}

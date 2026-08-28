@@ -113,16 +113,18 @@ test_peephole: x86_peephole.c x86_peephole.h tools/test_x86_peephole.c
 
 # MIR-level float ops through the soft-float runtime
 test_mir_float: wubu_mir.c wubu_mir_interp.c wubu_mir_opt.c wubu_mir_lower.c \
-                wubu_mir_regalloc.c x86_peephole.c wubu_softfloat.c tools/test_mir_float.c
+                wubu_mir_regalloc.c wubu_mir_ssa.c wubu_mir_sccp.c wubu_mir_gvn.c wubu_mir_fuse.c \
+                x86_peephole.c wubu_softfloat.c tools/test_mir_float.c
 	$(CC) $(CFLAGS) -I. -o $@ tools/test_mir_float.c wubu_mir.c wubu_mir_interp.c \
-		wubu_mir_opt.c wubu_mir_lower.c wubu_mir_regalloc.c x86_peephole.c wubu_softfloat.c -lm
+		wubu_mir_opt.c wubu_mir_lower.c wubu_mir_regalloc.c wubu_mir_ssa.c wubu_mir_sccp.c \
+		wubu_mir_gvn.c wubu_mir_fuse.c x86_peephole.c wubu_softfloat.c -lm
 	./$@
 
 # Differential fuzz oracle: random-MIR cross-check across backends
 # (x86-64 JIT, 8086, interpreter) — finds correctness bugs via differential
 # comparison, no per-case oracle needed.
 test_fuzz_diff: tools/test_fuzz_diff.c $(MIR) $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) jit_stub.c jit_stubs_arm64.c
-	$(CC) $(CFLAGS) -I. -o $@ $^
+	$(CC) $(CFLAGS) -I. -o $@ $^ -lm
 	./$@ 3000
 
 # T_GEMM tensor-op: correctness vs naive C + interpreter/interp/JIT timing
@@ -130,13 +132,13 @@ test_fuzz_diff: tools/test_fuzz_diff.c $(MIR) $(filter-out wubu_isa_jit_stubs.c,
 # NOTE: filter out wubu_isa_jit_stubs.c (which provides a stub wubu_isa_x86_64)
 # so the real JIT in wubu_isa_x86_64.c links instead.
 test_tgemm: tools/test_tgemm.c $(MIR) $(filter-out wubu_isa_jit_stubs.c,$(ISA)) \
-            $(INTERP) $(OS_INTERP) wubu_isa_x86_64.c jit_stub.c \
-            jit_stub_arm64.c
-	$(CC) $(CFLAGS) -I. -I$(OS_ROOT) -o $@ $^
+            $(INTERP) $(OS_INTERP) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c \
+            jit_stub.c jit_stub_arm64.c
+	$(CC) $(CFLAGS) -I. -I$(OS_ROOT) -o $@ $^ -lm
 	./$@ 24 24 24
 # Gap audit: adversarial 9P frame fuzzer (2000 inputs across 20 categories)
 test_gap_audit: isa-test/gap_audit.c $(MIR)
-	$(CC) $(CFLAGS) -I. -o $@ isa-test/gap_audit.c $(MIR)
+	$(CC) $(CFLAGS) -I. -o $@ isa-test/gap_audit.c $(MIR) -lm
 	./$@
 
 # Self-hosting battery: every C11 construct the compiler must support
@@ -223,8 +225,8 @@ test_mlir_parser: tools/test_mlir_parser.c mlir_parser.c mlir_parser.h wubu_hlir
 	$(CC) $(CFLAGS) -I. $< mlir_parser.c wubu_hlir.c wubu_mir.c wubu_mir_interp.c wubu_softfloat.c wubu_memplan.c -lm -o $@
 	./$@
 
-# WASM backend test
-test_wasm_backend: tools/test_wasm_backend.c jit/wubu_isa_wasm.c jit/wubu_isa_wasm.h wubu_isa_driver.h wubu_mir.h wubu_mir.c
+# WASM backend test (self-contained: no driver registry needed)
+test_wasm_backend: tools/test_wasm_backend.c jit/wubu_isa_wasm.c jit/wubu_isa_wasm.h wubu_mir.h wubu_mir.c
 	$(CC) $(CFLAGS) -I. -Ijit $< jit/wubu_isa_wasm.c wubu_mir.c -lm -o $@
 	./$@
 
