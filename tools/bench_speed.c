@@ -2,7 +2,7 @@
  * tools/bench_speed.c — Speed benchmark for WuBuNOS.
  *
  * Measures MIR interpreter performance on matrix multiply.
- * Uses the HolyD→MIR→interpreter pipeline (test_mir_battery infrastructure).
+ * Uses the HolyD→MIR→interpreter pipeline.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,21 +20,12 @@ static double now_sec(void) {
 
 /* Build a HolyD program that computes matrix multiply result */
 static void build_matmul_program(char *buf, int bufsize, int N) {
-    /* Write a HolyD program that:
-     * 1. Declares two NxN matrices A and B
-     * 2. Fills them with values
-     * 3. Computes C = A * B
-     * 4. Returns C[0] (first element)
-     *
-     * For simplicity, use small N and simple loops.
-     */
     snprintf(buf, bufsize,
         "int N = %d;\n"
         "int A[%d];\n"
         "int B[%d];\n"
         "int C[%d];\n"
         "\n"
-        /* Fill A and B */
         "int i = 0;\n"
         "while (i < N) {\n"
         "  int j = 0;\n"
@@ -46,7 +37,6 @@ static void build_matmul_program(char *buf, int bufsize, int N) {
         "  i++;\n"
         "}\n"
         "\n"
-        /* Compute C = A * B */
         "i = 0;\n"
         "while (i < N) {\n"
         "  int j = 0;\n"
@@ -71,7 +61,7 @@ static void build_matmul_program(char *buf, int bufsize, int N) {
 static int64_t gemm_naive(int N, int64_t *A, int64_t *B) {
     int64_t result = 0;
     for (int k = 0; k < N; k++)
-        result += A[k] * B[k*N]; /* C[0] = sum(A[0,k] * B[k,0]) */
+        result += A[k] * B[k*N];
     return result;
 }
 
@@ -88,11 +78,9 @@ int main(void) {
         int N = sizes[s];
         int n2 = N * N;
 
-        /* Build HolyD program */
         char src[8192];
         build_matmul_program(src, sizeof(src), N);
 
-        /* Compute expected result */
         int64_t *A = (int64_t*)malloc((size_t)n2 * sizeof(int64_t));
         int64_t *B = (int64_t*)malloc((size_t)n2 * sizeof(int64_t));
         for (int i = 0; i < N; i++)
@@ -102,18 +90,15 @@ int main(void) {
             }
         int64_t expected = gemm_naive(N, A, B);
 
-        /* Time naive */
         double t0 = now_sec();
         volatile int64_t naive_result = gemm_naive(N, A, B);
         double t_naive = now_sec() - t0;
         (void)naive_result;
 
-        /* Time MIR interpreter via hd_eval_mir */
         double t_interp = 0;
         int64_t mir_result = 0;
         int rc = -1;
 
-        /* Run multiple iterations for timing */
         int iterations = (N <= 16) ? 100 : 10;
         t0 = now_sec();
         for (int iter = 0; iter < iterations; iter++) {
