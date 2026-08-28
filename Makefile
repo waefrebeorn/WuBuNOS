@@ -198,6 +198,11 @@ test_onnx_parser: tools/test_onnx_parser.c onnx_parser.c onnx_parser.h wubu_hlir
 	$(CC) $(CFLAGS) -I. $< onnx_parser.c wubu_hlir.c wubu_mir.c wubu_mir_interp.c wubu_softfloat.c -lm -o $@
 	./$@
 
+# Memory planning test
+test_memplan: tools/test_memplan.c wubu_memplan.c wubu_memplan.h wubu_hlir.c wubu_hlir.h wubu_mir.c wubu_mir_interp.c wubu_softfloat.c
+	$(CC) $(CFLAGS) -I. $< wubu_memplan.c wubu_hlir.c wubu_mir.c wubu_mir_interp.c wubu_softfloat.c -lm -o $@
+	./$@
+
 # MLIR bytecode parser test
 test_mlir_parser: tools/test_mlir_parser.c mlir_parser.c mlir_parser.h wubu_hlir.c wubu_hlir.h wubu_mir.c wubu_mir_interp.c wubu_softfloat.c
 	$(CC) $(CFLAGS) -I. $< mlir_parser.c wubu_hlir.c wubu_mir.c wubu_mir_interp.c wubu_softfloat.c -lm -o $@
