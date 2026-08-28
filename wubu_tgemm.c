@@ -152,32 +152,30 @@ void wubu_tgemm_mem8(uint8_t *mem, uint32_t A, uint32_t B, uint32_t C,
 #undef WR64
 }
 
-/* ---- Float32 GEMM (for ML inference) -------------------------------
- * wubu_tgemm_f32: C += A*B where A,B,C are float32 row-major matrices.
- *
- * Micro-kernel: MR=6 rows × NR=16 cols (2 YMM registers for B).
- * Research-validated optimal for Zen 3/4 (arxiv:2310.17408, researchsquare rs-10345403):
- *   - MR=6 avoids register pressure (MR=8 spills on Zen)
- *   - NR=16 = 2 YMM loads of B, saturates both FMA pipes
- *   - KC=64 fits L1d cache (32KB), avoids prefetch degradation
- *   - No software prefetch (degrades Zen performance)
- *   - Compiler flags: -frename-registers -funroll-loops (critical)
- *
- * Cache blocking: 3-level (MC/KC/NC) with OpenMP parallel over MC.
- * Inner loop: ikj order for B-panel reuse across k-iterations. */
 void wubu_tgemm_f32(const float *A, const float *B, float *C,
                     int M, int N, int K) {
 #if defined(__AVX2__)
-    const int MR = 8, KC = 64, NC = 256;
-    /* OpenMP only for large matrices where thread amortization pays off.
-     * Threshold: M*N*K >= 2M ensures we have enough work per thread. */
+    /* SOTA micro-kernel: MR=4 x NR=16 (salykova.github.io, BLIS, EXO).
+     * 4 rows x 16 cols = 8 YMM accumulators (c0_lo, c0_hi, ..., c3_lo, c3_hi).
+     * 8 C + 2 B + 1 A = 11 YMM registers (of 16 available), no spill on Zen.
+     * MR=4 divides all power-of-2 sizes evenly (no remainder pathology).
+     * NR=16 = two full YMM loads of B, saturates both FMA pipes.
+     * KC=64 fits L1d (32KB). No software prefetch (degrades Zen, rs-10345403).
+     * -frename-registers -funroll-loops critical for reg alloc.
+     *
+     * Cache blocking: 3-level (MC/KC/NC) with OpenMP parallel over MC.
+     * Inner loop: ikj order for B-panel reuse across k-iterations. */
+    const int MR = 4, NR = 16, KC = 64, NC = 256;
     int nthreads = (M * N * K >= 64000000) ? omp_get_max_threads() : 1;
     int mc = (M + nthreads - 1) / nthreads;
-    mc = (mc + MR - 1) & ~(MR - 1);
+    /* Round down to multiple of MR (MR=4 is power of 2, bitwise works) */
+    mc &= ~(MR - 1);
+    if (mc < MR && M >= MR) mc = MR;
     if (mc < MR * 4 && nthreads > 1) {
         nthreads = (M + MR * 4 - 1) / (MR * 4);
         mc = (M + nthreads - 1) / nthreads;
-        mc = (mc + MR - 1) & ~(MR - 1);
+        mc &= ~(MR - 1);
+        if (mc < MR && M >= MR) mc = MR;
     }
     #pragma omp parallel for schedule(static) if(nthreads > 1)
     for (int i0 = 0; i0 < M; i0 += mc) {
@@ -188,46 +186,38 @@ void wubu_tgemm_f32(const float *A, const float *B, float *C,
                 int kmax = k0 + KC; if (kmax > K) kmax = K;
                 for (int i = i0; i < imax; i += MR) {
                     int im = imax - i; if (im > MR) im = MR;
-                    /* Main vectorized loop: process 8 columns at a time (NR=8) */
-                    for (int j = j0; j + 7 < jmax; j += 8) {
-                        __m256 c0 = (im > 0) ? _mm256_loadu_ps(&C[(int64_t)(i+0)*N + j]) : _mm256_setzero_ps();
-                        __m256 c1 = (im > 1) ? _mm256_loadu_ps(&C[(int64_t)(i+1)*N + j]) : _mm256_setzero_ps();
-                        __m256 c2 = (im > 2) ? _mm256_loadu_ps(&C[(int64_t)(i+2)*N + j]) : _mm256_setzero_ps();
-                        __m256 c3 = (im > 3) ? _mm256_loadu_ps(&C[(int64_t)(i+3)*N + j]) : _mm256_setzero_ps();
-                        __m256 c4 = (im > 4) ? _mm256_loadu_ps(&C[(int64_t)(i+4)*N + j]) : _mm256_setzero_ps();
-                        __m256 c5 = (im > 5) ? _mm256_loadu_ps(&C[(int64_t)(i+5)*N + j]) : _mm256_setzero_ps();
-                        __m256 c6 = (im > 6) ? _mm256_loadu_ps(&C[(int64_t)(i+6)*N + j]) : _mm256_setzero_ps();
-                        __m256 c7 = (im > 7) ? _mm256_loadu_ps(&C[(int64_t)(i+7)*N + j]) : _mm256_setzero_ps();
+                    /* Vectorized inner loop: 16 columns per iteration (NR=16) */
+                    for (int j = j0; j + NR - 1 < jmax; j += NR) {
+                        /* 8 YMM accumulators: 4 rows x 2 halves (cols j..j+7, j+8..j+15) */
+                        __m256 c0l = (im > 0) ? _mm256_loadu_ps(&C[(int64_t)(i+0)*N + j]) : _mm256_setzero_ps();
+                        __m256 c0h = (im > 0) ? _mm256_loadu_ps(&C[(int64_t)(i+0)*N + j + 8]) : _mm256_setzero_ps();
+                        __m256 c1l = (im > 1) ? _mm256_loadu_ps(&C[(int64_t)(i+1)*N + j]) : _mm256_setzero_ps();
+                        __m256 c1h = (im > 1) ? _mm256_loadu_ps(&C[(int64_t)(i+1)*N + j + 8]) : _mm256_setzero_ps();
+                        __m256 c2l = (im > 2) ? _mm256_loadu_ps(&C[(int64_t)(i+2)*N + j]) : _mm256_setzero_ps();
+                        __m256 c2h = (im > 2) ? _mm256_loadu_ps(&C[(int64_t)(i+2)*N + j + 8]) : _mm256_setzero_ps();
+                        __m256 c3l = (im > 3) ? _mm256_loadu_ps(&C[(int64_t)(i+3)*N + j]) : _mm256_setzero_ps();
+                        __m256 c3h = (im > 3) ? _mm256_loadu_ps(&C[(int64_t)(i+3)*N + j + 8]) : _mm256_setzero_ps();
+                        /* Inner k-loop: broadcast A[i][k], FMA with B[k][j..j+15] */
                         for (int k = k0; k < kmax; k++) {
-                            __m256 bv = _mm256_loadu_ps(&B[(int64_t)k*N + j]);
-                            __m256 a0 = (im > 0) ? _mm256_broadcast_ss(&A[(int64_t)(i+0)*K + k]) : _mm256_setzero_ps();
-                            __m256 a1 = (im > 1) ? _mm256_broadcast_ss(&A[(int64_t)(i+1)*K + k]) : _mm256_setzero_ps();
-                            __m256 a2 = (im > 2) ? _mm256_broadcast_ss(&A[(int64_t)(i+2)*K + k]) : _mm256_setzero_ps();
-                            __m256 a3 = (im > 3) ? _mm256_broadcast_ss(&A[(int64_t)(i+3)*K + k]) : _mm256_setzero_ps();
-                            __m256 a4 = (im > 4) ? _mm256_broadcast_ss(&A[(int64_t)(i+4)*K + k]) : _mm256_setzero_ps();
-                            __m256 a5 = (im > 5) ? _mm256_broadcast_ss(&A[(int64_t)(i+5)*K + k]) : _mm256_setzero_ps();
-                            __m256 a6 = (im > 6) ? _mm256_broadcast_ss(&A[(int64_t)(i+6)*K + k]) : _mm256_setzero_ps();
-                            __m256 a7 = (im > 7) ? _mm256_broadcast_ss(&A[(int64_t)(i+7)*K + k]) : _mm256_setzero_ps();
-                            c0 = _mm256_fmadd_ps(a0, bv, c0);
-                            c1 = _mm256_fmadd_ps(a1, bv, c1);
-                            c2 = _mm256_fmadd_ps(a2, bv, c2);
-                            c3 = _mm256_fmadd_ps(a3, bv, c3);
-                            c4 = _mm256_fmadd_ps(a4, bv, c4);
-                            c5 = _mm256_fmadd_ps(a5, bv, c5);
-                            c6 = _mm256_fmadd_ps(a6, bv, c6);
-                            c7 = _mm256_fmadd_ps(a7, bv, c7);
+                            __m256 b0 = _mm256_loadu_ps(&B[(int64_t)k*N + j]);
+                            __m256 b1 = _mm256_loadu_ps(&B[(int64_t)k*N + j + 8]);
+                            if (im > 0) { __m256 a = _mm256_broadcast_ss(&A[(int64_t)(i+0)*K + k]);
+                                c0l = _mm256_fmadd_ps(a, b0, c0l); c0h = _mm256_fmadd_ps(a, b1, c0h); }
+                            if (im > 1) { __m256 a = _mm256_broadcast_ss(&A[(int64_t)(i+1)*K + k]);
+                                c1l = _mm256_fmadd_ps(a, b0, c1l); c1h = _mm256_fmadd_ps(a, b1, c1h); }
+                            if (im > 2) { __m256 a = _mm256_broadcast_ss(&A[(int64_t)(i+2)*K + k]);
+                                c2l = _mm256_fmadd_ps(a, b0, c2l); c2h = _mm256_fmadd_ps(a, b1, c2h); }
+                            if (im > 3) { __m256 a = _mm256_broadcast_ss(&A[(int64_t)(i+3)*K + k]);
+                                c3l = _mm256_fmadd_ps(a, b0, c3l); c3h = _mm256_fmadd_ps(a, b1, c3h); }
                         }
-                        if (im > 0) _mm256_storeu_ps(&C[(int64_t)(i+0)*N + j], c0);
-                        if (im > 1) _mm256_storeu_ps(&C[(int64_t)(i+1)*N + j], c1);
-                        if (im > 2) _mm256_storeu_ps(&C[(int64_t)(i+2)*N + j], c2);
-                        if (im > 3) _mm256_storeu_ps(&C[(int64_t)(i+3)*N + j], c3);
-                        if (im > 4) _mm256_storeu_ps(&C[(int64_t)(i+4)*N + j], c4);
-                        if (im > 5) _mm256_storeu_ps(&C[(int64_t)(i+5)*N + j], c5);
-                        if (im > 6) _mm256_storeu_ps(&C[(int64_t)(i+6)*N + j], c6);
-                        if (im > 7) _mm256_storeu_ps(&C[(int64_t)(i+7)*N + j], c7);
+                        /* No branch in store path — all 4 rows always stored */
+                        _mm256_storeu_ps(&C[(int64_t)(i+0)*N + j], c0l); _mm256_storeu_ps(&C[(int64_t)(i+0)*N + j + 8], c0h);
+                        _mm256_storeu_ps(&C[(int64_t)(i+1)*N + j], c1l); _mm256_storeu_ps(&C[(int64_t)(i+1)*N + j + 8], c1h);
+                        _mm256_storeu_ps(&C[(int64_t)(i+2)*N + j], c2l); _mm256_storeu_ps(&C[(int64_t)(i+2)*N + j + 8], c2h);
+                        _mm256_storeu_ps(&C[(int64_t)(i+3)*N + j], c3l); _mm256_storeu_ps(&C[(int64_t)(i+3)*N + j + 8], c3h);
                     }
-                    /* Scalar remainder for columns not divisible by 8 */
-                    for (int j = j0 + ((jmax - j0) / 8) * 8; j < jmax; j++) {
+                    /* Scalar remainder for columns not divisible by NR=16 */
+                    for (int j = j0 + ((jmax - j0) / NR) * NR; j < jmax; j++) {
                         for (int ii = i; ii < imax; ii++) {
                             float acc = C[(int64_t)ii*N + j];
                             for (int k = k0; k < kmax; k++)
@@ -237,17 +227,6 @@ void wubu_tgemm_f32(const float *A, const float *B, float *C,
                     }
                 }
             }
-        }
-    }
-#else
-    for (int i = 0; i < M; i++) {
-        const float *a_row = A + (int64_t)i * K;
-        float *c_row = C + (int64_t)i * N;
-        for (int k = 0; k < K; k++) {
-            float a_val = a_row[k];
-            const float *b_row = B + (int64_t)k * N;
-            for (int j = 0; j < N; j++)
-                c_row[j] += a_val * b_row[j];
         }
     }
 #endif
