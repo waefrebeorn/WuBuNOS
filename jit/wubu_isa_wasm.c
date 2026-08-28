@@ -265,20 +265,29 @@ static int wasm_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_siz
     /* Type section: 1 signature (i32) -> (i32) */
     {
         size_t patch = sec_start(&b, SEC_TYPE);
-        buf_leb_u(&b, 1); /* 1 type */
+        buf_leb_u(&b, 2); /* 2 types */
+        /* Type 0: (i32) -> (i32) — scalar entry point */
         buf_byte(&b, 0x60); /* functype */
         buf_byte(&b, 1); /* 1 param */
         buf_byte(&b, TYPE_I32);
         buf_byte(&b, 1); /* 1 result */
         buf_byte(&b, TYPE_I32);
+        /* Type 1: (v128, v128) -> (v128) — SIMD entry point */
+        buf_byte(&b, 0x60); /* functype */
+        buf_byte(&b, 2); /* 2 params */
+        buf_byte(&b, TYPE_V128);
+        buf_byte(&b, TYPE_V128);
+        buf_byte(&b, 1); /* 1 result */
+        buf_byte(&b, TYPE_V128);
         sec_end(&b, patch);
     }
 
-    /* Function section: 1 function, type index 0 */
+    /* Function section: 2 functions */
     {
         size_t patch = sec_start(&b, SEC_FUNC);
-        buf_leb_u(&b, 1); /* 1 function */
-        buf_leb_u(&b, 0); /* type index 0 */
+        buf_leb_u(&b, 2); /* 2 functions */
+        buf_leb_u(&b, 0); /* func 0: type index 0 (scalar) */
+        buf_leb_u(&b, 1); /* func 1: type index 1 (SIMD) */
         sec_end(&b, patch);
     }
 
