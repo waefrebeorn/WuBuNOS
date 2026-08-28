@@ -175,19 +175,15 @@ static void strength_pass(wubu_mir_prog_t *p)
             in->op = MIR_MOV; in->b = 0;
         }
         else if (in->op == MIR_MOD && bv == 1) { in->op = MIR_CONST; in->imm = 0; in->a = 0; in->b = 0; }
-        /* x * 2^k -> x << k ; x / 2^k -> x >> k (arithmetic, signed) ;
-         * x * -1 -> -x (NEG) */
-        else if (in->op == MIR_MUL && bv > 0 && (bv & (bv - 1)) == 0) {
-            unsigned k = 0; while ((bv >> k) != 1) k++;
-            in->op = MIR_SHL; in->b = (wubu_vr_t)k; in->a = in->a; in->imm = 0;
-        }
+        /* x * -1 -> -x (NEG) */
         else if (in->op == MIR_MUL && bv == -1) {
             in->op = MIR_NEG; in->b = 0;
         }
-        else if (in->op == MIR_DIV && bv > 0 && (bv & (bv - 1)) == 0) {
-            unsigned k = 0; while ((bv >> k) != 1) k++;
-            in->op = MIR_SHR; in->b = (wubu_vr_t)k; in->a = in->a; in->imm = 0;
-        }
+        /* NOTE: MUL->SHL and DIV->SHR strength reduction intentionally disabled.
+         * MIR_SHL/MIR_SHR use VR indices for the shift amount (vr[b]), NOT
+         * immediate values. The peephole cannot insert a CONST instruction
+         * to materialize k, so setting in->b = k makes vr[b] read garbage
+         * (e.g. vr[1] = argument value, not shift amount). Keep MUL/DIV. */
     }
 }
 
