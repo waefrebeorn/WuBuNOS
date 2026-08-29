@@ -501,8 +501,10 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
         e8(&e, 0x48); e8(&e, 0x81); e8(&e, 0xEC); e32(&e, (uint32_t)e.frame);
     }
 
-    /* entry trampoline: jmp rel32 over function bodies to main */
-    if (p->n_funcs > 0) {
+    /* entry trampoline: jmp rel32 over function bodies to main code.
+     * MIR layout: main code (0..funcs[0].start-1), then function bodies.
+     * Only emit trampoline if function bodies start at 0 (no main code before them). */
+    if (p->n_funcs > 0 && p->funcs[0].start == 0) {
         entry_jmp_pos = e.n;
         for (int z = 0; z < 5; z++) e8(&e, 0x90);   /* NOPs, patched to jmp rel32 */
     }

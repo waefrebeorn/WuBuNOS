@@ -1047,13 +1047,30 @@ int64_t hd_run_prog(const wubu_mir_prog_t *prog, const wubu_isa_driver_t *driver
     if (driver && driver->exec == WUBU_ISA_INTERPRETED)
         return wubu_mir_interp(prog);
 
+    /* Ensure mem is allocated before JIT compile (JIT embeds mem pointer
+     * as immediate in movabs instructions). The interpreter allocates it
+     * lazily, but the JIT needs it at compile time. */
+    int64_t *mem_ptr = prog->mem;
+    if (mem_ptr == NULL) {
+        int64_t mem_hi = prog->total_mem;
+        if ((int64_t)(prog->next_vr_hi) - 1 > mem_hi) mem_hi = (int64_t)(prog->next_vr_hi) - 1;
+        int64_t mem_size = (mem_hi < 1) ? 1 : (mem_hi + 1);
+        mem_ptr = (int64_t *)calloc((size_t)mem_size, sizeof(int64_t));
+    }
+
+    /* Build a mutable copy of prog with mem set for the JIT compiler */
+    wubu_mir_prog_t prog_copy = *prog;
+    prog_copy.mem = mem_ptr;
+
     uint8_t *code = NULL;
     size_t csize = 0;
-    if (driver && driver->compile && driver->compile(prog, &code, &csize) == 0 && code) {
-        int64_t result = driver->run(code, csize, (int64_t)prog->mem);
+    if (driver && driver->compile && driver->compile(&prog_copy, &code, &csize) == 0 && code) {
+        int64_t result = driver->run(code, csize, (int64_t)mem_ptr);
         free(code);
+        if (mem_ptr != prog->mem) free(mem_ptr);
         return result;
     }
+    if (mem_ptr != prog->mem) free(mem_ptr);
     return wubu_mir_interp(prog);
 }
 
