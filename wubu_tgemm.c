@@ -155,6 +155,12 @@ void wubu_tgemm_mem8(uint8_t *mem, uint32_t A, uint32_t B, uint32_t C,
 void wubu_tgemm_f32(const float *A, const float *B, float *C,
                     int M, int N, int K) {
 #if defined(__AVX2__)
+    /* AVX-512 path: 16-wide ZMM registers, MR=8 x NR=16 = 2x throughput of AVX2 */
+    if (have_avx512()) {
+        extern void wubu_tgemm_f32_avx512(const float*, const float*, float*, int, int, int);
+        wubu_tgemm_f32_avx512(A, B, C, M, N, K);
+        return;
+    }
     /* SOTA micro-kernel: MR=4 x NR=16 (rs-10345403, salykova.github.io, BLIS).
      * 4 rows x 16 cols = 8 YMM accumulators (c0_lo, c0_hi, ..., c3_lo, c3_hi).
      * 8 C + 2 B + 1 A = 11 YMM registers (of 16), no spill on Zen.
