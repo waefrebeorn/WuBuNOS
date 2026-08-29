@@ -50,7 +50,7 @@ void tgemm_avx512(int64_t *mem, int64_t A, int64_t B,
 void wubu_tgemm_f32_avx512(const float *A, const float *B, float *C,
                             int M, int N, int K)
 {
-    const int MR = 6, NR = 16, KC = 64, NC = 128;
+    const int MR = 6, NR = 16, KC = 128, NC = 128;
     int nthreads = (M * N * K >= 200000000) ? omp_get_max_threads() : 1;
 
     #pragma omp parallel for schedule(dynamic, 1) if(nthreads > 1)
@@ -153,7 +153,7 @@ void wubu_tgemm_f32_avx512(const float *A, const float *B, float *C,
 void wubu_tgemm_bf16_avx512(const uint16_t *A_bf16, const uint16_t *B_bf16, float *C,
                              int M, int N, int K)
 {
-    const int MR = 6, NR = 16, KC = 64, NC = 128;
+    const int MR = 6, NR = 16, KC = 128, NC = 128;
     int nthreads = (M * N * K >= 200000000) ? omp_get_max_threads() : 1;
     int mc = (M + nthreads - 1) / nthreads;
     mc = (mc + MR - 1) / MR * MR;
