@@ -286,3 +286,4 @@ test_mir_debug: tools/test_mir_debug.c $(MIR) wubu_tgemm_avx512.o $(filter-out w
 debug_jit: tools/debug_jit.c $(MIR) wubu_tgemm_avx512.o $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) jit_stub.c jit_stub_arm64.c wubu_tgemm_avx512.o
 	$(CC) $(CFLAGS) -O2 -I. -I$(OS_ROOT) -mavx2 -mfma -o $@ $^ -lm
 
+

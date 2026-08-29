@@ -458,7 +458,7 @@ static HDASTNode *parse_primary(HDParser *p) {
             HDASTNode *init = hd_ast_new(HD_AST_BRACE_INIT);
             if (!init) { p->has_error = true; return NULL; }
             while (peek(p) != HD_TOK_RBRACE && peek(p) != HD_TOK_EOF) {
-                hd_ast_add_arg(init, parse_expr(p));
+                hd_ast_add_arg(init, parse_assign(p));
                 if (peek(p) == HD_TOK_COMMA) {
                     advance(p);
                     if (peek(p) == HD_TOK_RBRACE) break;
@@ -1348,14 +1348,13 @@ HDASTNode *hd_parse_decl(HDParser *p) {
     }
 
     /* Variable declaration: type name [= expr] ;  (also type name[N] for
-     * arrays — previously `[N]` was left unparsed, so int x[3] degraded to
-     * a scalar and array indexing read garbage) */
-    HDASTNode *var = hd_ast_new(HD_AST_VAR_DECL);
-    strncpy(var->ident, name, HD_MAX_IDENT_LEN - 1);
+     * arrays). Also handles multiple declarators: type a=0,b=1,c=2 ; */
+    /* First declarator */
+    HDASTNode *first_var = hd_ast_new(HD_AST_VAR_DECL);
+    strncpy(first_var->ident, name, HD_MAX_IDENT_LEN - 1);
+    int dbg_decl = 1;
 
-    /* Array declarator: name[N][M]... — the RIGHTMOST dimension is the
-     * INNERMOST, so int a[2][3] is ARRAY(ARRAY(int,3),2) (2 rows of 3).
-     * Collect all sizes, then build the type innermost→outermost. */
+    /* Array declarator: name[N][M]... */
     int dims[8], n_dims = 0;
     while (peek(p) == HD_TOK_LBRACKET) {
         advance(p); /* [ */
@@ -1380,13 +1379,54 @@ HDASTNode *hd_parse_decl(HDParser *p) {
         }
         type = base_type;
     }
-    var->type = type;
+    first_var->type = type;
 
     if (match(p, HD_TOK_ASSIGN)) {
-        var->init = parse_expr(p);
+        first_var->init = parse_assign(p);
     }
+
+    /* Additional declarators: , name [= expr] */
+    HDASTNode *block = NULL;
+    while (match(p, HD_TOK_COMMA)) {
+        HDASTNode *var = hd_ast_new(HD_AST_VAR_DECL);
+        if (peek(p) != HD_TOK_IDENT) { parse_error(p, "expected ident after comma"); break; }
+        strncpy(var->ident, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
+        advance(p);
+        int d2[8], n2 = 0;
+        while (peek(p) == HD_TOK_LBRACKET) {
+            advance(p);
+            int asz = 0;
+            if (peek(p) != HD_TOK_RBRACKET) {
+                if (peek(p) == HD_TOK_INT) { asz = (int)p->lex->tok.int_val; advance(p); }
+            }
+            expect(p, HD_TOK_RBRACKET);
+            if (n2 < 8) d2[n2++] = asz;
+        }
+        HDType *vtype = type;
+        if (n2 > 0) {
+            HDType *bt = vtype;
+            for (int d = n2 - 1; d >= 0; d--) {
+                HDType *arr = (HDType *)calloc(1, sizeof(HDType));
+                arr->kind = HD_TYPE_ARRAY; arr->base = bt;
+                arr->array_size = d2[d];
+                arr->size = (d2[d] > 0) ? hd_type_size(bt) * d2[d] : hd_type_size(bt);
+                bt = arr;
+            }
+            vtype = bt;
+        }
+        var->type = vtype;
+        if (match(p, HD_TOK_ASSIGN)) {
+            var->init = parse_assign(p);
+        }
+        if (!block) {
+            block = hd_ast_new(HD_AST_BLOCK);
+            hd_ast_add_stmt(block, first_var);
+        }
+        hd_ast_add_stmt(block, var);
+    }
+
     expect(p, HD_TOK_SEMI);
-    return var;
+    return block ? block : first_var;
 }
 
 /* -- Parse Compilation Unit --------------------------------------- */

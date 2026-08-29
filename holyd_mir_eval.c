@@ -482,8 +482,10 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
     if (!n) return 0;
     switch (n->kind) {
     case HD_AST_INT_LIT:
-    case HD_AST_CHAR_LIT:
-        return wubu_mir_const(g->prog, n->int_val);
+    case HD_AST_CHAR_LIT: {
+        wubu_vr_t r = wubu_mir_const(g->prog, n->int_val);
+        return r;
+    }
     case HD_AST_IDENT: {
         wubu_vr_t addr = mir_find_var_addr(g, n->ident);
         if (addr == 0) return wubu_mir_const(g->prog, 0);
@@ -640,8 +642,9 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
     }
     case HD_AST_COMMA: {
         /* Evaluate left (discard), return right */
-        mir_gen_expr(g, n->left);
-        return mir_gen_expr(g, n->right);
+        wubu_vr_t left = mir_gen_expr(g, n->left);
+        wubu_vr_t right = mir_gen_expr(g, n->right);
+        return right;
     }
     case HD_AST_AND: {
         /* short-circuit: a && b  ==  (a!=0) ? (b!=0) : 0 */
