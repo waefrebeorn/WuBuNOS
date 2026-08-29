@@ -1420,6 +1420,7 @@ HDASTNode *hd_parse_decl(HDParser *p) {
         }
         if (!block) {
             block = hd_ast_new(HD_AST_BLOCK);
+            block->no_scope_pop = 1;  /* don't push scope — vars are in parent scope */
             hd_ast_add_stmt(block, first_var);
         }
         hd_ast_add_stmt(block, var);

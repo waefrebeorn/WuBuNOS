@@ -287,3 +287,4 @@ debug_jit: tools/debug_jit.c $(MIR) wubu_tgemm_avx512.o $(filter-out wubu_isa_ji
 	$(CC) $(CFLAGS) -O2 -I. -I$(OS_ROOT) -mavx2 -mfma -o $@ $^ -lm
 
 
+
