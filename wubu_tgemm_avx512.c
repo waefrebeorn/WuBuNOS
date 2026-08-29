@@ -50,7 +50,7 @@ void tgemm_avx512(int64_t *mem, int64_t A, int64_t B,
 void wubu_tgemm_f32_avx512(const float *A, const float *B, float *C,
                             int M, int N, int K)
 {
-    const int MR = 6, NR = 16, KC = 128, NC = 128;
+    const int MR = 8, NR = 16, KC = 128, NC = 128;
     int nthreads = (M * N * K >= 200000000) ? omp_get_max_threads() : 1;
 
     #pragma omp parallel for schedule(dynamic, 1) if(nthreads > 1)
@@ -81,6 +81,8 @@ void wubu_tgemm_f32_avx512(const float *A, const float *B, float *C,
                     __m512 c3=(im>3)?_mm512_loadu_ps(&C[(int64_t)(i0+3)*N+j0+j]):_mm512_setzero_ps();
                     __m512 c4=(im>4)?_mm512_loadu_ps(&C[(int64_t)(i0+4)*N+j0+j]):_mm512_setzero_ps();
                     __m512 c5=(im>5)?_mm512_loadu_ps(&C[(int64_t)(i0+5)*N+j0+j]):_mm512_setzero_ps();
+                    __m512 c6=(im>6)?_mm512_loadu_ps(&C[(int64_t)(i0+6)*N+j0+j]):_mm512_setzero_ps();
+                    __m512 c7=(im>7)?_mm512_loadu_ps(&C[(int64_t)(i0+7)*N+j0+j]):_mm512_setzero_ps();
 
                     /* Pre-load A values into registers to reduce broadcast overhead */
                     /* Unroll k by 2 for better ILP */
@@ -115,6 +117,8 @@ void wubu_tgemm_f32_avx512(const float *A, const float *B, float *C,
                         if(im>3)c3=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i0+3)*K+k0+k]),bpk,c3);
                         if(im>4)c4=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i0+4)*K+k0+k]),bpk,c4);
                         if(im>5)c5=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i0+5)*K+k0+k]),bpk,c5);
+                        if(im>6)c6=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i0+6)*K+k0+k]),bpk,c6);
+                        if(im>7)c7=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i0+7)*K+k0+k]),bpk,c7);
                     }
 
                     if (im > 0) _mm512_storeu_ps(&C[(int64_t)(i0+0)*N+j0+j], c0);
@@ -127,7 +131,7 @@ void wubu_tgemm_f32_avx512(const float *A, const float *B, float *C,
 
                 /* Scalar remainder */
                 for (int j = (nc/NR)*NR; j < nc; j++) {
-                    for (int ii = i0; ii < imax; ii++) {
+                    for (int ii = i0; ii < imax && ii < i0+8; ii++) {
                         float acc = C[(int64_t)ii*N+j0+j];
                         for (int k = k0; k < kmax; k++)
                             acc += A[(int64_t)ii*K+k] * B[(int64_t)k*N+j0+j];
