@@ -497,6 +497,9 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
     /* prologue */
     e8(&e, 0x55);                      /* push rbp */
     rex(&e,1,0,0,0); e8(&e, 0x89); e8(&e, 0xE5);  /* mov rbp, rsp */
+    /* rbx = [wubu_jit_mem_ptr] (load mem base from global) */
+    rex(&e,1,0,0,1); e8(&e, 0xBB); e64(&e, (uint64_t)&wubu_jit_mem_ptr); /* movabs rbx, &wubu_jit_mem_ptr */
+    rex(&e,1,0,0,1); e8(&e, 0x8B); e8(&e, 0x1B);  /* mov rbx, [rbx] */
     if (e.frame > 0) {
         e8(&e, 0x48); e8(&e, 0x81); e8(&e, 0xEC); e32(&e, (uint32_t)e.frame);
     }
@@ -1070,7 +1073,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             else emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
             rex(&e,1,0,0,0); e8(&e, 0xC1); e8(&e, 0xE0); e8(&e, 0x03); /* shl rax,3 */
             /* rsi = prog.mem + rax */
-            rex(&e,1,0,0,0); e8(&e, 0x89); e8(&e, 0xF3);   /* mov rsi, rbx */
+            rex(&e,1,0,0,0); e8(&e, 0x89); e8(&e, 0xDE);   /* mov rsi, rbx */
             rex(&e,1,0,0,0); e8(&e, 0x01); e8(&e, 0xC6);   /* add rsi, rax */
             int sd = VR_ENC(in->dst);
             if (sd >= 0) {
@@ -1092,7 +1095,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             else emit_load_rbp(&e, 7, spill_off(assign, assign_count, &e, in->b));
             rex(&e,1,0,0,0); e8(&e, 0xC1); e8(&e, 0xE0); e8(&e, 0x03); /* shl rax,3 */
             /* rsi = prog.mem + rax */
-            rex(&e,1,0,0,0); e8(&e, 0x89); e8(&e, 0xF3);   /* mov rsi, rbx */
+            rex(&e,1,0,0,0); e8(&e, 0x89); e8(&e, 0xDE);   /* mov rsi, rbx */
             rex(&e,1,0,0,0); e8(&e, 0x01); e8(&e, 0xC6);   /* add rsi, rax */
             rex(&e,1,0,0,0); e8(&e, 0x89); e8(&e, 0x3E);   /* mov [rsi], rdi */
             break;
@@ -1171,7 +1174,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             if ((uint32_t)f == callps[fi2].func_id && func_off[f] != (size_t)-1) { t = func_off[f]; break; }
         if (t == (size_t)-1) continue;
         size_t pos = callps[fi2].pos;
-        int32_t rel = (int32_t)(t - (pos + 4));
+        int32_t rel = (int32_t)(t - (pos + 5));
         e.code[pos]   = (uint8_t)(rel & 0xFF);
         e.code[pos+1] = (uint8_t)((rel >> 8) & 0xFF);
         e.code[pos+2] = (uint8_t)((rel >> 16) & 0xFF);
@@ -1206,11 +1209,13 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
 int64_t *wubu_jit_mem_ptr = NULL;
 
 static int64_t x86_run(const uint8_t *code, size_t size, int64_t arg) {
-    (void)arg;
     void *exec = jit_alloc_exec(size);
     if (!exec) return -1;
     memcpy(exec, code, size);
     wubu_clear_cache(exec, size);
+
+    /* Set global mem base for JIT code */
+    wubu_jit_mem_ptr = (int64_t*)arg;
 
     /* Patch the emitted code: scan entire buffer for movabs rsi, imm64
      * (the JIT mem base embedded at compile time) and replace with
@@ -1218,7 +1223,7 @@ static int64_t x86_run(const uint8_t *code, size_t size, int64_t arg) {
     uint8_t *patch = (uint8_t *)exec;
     for (size_t i = 0; i + 9 < size; i++) {
         if (patch[i] == 0x48 && patch[i+1] == 0xBE) {
-            patch[i+1] = 0x89; patch[i+2] = 0xF3; /* mov rsi, rbx */
+            patch[i+1] = 0x89; patch[i+2] = 0xDE; /* mov rsi, rbx */
         }
     }
 
