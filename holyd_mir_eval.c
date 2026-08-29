@@ -31,13 +31,7 @@ typedef struct {
     int array_size;
     int is_struct;                  /* 1 if this variable is a struct instance */
     char struct_name[HD_MAX_IDENT_LEN]; /* struct type name */
-    int is_float;                   /* 1 if variable is F64 */
 } mir_var_t;
-
-/* scope stack entry */
-typedef struct {
-    int var_start;                  /* n_vars at scope entry */
-} scope_entry_t;
 
 /* struct member offset table */
 #define MAX_STRUCTS 64
@@ -56,12 +50,13 @@ typedef struct {
     int has_error;
     mir_var_t vars[MIRGEN_MAX_VARS];
     int n_vars;
-    mir_struct_t structs[MAX_STRUCTS];
-    int n_structs;
-    /* scope stack for block-level shadowing */
+    /* scope stack: track vars added at each scope level for shadowing */
     int scope_var_start[MIRGEN_MAX_VARS];
     int n_scopes;
-    int in_function_body;
+    int in_function_body; /* set when generating func body — don't pop scope */
+    mir_struct_t structs[MAX_STRUCTS];
+    int n_structs;
+    /* loop stack for break/continue resolution */
     uint32_t loop_top[MIRGEN_MAX_VARS];   /* continue target */
     uint32_t loop_done[MIRGEN_MAX_VARS];  /* break target */
     int n_loops;
@@ -145,21 +140,9 @@ static wubu_vr_t mir_decl_var_unsigned(HDMirGen *g, const char *name, int is_uns
         g->vars[g->n_vars].is_unsigned = is_unsigned;
         g->vars[g->n_vars].is_array = 0;
         g->vars[g->n_vars].array_size = 0;
-        g->vars[g->n_vars].is_float = 0;
         g->n_vars++;
     }
     return vr;
-}
-
-static void mir_mark_var_float(HDMirGen *g, const char *name) {
-    for (int i = 0; i < g->n_vars; i++)
-        if (strcmp(g->vars[i].name, name) == 0) { g->vars[i].is_float = 1; return; }
-}
-
-static int mir_var_is_float(HDMirGen *g, const char *name) {
-    for (int i = 0; i < g->n_vars; i++)
-        if (strcmp(g->vars[i].name, name) == 0) return g->vars[i].is_float;
-    return 0;
 }
 
 /* Register a variable name -> (vr, addr) directly, WITHOUT allocating a new
@@ -284,27 +267,23 @@ static wubu_vr_t mir_lvalue_addr(HDMirGen *g, const HDASTNode *n) {
 }
 
 static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n);
-static HDTypeKind mir_infer_type(HDMirGen *g, const HDASTNode *n);
 
 static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
     if (!n) return 0;
     switch (n->kind) {
     case HD_AST_BLOCK: {
-        /* Push scope: save current var count and the vars themselves
-         * so we can restore outer scope on block exit (shadowing). */
-        int saved_n_vars = g->n_vars;
-        mir_var_t saved_vars[MIRGEN_MAX_VARS];
-        memcpy(saved_vars, g->vars, (size_t)saved_n_vars * sizeof(mir_var_t));
+        /* Push scope unless we're in a function body (scope already pushed before params) */
+        int pushed = 0;
+        if (!g->in_function_body && g->n_scopes < MIRGEN_MAX_VARS) {
+            g->scope_var_start[g->n_scopes++] = g->n_vars;
+            pushed = 1;
+        }
         wubu_vr_t last = 0;
         for (uint32_t i = 0; i < n->n_stmts; i++)
             last = mir_gen_stmt(g, n->stmts[i]);
-        /* Pop scope unless:
-         * - we're in a function body (params must survive)
-         * - this is a multi-decl block (vars must persist) */
-        if (!g->in_function_body && !n->no_scope_pop) {
-            memcpy(g->vars, saved_vars, (size_t)saved_n_vars * sizeof(mir_var_t));
-            g->n_vars = saved_n_vars;
-        }
+        /* Pop scope: remove vars added in this block so outer scope is restored */
+        if (pushed)
+            g->n_vars = g->scope_var_start[--g->n_scopes];
         return last;
     }
     case HD_AST_STRUCT_DECL: {
@@ -332,7 +311,6 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
     }
     case HD_AST_VAR_DECL: {
         int is_uns = 0;
-        int is_float = 0;
         int arr_size = 0;
         int is_struct_var = 0;
         char struct_type_name[HD_MAX_IDENT_LEN] = {0};
@@ -341,15 +319,6 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
             if (k == HD_TYPE_STRUCT) fprintf(stderr, "STRUCT_VAR_DECL: %s type=%s n_members=%d\n", n->ident, n->type->name, n->type->n_members);
             if (k == HD_TYPE_U8 || k == HD_TYPE_U16 || k == HD_TYPE_U32 || k == HD_TYPE_U64)
                 is_uns = 1;
-            if (k == HD_TYPE_F64) is_float = 1;
-            /* auto type inference from initializer */
-            if (k == HD_TYPE_AUTO && n->init) {
-                HDTypeKind inferred = mir_infer_type(g, n->init);
-                if (inferred == HD_TYPE_F64) is_float = 1;
-                else if (inferred == HD_TYPE_U8 || inferred == HD_TYPE_U16 ||
-                         inferred == HD_TYPE_U32 || inferred == HD_TYPE_U64) is_uns = 1;
-                n->type->kind = inferred;
-            }
             /* array type carries an element count in n->type->array_size */
             if (k == HD_TYPE_ARRAY && n->type->array_size > 0) arr_size = (int)n->type->array_size;
             /* struct type: allocate memory for all members */
@@ -369,7 +338,6 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
             }
         }
         wubu_vr_t vr = mir_decl_var_unsigned(g, n->ident, is_uns);
-        if (is_float) { mir_mark_var_float(g, n->ident); }
         /* Allocate memory for the variable (arrays get arr_size cells, scalars 1, structs = total_size). */
         wubu_vr_t addr = wubu_mir_alloc(g->prog, arr_size > 0 ? arr_size : 1);
         for (int i = 0; i < g->n_vars; i++)
@@ -510,39 +478,6 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
     }
 }
 
-/* Infer the type of an AST expression node for auto type deduction */
-static HDTypeKind mir_infer_type(HDMirGen *g, const HDASTNode *n) {
-    if (!n) return HD_TYPE_I32;
-    switch (n->kind) {
-    case HD_AST_INT_LIT: return HD_TYPE_I32;
-    case HD_AST_FLOAT_LIT: return HD_TYPE_F64;
-    case HD_AST_BOOL_LIT: return HD_TYPE_BOOL;
-    case HD_AST_CHAR_LIT: return HD_TYPE_I8;
-    case HD_AST_IDENT: {
-        /* Look up the variable's declared type */
-        for (int i = 0; i < g->n_vars; i++)
-            if (strcmp(g->vars[i].name, n->ident) == 0) {
-                if (g->vars[i].is_float) return HD_TYPE_F64;
-                if (g->vars[i].is_unsigned) return HD_TYPE_U32;
-                return HD_TYPE_I32;
-            }
-        return HD_TYPE_I32;
-    }
-    case HD_AST_ADD: case HD_AST_SUB: case HD_AST_MUL: case HD_AST_DIV: {
-        /* If either operand is float, result is float */
-        HDTypeKind lt = mir_infer_type(g, n->left);
-        HDTypeKind rt = mir_infer_type(g, n->right);
-        if (lt == HD_TYPE_F64 || rt == HD_TYPE_F64) return HD_TYPE_F64;
-        return HD_TYPE_I32;
-    }
-    case HD_AST_CALL:
-        /* For function calls, try to find the return type */
-        return HD_TYPE_I32; /* default */
-    default:
-        return HD_TYPE_I32;
-    }
-}
-
 static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
     if (!n) return 0;
     switch (n->kind) {
@@ -663,19 +598,18 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         return mir_gen_expr(g, n->right);
     }
     case HD_AST_FLOAT_LIT: {
-        union { float f; uint32_t i; } u;
-        u.f = (float)n->float_val;
-        return wubu_mir_const(g->prog, (int64_t)u.i);
+        union { double d; int64_t i; } u;
+        u.d = n->float_val;
+        return wubu_mir_const(g->prog, u.i);
     }
     case HD_AST_BOOL_LIT:
         return wubu_mir_const(g->prog, n->int_val ? 1 : 0);
     case HD_AST_ADD: {
         wubu_vr_t a = mir_gen_expr(g, n->left);
         wubu_vr_t b = mir_gen_expr(g, n->right);
+        /* Use float ops if either operand is F64 */
         int is_float = (n->left && n->left->type && n->left->type->kind == HD_TYPE_F64) ||
                        (n->right && n->right->type && n->right->type->kind == HD_TYPE_F64);
-        if (n->left && n->left->kind == HD_AST_IDENT && mir_var_is_float(g, n->left->ident)) is_float = 1;
-        if (n->right && n->right->kind == HD_AST_IDENT && mir_var_is_float(g, n->right->ident)) is_float = 1;
         return wubu_mir_binop(g->prog, is_float ? MIR_FADD : MIR_ADD, a, b);
     }
     case HD_AST_SUB: {
@@ -683,8 +617,6 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         wubu_vr_t b = mir_gen_expr(g, n->right);
         int is_float = (n->left && n->left->type && n->left->type->kind == HD_TYPE_F64) ||
                        (n->right && n->right->type && n->right->type->kind == HD_TYPE_F64);
-        if (n->left && n->left->kind == HD_AST_IDENT && mir_var_is_float(g, n->left->ident)) is_float = 1;
-        if (n->right && n->right->kind == HD_AST_IDENT && mir_var_is_float(g, n->right->ident)) is_float = 1;
         return wubu_mir_binop(g->prog, is_float ? MIR_FSUB : MIR_SUB, a, b);
     }
     case HD_AST_MUL: {
@@ -692,8 +624,6 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         wubu_vr_t b = mir_gen_expr(g, n->right);
         int is_float = (n->left && n->left->type && n->left->type->kind == HD_TYPE_F64) ||
                        (n->right && n->right->type && n->right->type->kind == HD_TYPE_F64);
-        if (n->left && n->left->kind == HD_AST_IDENT && mir_var_is_float(g, n->left->ident)) is_float = 1;
-        if (n->right && n->right->kind == HD_AST_IDENT && mir_var_is_float(g, n->right->ident)) is_float = 1;
         return wubu_mir_binop(g->prog, is_float ? MIR_FMUL : MIR_MUL, a, b);
     }
     case HD_AST_DIV: {
@@ -701,8 +631,6 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         wubu_vr_t b = mir_gen_expr(g, n->right);
         int is_float = (n->left && n->left->type && n->left->type->kind == HD_TYPE_F64) ||
                        (n->right && n->right->type && n->right->type->kind == HD_TYPE_F64);
-        if (n->left && n->left->kind == HD_AST_IDENT && mir_var_is_float(g, n->left->ident)) is_float = 1;
-        if (n->right && n->right->kind == HD_AST_IDENT && mir_var_is_float(g, n->right->ident)) is_float = 1;
         return wubu_mir_binop(g->prog, is_float ? MIR_FDIV : MIR_DIV, a, b);
     }
     case HD_AST_MOD: {
@@ -711,6 +639,7 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         return wubu_mir_binop(g->prog, MIR_MOD, a, b);
     }
     case HD_AST_COMMA: {
+        /* Evaluate left (discard), return right */
         mir_gen_expr(g, n->left);
         return mir_gen_expr(g, n->right);
     }
@@ -1044,6 +973,9 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
         const HDASTNode *fn = g.func_ast[fi];
         fprintf(stderr, "FUNC_BODY[%d]: %s body_kind=%d n_params=%d body_n_stmts=%d\n", fi, fn->ident, fn->body ? fn->body->kind : -1, fn->n_params, fn->body && fn->body->kind == HD_AST_BLOCK ? (int)fn->body->n_stmts : 0);
         prog->funcs[fi].start = prog->n;
+        /* Push scope BEFORE binding params so pop removes them too */
+        if (g.n_scopes < MIRGEN_MAX_VARS)
+            g.scope_var_start[g.n_scopes++] = g.n_vars;
         /* bind parameters: use HIGH virtual registers for both the address
          * slot and the value so they NEVER collide with v1..vN (the argument
          * registers). slot_addr is a high-vr holding the memory address; base
@@ -1064,6 +996,9 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
         g.in_function_body = 1;
         mir_gen_stmt(&g, fn->body);
         g.in_function_body = 0;
+        /* Pop the function body scope to clean up params/locals */
+        if (g.n_scopes > 0)
+            g.n_vars = g.scope_var_start[--g.n_scopes];
         wubu_mir_place_label(prog, g.fn_ret_label);
         wubu_mir_mov_to(prog, 0, g.fn_ret_vr);   /* callee returns in vr0 */
         wubu_mir_ret(prog, 0);

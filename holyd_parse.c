@@ -77,9 +77,7 @@ static void expect(HDParser *p, HDTokenType type) {
 /* -- Forward Declarations ----------------------------------------- */
 
 static HDASTNode *parse_expr(HDParser *p);
-static HDASTNode *parse_assignment_expr(HDParser *p);
 static HDASTNode *parse_comma(HDParser *p);
-static HDASTNode *parse_assign(HDParser *p);
 static HDASTNode *parse_stmt(HDParser *p);
 static HDASTNode *parse_decl(HDParser *p);
 
@@ -88,13 +86,6 @@ static HDASTNode *parse_decl(HDParser *p);
 static HDType *parse_type(HDParser *p) {
     HDType *t = (HDType *)calloc(1, sizeof(HDType));
     t->kind = HD_TYPE_I64; /* HolyD default */
-
-    /* auto type inference */
-    if (peek(p) == HD_KW_AUTO) {
-        advance(p);
-        t->kind = HD_TYPE_AUTO;
-        return t;
-    }
 
     switch (peek(p)) {
         case HD_TOK_IDENT: {
@@ -309,43 +300,6 @@ static HDType *parse_type(HDParser *p) {
                     expect(p, HD_TOK_SEMI);
                 }
                 expect(p, HD_TOK_RBRACE);
-                /* Struct packing: reorder members by size (largest first)
-                 * to minimize padding. This is the standard C compiler
-                 * optimization for struct layout. */
-                if (comp_kind == HD_TYPE_STRUCT && t->n_members > 1) {
-                    /* Sort members by type size descending (bubble sort) */
-                    for (int i = 0; i < t->n_members - 1; i++) {
-                        for (int j = 0; j < t->n_members - i - 1; j++) {
-                            size_t szj = hd_type_size(t->members[j].type);
-                            size_t szj1 = hd_type_size(t->members[j+1].type);
-                            if (szj < szj1) {
-                                /* Swap member names, types, and offsets */
-                                char tmp_name[HD_MAX_IDENT_LEN];
-                                memcpy(tmp_name, t->members[j].name, HD_MAX_IDENT_LEN);
-                                memcpy(t->members[j].name, t->members[j+1].name, HD_MAX_IDENT_LEN);
-                                memcpy(t->members[j+1].name, tmp_name, HD_MAX_IDENT_LEN);
-                                HDType *tmp_type = t->members[j].type;
-                                t->members[j].type = t->members[j+1].type;
-                                t->members[j+1].type = tmp_type;
-                            }
-                        }
-                    }
-                    /* Recompute offsets after reordering */
-                    t->size = 0;
-                    t->align = 1;
-                    for (int i = 0; i < t->n_members; i++) {
-                        size_t msz = hd_type_size(t->members[i].type);
-                        int align = (int)msz;
-                        if (align < 1) align = 1;
-                        if (align > t->align) t->align = align;
-                        if ((t->size % align) != 0)
-                            t->size += align - (t->size % align);
-                        t->members[i].offset = t->size;
-                        t->size += msz;
-                    }
-                    if (t->align > 0 && (t->size % t->align) != 0)
-                        t->size += t->align - (t->size % t->align);
-                }
                 t->kind = comp_kind;
                 if (comp_kind == HD_TYPE_UNION) {
                     t->size = max_size;
@@ -503,7 +457,7 @@ static HDASTNode *parse_primary(HDParser *p) {
             HDASTNode *init = hd_ast_new(HD_AST_BRACE_INIT);
             if (!init) { p->has_error = true; return NULL; }
             while (peek(p) != HD_TOK_RBRACE && peek(p) != HD_TOK_EOF) {
-                hd_ast_add_arg(init, parse_assignment_expr(p));
+                hd_ast_add_arg(init, parse_expr(p));
                 if (peek(p) == HD_TOK_COMMA) {
                     advance(p);
                     if (peek(p) == HD_TOK_RBRACE) break;
@@ -530,9 +484,9 @@ static HDASTNode *parse_postfix(HDParser *p) {
             HDASTNode *call = hd_ast_new(HD_AST_FUNC_CALL);
             call->callee = expr;
             if (peek(p) != HD_TOK_RPAREN) {
-                hd_ast_add_arg(call, parse_assignment_expr(p));
+                hd_ast_add_arg(call, parse_expr(p));
                 while (match(p, HD_TOK_COMMA))
-                    hd_ast_add_arg(call, parse_assignment_expr(p));
+                    hd_ast_add_arg(call, parse_expr(p));
             }
             expect(p, HD_TOK_RPAREN);
             expr = call;
@@ -824,6 +778,8 @@ static HDASTNode *parse_expr(HDParser *p) {
     return parse_comma(p);
 }
 
+/* -- Parse Comma (lowest precedence binary) ------------------------ */
+
 static HDASTNode *parse_comma(HDParser *p) {
     HDASTNode *left = parse_assign(p);
     while (peek(p) == HD_TOK_COMMA) {
@@ -832,16 +788,10 @@ static HDASTNode *parse_comma(HDParser *p) {
         HDASTNode *n = hd_ast_new(HD_AST_COMMA);
         n->left = left;
         n->right = right;
-        n->type = right->type;
+        n->type = right->type; /* comma expr has type of right operand */
         left = n;
     }
     return left;
-}
-
-/* parse_assignment_expr: like parse_expr but does NOT consume commas.
- * Used for variable initializers, function call arguments, array init. */
-static HDASTNode *parse_assignment_expr(HDParser *p) {
-    return parse_assign(p);
 }
 
 /* -- Parse Block -------------------------------------------------- */
@@ -1049,7 +999,7 @@ static HDASTNode *parse_stmt(HDParser *p) {
     /* Variable declaration (type followed by ident) */
     {
         HDTokenType _t = peek(p);
-        if (_t >= HD_KW_I0 && _t <= HD_KW_AUTO) {
+        if (_t >= HD_KW_I0 && _t <= HD_KW_VOLATILE) {
             return hd_parse_decl(p);
         }
     }
@@ -1432,37 +1382,8 @@ HDASTNode *hd_parse_decl(HDParser *p) {
     var->type = type;
 
     if (match(p, HD_TOK_ASSIGN)) {
-        var->init = parse_assignment_expr(p);
+        var->init = parse_expr(p);
     }
-
-    /* Check for additional declarators: int a=0, b=0, c=0; */
-    if (peek(p) == HD_TOK_COMMA) {
-        /* Wrap first decl in a BLOCK for multi-declarator.
-         * Mark as no-scope-pop so vars persist after the block. */
-        HDASTNode *block = hd_ast_new(HD_AST_BLOCK);
-        block->no_scope_pop = 1;
-        hd_ast_add_stmt(block, var);
-        while (match(p, HD_TOK_COMMA)) {
-            /* Parse next declarator: name [= init] */
-            HDASTNode *var2 = hd_ast_new(HD_AST_VAR_DECL);
-            if (peek(p) != HD_TOK_IDENT) {
-                parse_error(p, "expected identifier in multi-declarator");
-                return block;
-            }
-            strncpy(var2->ident, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
-            advance(p);
-            var2->type = type; /* same base type as first declarator */
-            /* Handle pointer: int *a, b; → a is pointer, b is not */
-            /* For simplicity, only support non-pointer multi-decl */
-            if (match(p, HD_TOK_ASSIGN)) {
-                var2->init = parse_assignment_expr(p);
-            }
-            hd_ast_add_stmt(block, var2);
-        }
-        expect(p, HD_TOK_SEMI);
-        return block;
-    }
-
     expect(p, HD_TOK_SEMI);
     return var;
 }
