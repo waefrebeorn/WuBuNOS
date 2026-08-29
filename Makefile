@@ -286,23 +286,3 @@ test_mir_debug: tools/test_mir_debug.c $(MIR) wubu_tgemm_avx512.o $(filter-out w
 debug_jit: tools/debug_jit.c $(MIR) wubu_tgemm_avx512.o $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) jit_stub.c jit_stub_arm64.c wubu_tgemm_avx512.o
 	$(CC) $(CFLAGS) -O2 -I. -I$(OS_ROOT) -mavx2 -mfma -o $@ $^ -lm
 
-test_mir_call: tools/test_mir_call.c $(MIR) wubu_tgemm_avx512.o $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) holyd_mir_eval.c holyd_lexer.c holyd_parse.c holyd_parse_ast.c holyd_codegen.c holyd_codegen_emit.c holyd_codegen_expr.c holyd_codegen_stmt.c holyd_codegen_api.c holyd_runtime.c wubu_preproc.c jit_stub.c jit_stubs_arm64.c
-	$(CC) $(CFLAGS) -I. $^ $(LDFLAGS) -o $@
-
-debug_battery: tools/debug_battery.c $(MIR) wubu_tgemm_avx512.o $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) holyd_mir_eval.c holyd_lexer.c holyd_parse.c holyd_parse_ast.c holyd_codegen.c holyd_codegen_emit.c holyd_codegen_expr.c holyd_codegen_stmt.c holyd_codegen_api.c holyd_runtime.c wubu_preproc.c jit_stub.c jit_stubs_arm64.c
-	$(CC) $(CFLAGS) -I. $^ $(LDFLAGS) -o $@
-
-test_x86_min: tools/test_x86_min.c $(MIR) $(ISA) $(INTERP) $(OS_INTERP) jit_stub.c jit_stub_arm64.c
-	$(CC) $(CFLAGS) -I. -I$(OS_ROOT) -o $@ $^ -lm
-
-debug_call: tools/debug_call.c $(MIR) wubu_tgemm_avx512.o $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) jit_stub.c jit_stub_arm64.c holyd_mir_eval.c holyd_lexer.c holyd_parse.c holyd_parse_ast.c holyd_codegen.c holyd_codegen_emit.c holyd_codegen_expr.c holyd_codegen_stmt.c holyd_codegen_api.c holyd_runtime.c wubu_preproc.c
-	$(CC) $(CFLAGS) -I. -I$(OS_ROOT) -o $@ $^ -lm
-
-debug_mir: tools/debug_mir.c $(MIR) $(INTERP) wubu_tgemm_avx512.o holyd_mir_eval.c holyd_lexer.c holyd_parse.c holyd_parse_ast.c holyd_codegen.c holyd_codegen_emit.c holyd_codegen_expr.c holyd_codegen_stmt.c holyd_codegen_api.c holyd_runtime.c wubu_preproc.c jit_stub.c
-	$(CC) $(CFLAGS) -I. -I$(OS_ROOT) -o $@ $^ -lm
-
-debug_interp: tools/debug_interp.c $(MIR) $(INTERP) wubu_tgemm_avx512.o holyd_mir_eval.c holyd_lexer.c holyd_parse.c holyd_parse_ast.c holyd_codegen.c holyd_codegen_emit.c holyd_codegen_expr.c holyd_codegen_stmt.c holyd_codegen_api.c holyd_runtime.c wubu_preproc.c jit_stub.c
-	$(CC) $(CFLAGS) -I. -I$(OS_ROOT) -o $@ $^ -lm
-
-debug_noopt: tools/debug_noopt.c $(MIR) $(INTERP) wubu_tgemm_avx512.o jit_stub.c
-	$(CC) $(CFLAGS) -I. -I$(OS_ROOT) -o $@ $^ -lm

@@ -45,6 +45,7 @@ wubu_vr_t wubu_mir_const(wubu_mir_prog_t *p, int64_t imm)
     i->op = MIR_CONST;
     i->dst = (wubu_vr_t)p->n;   /* fresh vr: reuse the instr index+1 */
     i->imm = imm;
+    if (getenv("WUBU_MIR_DEBUG")) fprintf(stderr, "  wubu_mir_const(%lld) -> dst=%d p->n=%zu idx=%zu\n", (long long)imm, i->dst, p->n, (size_t)(i - p->ins));
     return i->dst;
 }
 
