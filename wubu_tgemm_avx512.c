@@ -49,7 +49,7 @@ void wubu_tgemm_f32_avx512(const float *A, const float *B, float *C,
                             int M, int N, int K)
 {
     const int MR = 6, NR = 16, KC = 64, NC = 256;
-    int nthreads = (M * N * K >= 256000000) ? omp_get_max_threads() : 1;
+    int nthreads = (M * N * K >= 500000000) ? omp_get_max_threads() : 1;
     int mc = (M + nthreads - 1) / nthreads;
     mc = (mc + MR - 1) / MR * MR;
     if (mc < MR && M >= MR) mc = MR;
