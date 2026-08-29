@@ -47,7 +47,9 @@ void tgemm_avx512(int64_t *mem, int64_t A, int64_t B,
  * K-unroll by 4: load 4 B rows, broadcast 4 A values per row.
  * Maximizes FMA pipelining on Zen 4 (single 512-bit FMA unit).
  */
-void wubu_tgemm_f32_avx512(const float *A, const float *B, float *C,
+void wubu_tgemm_f32_avx512(const float * __restrict__ A,
+                            const float * __restrict__ B,
+                            float * __restrict__ C,
                             int M, int N, int K)
 {
     const int MR = 8, NR = 16, KC = 128, NC = 128;
