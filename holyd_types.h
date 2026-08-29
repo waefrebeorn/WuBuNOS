@@ -47,6 +47,7 @@ typedef enum {
     HD_KW_CONTINUE,
     HD_KW_RETURN,
     HD_KW_GOTO,
+    HD_KW_AUTO,
 
     HD_KW_I0, HD_KW_I8, HD_KW_I16, HD_KW_I32, HD_KW_I64,
     HD_KW_U0, HD_KW_U8, HD_KW_U16, HD_KW_U32, HD_KW_U64,
