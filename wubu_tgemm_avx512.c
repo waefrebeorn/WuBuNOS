@@ -50,93 +50,81 @@ void tgemm_avx512(int64_t *mem, int64_t A, int64_t B,
 void wubu_tgemm_f32_avx512(const float *A, const float *B, float *C,
                             int M, int N, int K)
 {
-    const int MR = 6, NR = 16, KC = 64, NC = 256;
+    const int MR = 6, NR = 16, KC = 64, NC = 128;
     int nthreads = (M * N * K >= 200000000) ? omp_get_max_threads() : 1;
-    int mc = (M + nthreads - 1) / nthreads;
-    mc = (mc + MR - 1) / MR * MR;
-    if (mc < MR && M >= MR) mc = MR;
 
-    #pragma omp parallel for schedule(dynamic) if(nthreads > 1)
-    for (int i0 = 0; i0 < M; i0 += mc) {
-        int imax = i0 + mc; if (imax > M) imax = M;
-        float *bpack = (float*)malloc((size_t)KC * NC * sizeof(float));
-        if (!bpack) { fprintf(stderr, "malloc failed\n"); continue; }
-        for (int j0 = 0; j0 < N; j0 += NC) {
-            int jmax = j0 + NC; if (jmax > N) jmax = N;
-            int nc = jmax - j0;
-            for (int k0 = 0; k0 < K; k0 += KC) {
-                int kmax = k0 + KC; if (kmax > K) kmax = K;
-                for (int k = 0; k < kmax - k0; k++)
-                    memcpy(&bpack[(size_t)k * nc],
-                           &B[(int64_t)(k0 + k) * N + j0],
-                           (size_t)nc * sizeof(float));
-                for (int i = i0; i < imax; i += MR) {
-                    int im = imax - i; if (im > MR) im = MR;
-                    for (int j = 0; j + NR - 1 < nc; j += NR) {
-                        __m512 c0=(im>0)?_mm512_loadu_ps(&C[(int64_t)(i+0)*N+j0+j]):_mm512_setzero_ps();
-                        __m512 c1=(im>1)?_mm512_loadu_ps(&C[(int64_t)(i+1)*N+j0+j]):_mm512_setzero_ps();
-                        __m512 c2=(im>2)?_mm512_loadu_ps(&C[(int64_t)(i+2)*N+j0+j]):_mm512_setzero_ps();
-                        __m512 c3=(im>3)?_mm512_loadu_ps(&C[(int64_t)(i+3)*N+j0+j]):_mm512_setzero_ps();
-                        __m512 c4=(im>4)?_mm512_loadu_ps(&C[(int64_t)(i+4)*N+j0+j]):_mm512_setzero_ps();
-                        __m512 c5=(im>5)?_mm512_loadu_ps(&C[(int64_t)(i+5)*N+j0+j]):_mm512_setzero_ps();
-                        int k = 0;
-                        for (; k + 3 < kmax - k0; k += 4) {
-                            __m512 b0=_mm512_loadu_ps(&bpack[(size_t)k*nc+j]);
-                            __m512 b1=_mm512_loadu_ps(&bpack[(size_t)(k+1)*nc+j]);
-                            __m512 b2=_mm512_loadu_ps(&bpack[(size_t)(k+2)*nc+j]);
-                            __m512 b3=_mm512_loadu_ps(&bpack[(size_t)(k+3)*nc+j]);
-                            if(im>0){c0=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i+0)*K+k0+k]),b0,c0);
-                                      c0=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i+0)*K+k0+k+1]),b1,c0);
-                                      c0=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i+0)*K+k0+k+2]),b2,c0);
-                                      c0=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i+0)*K+k0+k+3]),b3,c0);}
-                            if(im>1){c1=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i+1)*K+k0+k]),b0,c1);
-                                      c1=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i+1)*K+k0+k+1]),b1,c1);
-                                      c1=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i+1)*K+k0+k+2]),b2,c1);
-                                      c1=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i+1)*K+k0+k+3]),b3,c1);}
-                            if(im>2){c2=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i+2)*K+k0+k]),b0,c2);
-                                      c2=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i+2)*K+k0+k+1]),b1,c2);
-                                      c2=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i+2)*K+k0+k+2]),b2,c2);
-                                      c2=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i+2)*K+k0+k+3]),b3,c2);}
-                            if(im>3){c3=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i+3)*K+k0+k]),b0,c3);
-                                      c3=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i+3)*K+k0+k+1]),b1,c3);
-                                      c3=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i+3)*K+k0+k+2]),b2,c3);
-                                      c3=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i+3)*K+k0+k+3]),b3,c3);}
-                            if(im>4){c4=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i+4)*K+k0+k]),b0,c4);
-                                      c4=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i+4)*K+k0+k+1]),b1,c4);
-                                      c4=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i+4)*K+k0+k+2]),b2,c4);
-                                      c4=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i+4)*K+k0+k+3]),b3,c4);}
-                            if(im>5){c5=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i+5)*K+k0+k]),b0,c5);
-                                      c5=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i+5)*K+k0+k+1]),b1,c5);
-                                      c5=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i+5)*K+k0+k+2]),b2,c5);
-                                      c5=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i+5)*K+k0+k+3]),b3,c5);}
-                        }
-                        for (; k < kmax - k0; k++) {
-                            __m512 bpk=_mm512_loadu_ps(&bpack[(size_t)k*nc+j]);
-                            if(im>0)c0=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i+0)*K+k0+k]),bpk,c0);
-                            if(im>1)c1=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i+1)*K+k0+k]),bpk,c1);
-                            if(im>2)c2=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i+2)*K+k0+k]),bpk,c2);
-                            if(im>3)c3=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i+3)*K+k0+k]),bpk,c3);
-                            if(im>4)c4=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i+4)*K+k0+k]),bpk,c4);
-                            if(im>5)c5=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i+5)*K+k0+k]),bpk,c5);
-                        }
-                        if(im>0)_mm512_storeu_ps(&C[(int64_t)(i+0)*N+j0+j],c0);
-                        if(im>1)_mm512_storeu_ps(&C[(int64_t)(i+1)*N+j0+j],c1);
-                        if(im>2)_mm512_storeu_ps(&C[(int64_t)(i+2)*N+j0+j],c2);
-                        if(im>3)_mm512_storeu_ps(&C[(int64_t)(i+3)*N+j0+j],c3);
-                        if(im>4)_mm512_storeu_ps(&C[(int64_t)(i+4)*N+j0+j],c4);
-                        if(im>5)_mm512_storeu_ps(&C[(int64_t)(i+5)*N+j0+j],c5);
+    /*
+     * Strategy: parallelize the j-loop (N dimension) at the outermost level.
+     * Each thread gets a chunk of j-blocks. Within each j-block, pack B once
+     * and process all M rows serially. This gives each thread a large chunk
+     * of work with minimal synchronization.
+     *
+     * B-packing is per-thread (each thread packs its own j-chunk of B).
+     * No shared state between threads except C (which is write-disjoint).
+     */
+
+    #pragma omp parallel for schedule(dynamic, 1) if(nthreads > 1)
+    for (int j0 = 0; j0 < N; j0 += NC) {
+        int jmax = j0 + NC; if (jmax > N) jmax = N;
+        int nc = jmax - j0;
+
+        /* Per-thread B pack buffer */
+        float *bpack = (float*)aligned_alloc(64, (size_t)KC * nc * sizeof(float));
+        if (!bpack) continue;
+
+        for (int k0 = 0; k0 < K; k0 += KC) {
+            int kmax = k0 + KC; if (kmax > K) kmax = K;
+            int kc = kmax - k0;
+
+            /* Pack B[k0:kmax, j0:jmax] */
+            for (int k = 0; k < kc; k++)
+                memcpy(&bpack[(size_t)k * nc],
+                       &B[(int64_t)(k0 + k) * N + j0],
+                       (size_t)nc * sizeof(float));
+
+            /* Process all M rows */
+            for (int i0 = 0; i0 < M; i0 += MR) {
+                int imax = i0 + MR; if (imax > M) imax = M;
+                int im = imax - i0;
+
+                for (int j = 0; j + NR - 1 < nc; j += NR) {
+                    __m512 c0=(im>0)?_mm512_loadu_ps(&C[(int64_t)(i0+0)*N+j0+j]):_mm512_setzero_ps();
+                    __m512 c1=(im>1)?_mm512_loadu_ps(&C[(int64_t)(i0+1)*N+j0+j]):_mm512_setzero_ps();
+                    __m512 c2=(im>2)?_mm512_loadu_ps(&C[(int64_t)(i0+2)*N+j0+j]):_mm512_setzero_ps();
+                    __m512 c3=(im>3)?_mm512_loadu_ps(&C[(int64_t)(i0+3)*N+j0+j]):_mm512_setzero_ps();
+                    __m512 c4=(im>4)?_mm512_loadu_ps(&C[(int64_t)(i0+4)*N+j0+j]):_mm512_setzero_ps();
+                    __m512 c5=(im>5)?_mm512_loadu_ps(&C[(int64_t)(i0+5)*N+j0+j]):_mm512_setzero_ps();
+
+                    for (int k = 0; k < kc; k++) {
+                        __m512 bpk = _mm512_loadu_ps(&bpack[(size_t)k * nc + j]);
+                        if (im > 0) c0 = _mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i0+0)*K+k0+k]), bpk, c0);
+                        if (im > 1) c1 = _mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i0+1)*K+k0+k]), bpk, c1);
+                        if (im > 2) c2 = _mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i0+2)*K+k0+k]), bpk, c2);
+                        if (im > 3) c3 = _mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i0+3)*K+k0+k]), bpk, c3);
+                        if (im > 4) c4 = _mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i0+4)*K+k0+k]), bpk, c4);
+                        if (im > 5) c5 = _mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i0+5)*K+k0+k]), bpk, c5);
                     }
-                    for (int j = (nc/NR)*NR; j < nc; j++) {
-                        for (int ii = i; ii < imax; ii++) {
-                            float acc = C[(int64_t)ii*N+j0+j];
-                            for (int k = k0; k < kmax; k++)
-                                acc += A[(int64_t)ii*K+k]*B[(int64_t)k*N+j0+j];
-                            C[(int64_t)ii*N+j0+j] = acc;
-                        }
+
+                    if (im > 0) _mm512_storeu_ps(&C[(int64_t)(i0+0)*N+j0+j], c0);
+                    if (im > 1) _mm512_storeu_ps(&C[(int64_t)(i0+1)*N+j0+j], c1);
+                    if (im > 2) _mm512_storeu_ps(&C[(int64_t)(i0+2)*N+j0+j], c2);
+                    if (im > 3) _mm512_storeu_ps(&C[(int64_t)(i0+3)*N+j0+j], c3);
+                    if (im > 4) _mm512_storeu_ps(&C[(int64_t)(i0+4)*N+j0+j], c4);
+                    if (im > 5) _mm512_storeu_ps(&C[(int64_t)(i0+5)*N+j0+j], c5);
+                }
+
+                /* Scalar remainder */
+                for (int j = (nc/NR)*NR; j < nc; j++) {
+                    for (int ii = i0; ii < imax; ii++) {
+                        float acc = C[(int64_t)ii*N+j0+j];
+                        for (int k = k0; k < kmax; k++)
+                            acc += A[(int64_t)ii*K+k] * B[(int64_t)k*N+j0+j];
+                        C[(int64_t)ii*N+j0+j] = acc;
                     }
                 }
             }
         }
+
         free(bpack);
     }
 }
@@ -154,7 +142,7 @@ void wubu_tgemm_f32_avx512(const float *A, const float *B, float *C,
 void wubu_tgemm_bf16_avx512(const uint16_t *A_bf16, const uint16_t *B_bf16, float *C,
                              int M, int N, int K)
 {
-    const int MR = 6, NR = 16, KC = 64, NC = 256;
+    const int MR = 6, NR = 16, KC = 64, NC = 128;
     int nthreads = (M * N * K >= 200000000) ? omp_get_max_threads() : 1;
     int mc = (M + nthreads - 1) / nthreads;
     mc = (mc + MR - 1) / MR * MR;
@@ -175,12 +163,12 @@ void wubu_tgemm_bf16_avx512(const uint16_t *A_bf16, const uint16_t *B_bf16, floa
                     int im = imax - i; if (im > MR) im = MR;
 
                     for (int j = 0; j + NR - 1 < nc; j += NR) {
-                        __m512 c0=(im>0)?_mm512_loadu_ps(&C[(int64_t)(i+0)*N+j0+j]):_mm512_setzero_ps();
-                        __m512 c1=(im>1)?_mm512_loadu_ps(&C[(int64_t)(i+1)*N+j0+j]):_mm512_setzero_ps();
-                        __m512 c2=(im>2)?_mm512_loadu_ps(&C[(int64_t)(i+2)*N+j0+j]):_mm512_setzero_ps();
-                        __m512 c3=(im>3)?_mm512_loadu_ps(&C[(int64_t)(i+3)*N+j0+j]):_mm512_setzero_ps();
-                        __m512 c4=(im>4)?_mm512_loadu_ps(&C[(int64_t)(i+4)*N+j0+j]):_mm512_setzero_ps();
-                        __m512 c5=(im>5)?_mm512_loadu_ps(&C[(int64_t)(i+5)*N+j0+j]):_mm512_setzero_ps();
+                        __m512 c0=(im>0)?_mm512_loadu_ps(&C[(int64_t)(i0+0)*N+j0+j]):_mm512_setzero_ps();
+                        __m512 c1=(im>1)?_mm512_loadu_ps(&C[(int64_t)(i0+1)*N+j0+j]):_mm512_setzero_ps();
+                        __m512 c2=(im>2)?_mm512_loadu_ps(&C[(int64_t)(i0+2)*N+j0+j]):_mm512_setzero_ps();
+                        __m512 c3=(im>3)?_mm512_loadu_ps(&C[(int64_t)(i0+3)*N+j0+j]):_mm512_setzero_ps();
+                        __m512 c4=(im>4)?_mm512_loadu_ps(&C[(int64_t)(i0+4)*N+j0+j]):_mm512_setzero_ps();
+                        __m512 c5=(im>5)?_mm512_loadu_ps(&C[(int64_t)(i0+5)*N+j0+j]):_mm512_setzero_ps();
 
                         for (int k = k0; k < kmax; k += 2) {
                             int k1 = k + 1; if (k1 >= kmax) k1 = k;
@@ -197,49 +185,49 @@ void wubu_tgemm_bf16_avx512(const uint16_t *A_bf16, const uint16_t *B_bf16, floa
 
                             /* Build a_vec using intrinsics: broadcast A[i][k] and A[i][k+1] as 16 pairs */
                             if (im > 0) {
-                                __m512i a0 = _mm512_set1_epi16((short)A_bf16[(int64_t)(i+0)*K+k]);
-                                __m512i a1 = _mm512_set1_epi16((short)A_bf16[(int64_t)(i+0)*K+k1]);
+                                __m512i a0 = _mm512_set1_epi16((short)A_bf16[(int64_t)(i0+0)*K+k]);
+                                __m512i a1 = _mm512_set1_epi16((short)A_bf16[(int64_t)(i0+0)*K+k1]);
                                 __m512bh a_vec = (__m512bh)_mm512_unpacklo_epi16(a0, a1);
                                 c0 = _mm512_dpbf16_ps(c0, a_vec, b_vec);
                             }
                             if (im > 1) {
-                                __m512i a0 = _mm512_set1_epi16((short)A_bf16[(int64_t)(i+1)*K+k]);
-                                __m512i a1 = _mm512_set1_epi16((short)A_bf16[(int64_t)(i+1)*K+k1]);
+                                __m512i a0 = _mm512_set1_epi16((short)A_bf16[(int64_t)(i0+1)*K+k]);
+                                __m512i a1 = _mm512_set1_epi16((short)A_bf16[(int64_t)(i0+1)*K+k1]);
                                 __m512bh a_vec = (__m512bh)_mm512_unpacklo_epi16(a0, a1);
                                 c1 = _mm512_dpbf16_ps(c1, a_vec, b_vec);
                             }
                             if (im > 2) {
-                                __m512i a0 = _mm512_set1_epi16((short)A_bf16[(int64_t)(i+2)*K+k]);
-                                __m512i a1 = _mm512_set1_epi16((short)A_bf16[(int64_t)(i+2)*K+k1]);
+                                __m512i a0 = _mm512_set1_epi16((short)A_bf16[(int64_t)(i0+2)*K+k]);
+                                __m512i a1 = _mm512_set1_epi16((short)A_bf16[(int64_t)(i0+2)*K+k1]);
                                 __m512bh a_vec = (__m512bh)_mm512_unpacklo_epi16(a0, a1);
                                 c2 = _mm512_dpbf16_ps(c2, a_vec, b_vec);
                             }
                             if (im > 3) {
-                                __m512i a0 = _mm512_set1_epi16((short)A_bf16[(int64_t)(i+3)*K+k]);
-                                __m512i a1 = _mm512_set1_epi16((short)A_bf16[(int64_t)(i+3)*K+k1]);
+                                __m512i a0 = _mm512_set1_epi16((short)A_bf16[(int64_t)(i0+3)*K+k]);
+                                __m512i a1 = _mm512_set1_epi16((short)A_bf16[(int64_t)(i0+3)*K+k1]);
                                 __m512bh a_vec = (__m512bh)_mm512_unpacklo_epi16(a0, a1);
                                 c3 = _mm512_dpbf16_ps(c3, a_vec, b_vec);
                             }
                             if (im > 4) {
-                                __m512i a0 = _mm512_set1_epi16((short)A_bf16[(int64_t)(i+4)*K+k]);
-                                __m512i a1 = _mm512_set1_epi16((short)A_bf16[(int64_t)(i+4)*K+k1]);
+                                __m512i a0 = _mm512_set1_epi16((short)A_bf16[(int64_t)(i0+4)*K+k]);
+                                __m512i a1 = _mm512_set1_epi16((short)A_bf16[(int64_t)(i0+4)*K+k1]);
                                 __m512bh a_vec = (__m512bh)_mm512_unpacklo_epi16(a0, a1);
                                 c4 = _mm512_dpbf16_ps(c4, a_vec, b_vec);
                             }
                             if (im > 5) {
-                                __m512i a0 = _mm512_set1_epi16((short)A_bf16[(int64_t)(i+5)*K+k]);
-                                __m512i a1 = _mm512_set1_epi16((short)A_bf16[(int64_t)(i+5)*K+k1]);
+                                __m512i a0 = _mm512_set1_epi16((short)A_bf16[(int64_t)(i0+5)*K+k]);
+                                __m512i a1 = _mm512_set1_epi16((short)A_bf16[(int64_t)(i0+5)*K+k1]);
                                 __m512bh a_vec = (__m512bh)_mm512_unpacklo_epi16(a0, a1);
                                 c5 = _mm512_dpbf16_ps(c5, a_vec, b_vec);
                             }
                         }
 
-                        if(im>0)_mm512_storeu_ps(&C[(int64_t)(i+0)*N+j0+j],c0);
-                        if(im>1)_mm512_storeu_ps(&C[(int64_t)(i+1)*N+j0+j],c1);
-                        if(im>2)_mm512_storeu_ps(&C[(int64_t)(i+2)*N+j0+j],c2);
-                        if(im>3)_mm512_storeu_ps(&C[(int64_t)(i+3)*N+j0+j],c3);
-                        if(im>4)_mm512_storeu_ps(&C[(int64_t)(i+4)*N+j0+j],c4);
-                        if(im>5)_mm512_storeu_ps(&C[(int64_t)(i+5)*N+j0+j],c5);
+                        if(im>0)_mm512_storeu_ps(&C[(int64_t)(i0+0)*N+j0+j],c0);
+                        if(im>1)_mm512_storeu_ps(&C[(int64_t)(i0+1)*N+j0+j],c1);
+                        if(im>2)_mm512_storeu_ps(&C[(int64_t)(i0+2)*N+j0+j],c2);
+                        if(im>3)_mm512_storeu_ps(&C[(int64_t)(i0+3)*N+j0+j],c3);
+                        if(im>4)_mm512_storeu_ps(&C[(int64_t)(i0+4)*N+j0+j],c4);
+                        if(im>5)_mm512_storeu_ps(&C[(int64_t)(i0+5)*N+j0+j],c5);
                     }
 
                     /* Scalar remainder */
