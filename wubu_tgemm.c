@@ -187,9 +187,7 @@ void wubu_tgemm_f32(const float *A, const float *B, float *C,
                 int kmax = k0 + KC; if (kmax > K) kmax = K;
                 for (int i = i0; i < imax; i += MR) {
                     int im = imax - i; if (im > MR) im = MR;
-                    /* Vectorized inner loop: 16 columns per iteration (NR=16) */
                     for (int j = j0; j + NR - 1 < jmax; j += NR) {
-                        /* 8 YMM accumulators: 4 rows x 2 halves (cols j..j+7, j+8..j+15) */
                         __m256 c0l = _mm256_loadu_ps(&C[(int64_t)(i+0)*N + j]);
                         __m256 c0h = _mm256_loadu_ps(&C[(int64_t)(i+0)*N + j + 8]);
                         __m256 c1l = _mm256_loadu_ps(&C[(int64_t)(i+1)*N + j]);
@@ -198,9 +196,6 @@ void wubu_tgemm_f32(const float *A, const float *B, float *C,
                         __m256 c2h = _mm256_loadu_ps(&C[(int64_t)(i+2)*N + j + 8]);
                         __m256 c3l = _mm256_loadu_ps(&C[(int64_t)(i+3)*N + j]);
                         __m256 c3h = _mm256_loadu_ps(&C[(int64_t)(i+3)*N + j + 8]);
-                        /* Inner k-loop with 4-way FMA chaining (chain4):
-                         * Load B row-major, broadcast A[i+row][k], FMA all 4 rows.
-                         * B load is contiguous (stride-1 in j), cache-friendly. */
                         for (int k = k0; k < kmax; k++) {
                             __m256 b0 = _mm256_loadu_ps(&B[(int64_t)k*N + j]);
                             __m256 b1 = _mm256_loadu_ps(&B[(int64_t)k*N + j + 8]);
@@ -213,7 +208,6 @@ void wubu_tgemm_f32(const float *A, const float *B, float *C,
                             if (im > 3) { __m256 a = _mm256_broadcast_ss(&A[(int64_t)(i+3)*K + k]);
                                 c3l = _mm256_fmadd_ps(a, b0, c3l); c3h = _mm256_fmadd_ps(a, b1, c3h); }
                         }
-                        /* Store accumulators: C += accumulated */
                         _mm256_storeu_ps(&C[(int64_t)(i+0)*N + j], c0l);
                         _mm256_storeu_ps(&C[(int64_t)(i+0)*N + j + 8], c0h);
                         _mm256_storeu_ps(&C[(int64_t)(i+1)*N + j], c1l);
