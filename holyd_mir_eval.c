@@ -1050,7 +1050,7 @@ int64_t hd_run_prog(const wubu_mir_prog_t *prog, const wubu_isa_driver_t *driver
     uint8_t *code = NULL;
     size_t csize = 0;
     if (driver && driver->compile && driver->compile(prog, &code, &csize) == 0 && code) {
-        int64_t result = driver->run(code, csize, 0);
+        int64_t result = driver->run(code, csize, (int64_t)prog->mem);
         free(code);
         return result;
     }

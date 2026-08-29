@@ -1068,7 +1068,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             else emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
             rex(&e,1,0,0,0); e8(&e, 0xC1); e8(&e, 0xE0); e8(&e, 0x03); /* shl rax,3 */
             /* rsi = prog.mem + rax */
-            rex(&e,1,0,0,0); e8(&e, 0xBE); e64(&e, (uint64_t)p->mem); /* movabs rsi, prog.mem */
+            rex(&e,1,0,0,0); e8(&e, 0x89); e8(&e, 0xF3);   /* mov rsi, rbx */
             rex(&e,1,0,0,0); e8(&e, 0x01); e8(&e, 0xC6);   /* add rsi, rax */
             int sd = VR_ENC(in->dst);
             if (sd >= 0) {
@@ -1090,7 +1090,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             else emit_load_rbp(&e, 7, spill_off(assign, assign_count, &e, in->b));
             rex(&e,1,0,0,0); e8(&e, 0xC1); e8(&e, 0xE0); e8(&e, 0x03); /* shl rax,3 */
             /* rsi = prog.mem + rax */
-            rex(&e,1,0,0,0); e8(&e, 0xBE); e64(&e, (uint64_t)p->mem); /* movabs rsi, prog.mem */
+            rex(&e,1,0,0,0); e8(&e, 0x89); e8(&e, 0xF3);   /* mov rsi, rbx */
             rex(&e,1,0,0,0); e8(&e, 0x01); e8(&e, 0xC6);   /* add rsi, rax */
             rex(&e,1,0,0,0); e8(&e, 0x89); e8(&e, 0x3E);   /* mov [rsi], rdi */
             break;
@@ -1210,13 +1210,14 @@ static int64_t x86_run(const uint8_t *code, size_t size, int64_t arg) {
     memcpy(exec, code, size);
     wubu_clear_cache(exec, size);
 
-    /* Pre-allocate JIT working buffer via mmap (shared across pthreads).
-     * Use a large region to accommodate frames up to 768³ (~13.5MB) and larger.
-     * Virtual memory is cheap — mmap allocates lazily. */
-    if (wubu_jit_mem_ptr == NULL) {
-        size_t buf_size = 64 * 1024 * 1024;
-        void *buf = mmap(NULL, buf_size, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
-        if (buf != MAP_FAILED) wubu_jit_mem_ptr = (int64_t*)buf;
+    /* Patch the emitted code: scan entire buffer for movabs rsi, imm64
+     * (the JIT mem base embedded at compile time) and replace with
+     * mov rsi, rbx (which holds the runtime mem base from SysV arg rdi). */
+    uint8_t *patch = (uint8_t *)exec;
+    for (size_t i = 0; i + 9 < size; i++) {
+        if (patch[i] == 0x48 && patch[i+1] == 0xBE) {
+            patch[i+1] = 0x89; patch[i+2] = 0xF3; /* mov rsi, rbx */
+        }
     }
 
     int64_t (*fn)(void) = (int64_t (*)(void))exec;
