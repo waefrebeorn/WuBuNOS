@@ -1,6 +1,7 @@
 #include <omp.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdint.h>
 /* wubu_tgemm_avx512.c — AVX-512DQ native int64 GEMM path.
  * Compiled ONLY with -mavx512dq -mavx512f -mavx512vl.
  * Uses native vpmullq (8 int64 products per 512-bit vector).
@@ -138,5 +139,135 @@ void wubu_tgemm_f32_avx512(const float *A, const float *B, float *C,
         }
         free(bpack);
     }
+}
+
+
+/*
+ * BF16 GEMM: C[MR][NR] += A[MR][KC] * B[KC][NR]
+ * Uses VDPBF16PS: each instruction does 32 BF16 FMAs → 16 FP32 accumulates.
+ * Micro-kernel: MR=6 rows x NR=16 cols, KC=64.
+ * For each pair of k-values (k0, k0+1):
+ *   a_vec = broadcast A[i][k0], A[i][k0+1] as 16 pairs
+ *   b_vec = interleave B[k0][j..j+15], B[k0+1][j..j+15] as 16 pairs
+ *   c_vec = _mm512_dpbf16_ps(c_vec, a_vec, b_vec)
+ */
+void wubu_tgemm_bf16_avx512(const uint16_t *A_bf16, const uint16_t *B_bf16, float *C,
+                             int M, int N, int K)
+{
+    const int MR = 6, NR = 16, KC = 64, NC = 256;
+    int nthreads = (M * N * K >= 200000000) ? omp_get_max_threads() : 1;
+    int mc = (M + nthreads - 1) / nthreads;
+    mc = (mc + MR - 1) / MR * MR;
+    if (mc < MR && M >= MR) mc = MR;
+
+    #pragma omp parallel for schedule(static) if(nthreads > 1)
+    for (int i0 = 0; i0 < M; i0 += mc) {
+        int imax = i0 + mc; if (imax > M) imax = M;
+
+        for (int j0 = 0; j0 < N; j0 += NC) {
+            int jmax = j0 + NC; if (jmax > N) jmax = N;
+            int nc = jmax - j0;
+
+            for (int k0 = 0; k0 < K; k0 += KC) {
+                int kmax = k0 + KC; if (kmax > K) kmax = K;
+
+                for (int i = i0; i < imax; i += MR) {
+                    int im = imax - i; if (im > MR) im = MR;
+
+                    for (int j = 0; j + NR - 1 < nc; j += NR) {
+                        __m512 c0=(im>0)?_mm512_loadu_ps(&C[(int64_t)(i+0)*N+j0+j]):_mm512_setzero_ps();
+                        __m512 c1=(im>1)?_mm512_loadu_ps(&C[(int64_t)(i+1)*N+j0+j]):_mm512_setzero_ps();
+                        __m512 c2=(im>2)?_mm512_loadu_ps(&C[(int64_t)(i+2)*N+j0+j]):_mm512_setzero_ps();
+                        __m512 c3=(im>3)?_mm512_loadu_ps(&C[(int64_t)(i+3)*N+j0+j]):_mm512_setzero_ps();
+                        __m512 c4=(im>4)?_mm512_loadu_ps(&C[(int64_t)(i+4)*N+j0+j]):_mm512_setzero_ps();
+                        __m512 c5=(im>5)?_mm512_loadu_ps(&C[(int64_t)(i+5)*N+j0+j]):_mm512_setzero_ps();
+
+                        for (int k = k0; k < kmax; k += 2) {
+                            int k1 = k + 1; if (k1 >= kmax) k1 = k;
+
+                            /* Build b_vec on stack: interleave B[k][j..j+15] and B[k1][j..j+15] */
+                            uint16_t b_paired[32];
+                            const uint16_t *bk  = &B_bf16[(int64_t)k *N+j0+j];
+                            const uint16_t *bk1 = &B_bf16[(int64_t)k1*N+j0+j];
+                            for (int jj = 0; jj < 16; jj++) {
+                                b_paired[jj*2]   = bk[jj];
+                                b_paired[jj*2+1] = bk1[jj];
+                            }
+                            __m512bh b_vec = (__m512bh)_mm512_loadu_si512(b_paired);
+
+                            /* Build a_vec using intrinsics: broadcast A[i][k] and A[i][k+1] as 16 pairs */
+                            if (im > 0) {
+                                __m512i a0 = _mm512_set1_epi16((short)A_bf16[(int64_t)(i+0)*K+k]);
+                                __m512i a1 = _mm512_set1_epi16((short)A_bf16[(int64_t)(i+0)*K+k1]);
+                                __m512bh a_vec = (__m512bh)_mm512_unpacklo_epi16(a0, a1);
+                                c0 = _mm512_dpbf16_ps(c0, a_vec, b_vec);
+                            }
+                            if (im > 1) {
+                                __m512i a0 = _mm512_set1_epi16((short)A_bf16[(int64_t)(i+1)*K+k]);
+                                __m512i a1 = _mm512_set1_epi16((short)A_bf16[(int64_t)(i+1)*K+k1]);
+                                __m512bh a_vec = (__m512bh)_mm512_unpacklo_epi16(a0, a1);
+                                c1 = _mm512_dpbf16_ps(c1, a_vec, b_vec);
+                            }
+                            if (im > 2) {
+                                __m512i a0 = _mm512_set1_epi16((short)A_bf16[(int64_t)(i+2)*K+k]);
+                                __m512i a1 = _mm512_set1_epi16((short)A_bf16[(int64_t)(i+2)*K+k1]);
+                                __m512bh a_vec = (__m512bh)_mm512_unpacklo_epi16(a0, a1);
+                                c2 = _mm512_dpbf16_ps(c2, a_vec, b_vec);
+                            }
+                            if (im > 3) {
+                                __m512i a0 = _mm512_set1_epi16((short)A_bf16[(int64_t)(i+3)*K+k]);
+                                __m512i a1 = _mm512_set1_epi16((short)A_bf16[(int64_t)(i+3)*K+k1]);
+                                __m512bh a_vec = (__m512bh)_mm512_unpacklo_epi16(a0, a1);
+                                c3 = _mm512_dpbf16_ps(c3, a_vec, b_vec);
+                            }
+                            if (im > 4) {
+                                __m512i a0 = _mm512_set1_epi16((short)A_bf16[(int64_t)(i+4)*K+k]);
+                                __m512i a1 = _mm512_set1_epi16((short)A_bf16[(int64_t)(i+4)*K+k1]);
+                                __m512bh a_vec = (__m512bh)_mm512_unpacklo_epi16(a0, a1);
+                                c4 = _mm512_dpbf16_ps(c4, a_vec, b_vec);
+                            }
+                            if (im > 5) {
+                                __m512i a0 = _mm512_set1_epi16((short)A_bf16[(int64_t)(i+5)*K+k]);
+                                __m512i a1 = _mm512_set1_epi16((short)A_bf16[(int64_t)(i+5)*K+k1]);
+                                __m512bh a_vec = (__m512bh)_mm512_unpacklo_epi16(a0, a1);
+                                c5 = _mm512_dpbf16_ps(c5, a_vec, b_vec);
+                            }
+                        }
+
+                        if(im>0)_mm512_storeu_ps(&C[(int64_t)(i+0)*N+j0+j],c0);
+                        if(im>1)_mm512_storeu_ps(&C[(int64_t)(i+1)*N+j0+j],c1);
+                        if(im>2)_mm512_storeu_ps(&C[(int64_t)(i+2)*N+j0+j],c2);
+                        if(im>3)_mm512_storeu_ps(&C[(int64_t)(i+3)*N+j0+j],c3);
+                        if(im>4)_mm512_storeu_ps(&C[(int64_t)(i+4)*N+j0+j],c4);
+                        if(im>5)_mm512_storeu_ps(&C[(int64_t)(i+5)*N+j0+j],c5);
+                    }
+
+                    /* Scalar remainder */
+                    for (int j = (nc/NR)*NR; j < nc; j++) {
+                        for (int ii = i; ii < imax; ii++) {
+                            float acc = C[(int64_t)ii*N+j0+j];
+                            for (int k = k0; k < kmax; k++) {
+                                uint32_t av = (uint32_t)A_bf16[(int64_t)ii*K+k] << 16;
+                                uint32_t bv = (uint32_t)B_bf16[(int64_t)k*N+j0+j] << 16;
+                                float af, bf;
+                                memcpy(&af, &av, 4);
+                                memcpy(&bf, &bv, 4);
+                                acc += af * bf;
+                            }
+                            C[(int64_t)ii*N+j0+j] = acc;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/* Helper: BF16 -> FP32 conversion */
+static inline float bf16_to_f32(uint16_t b) {
+    uint32_t v = (uint32_t)b << 16;
+    float f;
+    memcpy(&f, &v, 4);
+    return f;
 }
 

@@ -32,6 +32,10 @@ void wubu_tgemm_f32(const float *A, const float *B, float *C,
 void wubu_tgemm_f32_mir(int64_t *mem, int64_t a, int64_t b, int64_t c,
                         int M, int N, int K);
 
+/* BF16 GEMM: A and B are BF16 (uint16_t), C is FP32 */
+void wubu_tgemm_bf16_avx512(const uint16_t *A_bf16, const uint16_t *B_bf16, float *C,
+                             int M, int N, int K);
+
 /* Dispatch: mode=0 int64, mode=1 float32 */
 void wubu_tgemm_dispatch(int mode, int64_t *mem, int64_t A, int64_t B,
                          int64_t C, int M, int N, int K);

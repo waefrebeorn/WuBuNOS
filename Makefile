@@ -235,7 +235,11 @@ test_mir_f32_gemm: tools/test_mir_f32_gemm.c $(MIR) wubu_tgemm_avx512.o $(filter
 	./$@
 # AVX-512DQ int64 GEMM (Zen 4+) — separate TU, separate flags
 wubu_tgemm_avx512.o: wubu_tgemm_avx512.c wubu_tgemm.h
-	$(CC) $(CFLAGS) -mavx512dq -mavx512f -mavx512vl -c $< -o $@
+	$(CC) $(CFLAGS) -mavx512dq -mavx512f -mavx512vl -mavx512bf16 -c $< -o $@
+
+# BF16 GEMM benchmark
+bench_bf16_gemm: tools/bench_bf16_gemm.c wubu_tgemm.c wubu_tgemm.h wubu_tgemm_avx512.o
+	$(CC) -O3 -std=c11 -mavx2 -mfma -mavx512f -mavx512vl -mavx512bf16 -fopenmp -I. $< wubu_tgemm.c wubu_tgemm_avx512.o -lm -o $@
 
 # JIT float32 GEMM performance benchmark
 bench_jit_f32: tools/bench_jit_f32.c $(MIR) wubu_tgemm_avx512.o $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) jit_stub.c jit_stub_arm64.c wubu_tgemm_avx512.o
