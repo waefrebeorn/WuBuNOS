@@ -875,7 +875,9 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         /* Place arguments in v1..vN (calling convention). */
         for (uint32_t a = 0; a < n->n_args && a < MIR_MAX_CALL_ARGS; a++) {
             wubu_vr_t av = mir_gen_expr(g, n->args[a]);
-            wubu_mir_mov_to(g->prog, a + 1, av);
+            if (av != (wubu_vr_t)(a + 1)) {
+                wubu_mir_mov_to(g->prog, a + 1, av);
+            }
         }
         wubu_mir_call(g->prog, (uint32_t)(fid >= 0 ? fid : 0));
         /* Callee returns in vr0; capture it into a fresh vr for the caller. */

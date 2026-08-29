@@ -428,19 +428,57 @@ static void wubu_tgemm_naive(int64_t *mem, int64_t A, int64_t B,
         }
 }
 #endif
+/* ---- VR remapping for function call support ---- */
+static wubu_mir_prog_t *x86_remap_vrs(const wubu_mir_prog_t *p) {
+    uint32_t max_vr = 0;
+    for (size_t i = 0; i < p->n; i++) {
+        const wubu_mir_instr_t *in = &p->ins[i];
+        if (in->dst > max_vr) max_vr = in->dst;
+        if (in->a > max_vr) max_vr = in->a;
+        if (in->b > max_vr) max_vr = in->b;
+    }
+    if (max_vr < 4096) return NULL;
+    uint32_t *map = (uint32_t *)calloc((size_t)max_vr + 1, sizeof(uint32_t));
+    uint32_t next_id = 4096;
+    for (uint32_t v = 0; v <= max_vr; v++) map[v] = v;
+    for (size_t i = 0; i < p->n; i++) {
+        const wubu_mir_instr_t *in = &p->ins[i];
+        uint32_t vrs[3] = {in->dst, in->a, in->b};
+        for (int j = 0; j < 3; j++) {
+            if (vrs[j] >= 4096 && map[vrs[j]] == vrs[j]) {
+                map[vrs[j]] = next_id++;
+            }
+        }
+    }
+    wubu_mir_prog_t *rp = (wubu_mir_prog_t *)malloc(sizeof(*rp));
+    *rp = *p;
+    rp->ins = (wubu_mir_instr_t *)malloc(p->n * sizeof(wubu_mir_instr_t));
+    memcpy(rp->ins, p->ins, p->n * sizeof(wubu_mir_instr_t));
+    for (size_t i = 0; i < rp->n; i++) {
+        wubu_mir_instr_t *in = &rp->ins[i];
+        if (in->dst <= max_vr) in->dst = map[in->dst];
+        if (in->a <= max_vr) in->a = map[in->a];
+        if (in->b <= max_vr) in->b = map[in->b];
+    }
+    free(map);
+    return rp;
+}
+
 static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size) {
 #if !defined(__x86_64__)
     (void)p; (void)out; (void)out_size;
     return -1; /* cannot compile x86-64 on this host */
 #endif
+    wubu_mir_prog_t *remapped = x86_remap_vrs(p);
+    const wubu_mir_prog_t *prog = remapped ? remapped : p;
     /* Step 1: call the MIR register allocator */
     size_t assign_count = 0;
-    wubu_reg_assign_t *assign = wubu_mir_alloc_regs(p, 10, &assign_count);
-    if (!assign) return -1;
+    wubu_reg_assign_t *assign = wubu_mir_alloc_regs(prog, 10, &assign_count);
+    if (!assign) { if (remapped) { free(remapped->ins); free(remapped); } return -1; }
     /* Any operand vr outside the assignment table would spill to offset 0 and
      * corrupt the saved RBP — refuse instead. */
-    for (size_t i = 0; i < p->n; i++) {
-        const wubu_mir_instr_t *ci = &p->ins[i];
+    for (size_t i = 0; i < prog->n; i++) {
+        const wubu_mir_instr_t *ci = &prog->ins[i];
         if (ci->dst >= (wubu_vr_t)assign_count || ci->a >= (wubu_vr_t)assign_count ||
             ci->b >= (wubu_vr_t)assign_count) return -1;
 
@@ -474,16 +512,16 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
     if ((e.frame % 16) == 0) e.frame += 8; /* force ≡ 8 mod 16 */
     e.spare_off = -(int32_t)(n_spilled * 8 + 16);
     e.mem_off = (int32_t)(n_spilled * 8 + mem_bytes); /* offset to mem[0] */
-    e.n_labels = p->n_labels;
+    e.n_labels = prog->n_labels;
     e.label_offsets = calloc(e.n_labels, sizeof(size_t));
     for (size_t i = 0; i < e.n_labels; i++) e.label_offsets[i] = (size_t)-1;
 
     /* ---- function-call support state ---- */
-    size_t *func_off = calloc((size_t)(p->n_funcs > 0 ? p->n_funcs : 1), sizeof(size_t));
-    for (int f = 0; f < p->n_funcs; f++) func_off[f] = (size_t)-1;
+    size_t *func_off = calloc((size_t)(prog->n_funcs > 0 ? prog->n_funcs : 1), sizeof(size_t));
+    for (int f = 0; f < prog->n_funcs; f++) func_off[f] = (size_t)-1;
     uint32_t max_func_end = 0;
-    for (int f = 0; f < p->n_funcs; f++)
-        if (p->funcs[f].end > max_func_end) max_func_end = p->funcs[f].end;
+    for (int f = 0; f < prog->n_funcs; f++)
+        if (prog->funcs[f].end > max_func_end) max_func_end = prog->funcs[f].end;
     size_t entry_off = (size_t)-1;
     size_t entry_jmp_pos = 0;
     typedef struct { size_t pos; uint32_t func_id; } x86_call_fixup_t;
@@ -507,7 +545,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
     /* entry trampoline: jmp rel32 over function bodies to main code.
      * MIR layout: main code (0..funcs[0].start-1), then function bodies.
      * Only emit trampoline if function bodies start at 0 (no main code before them). */
-    if (p->n_funcs > 0 && p->funcs[0].start == 0) {
+    if (prog->n_funcs > 0 && prog->funcs[0].start == 0) {
         entry_jmp_pos = e.n;
         for (int z = 0; z < 5; z++) e8(&e, 0x90);   /* NOPs, patched to jmp rel32 */
     }
@@ -519,17 +557,17 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
     #define VR_SPILL(vr) ((vr) < (wubu_vr_t)assign_count && assign[(vr)].reg < 0 ? assign[(vr)].stack : 0)
 
     /* Lookahead: is the next instruction a RET that reads this vr? */
-    #define NEXT_IS_RET(vr) (i + 1 < p->n && p->ins[i+1].op == MIR_RET && p->ins[i+1].a == (wubu_vr_t)(vr))
+    #define NEXT_IS_RET(vr) (i + 1 < prog->n && prog->ins[i+1].op == MIR_RET && prog->ins[i+1].a == (wubu_vr_t)(vr))
 
     int result_in_rax = 0;  /* set when last op skipped store to keep result in rax */
 
-    for (size_t i = 0; i < p->n; i++) {
-        const wubu_mir_instr_t *in = &p->ins[i];
+    for (size_t i = 0; i < prog->n; i++) {
+        const wubu_mir_instr_t *in = &prog->ins[i];
         if (in->op == MIR_LABEL) { note_label(&e, in->label, e.n); result_in_rax = 0; continue; }
         if (in->op != MIR_RET) result_in_rax = 0;  /* reset unless RET handles it */
 
-        for (int f = 0; f < p->n_funcs; f++)
-            if ((size_t)p->funcs[f].start == i && func_off[f] == (size_t)-1)
+        for (int f = 0; f < prog->n_funcs; f++)
+            if ((size_t)prog->funcs[f].start == i && func_off[f] == (size_t)-1)
                 func_off[f] = e.n;
         if ((uint32_t)i == max_func_end && entry_off == (size_t)-1)
             entry_off = e.n;
@@ -962,7 +1000,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             int sb = VR_ENC(in->b);
             int sd = VR_ENC(in->dst);
             /* rdi = prog.mem (embedded pointer) */
-            rex(&e,1,0,0,0); e8(&e, 0xBF); e64(&e, (uint64_t)p->mem);
+            rex(&e,1,0,0,0); e8(&e, 0xBF); e64(&e, (uint64_t)prog->mem);
             /* rsi = A (vr value / slot index) */
             if (sa>=0) emit_mov_reg(&e,6,sa);            else emit_load_rbp(&e,6,spill_off(assign, assign_count, &e, in->a));
             /* rdx = B */
@@ -998,7 +1036,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             int sb = VR_ENC(in->b);
             int sd = VR_ENC(in->dst);
             /* rdi = prog->mem (base of MIR memory) */
-            rex(&e,1,0,0,0); e8(&e, 0xBF); e64(&e, (uint64_t)p->mem);
+            rex(&e,1,0,0,0); e8(&e, 0xBF); e64(&e, (uint64_t)prog->mem);
             /* rsi = A */
             if (sa>=0) emit_mov_reg(&e,6,sa);  else emit_load_rbp(&e,6,spill_off(assign, assign_count, &e, in->a));
             /* rdx = B */
@@ -1035,7 +1073,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
         }
 
         case MIR_RET: case MIR_FRET: {
-            if (x86_in_func_body(p, i)) {
+            if (x86_in_func_body(prog, i)) {
                 /* callee return under the flat-register model: park the value
                  * in vr0's home (v0 == the call result), then hardware `ret`
                  * pops the call-pushed return address. rsp untouched. */
@@ -1120,7 +1158,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             /* Tensor ops: emit call to wubu_tensor_dispatch(op, mem, a, b, dst, N).
              * Use same pattern as T_GEMM: movabs r11, &wubu_tensor_dispatch; call r11. */
             /* rdi = prog.mem (embedded pointer) */
-            rex(&e,1,0,0,0); e8(&e, 0xBF); e64(&e, (uint64_t)p->mem);
+            rex(&e,1,0,0,0); e8(&e, 0xBF); e64(&e, (uint64_t)prog->mem);
             int sa = VR_ENC(in->a);
             if (sa >= 0) emit_mov_reg(&e, 6, sa);
             else emit_load_rbp(&e, 6, spill_off(assign, assign_count, &e, in->a));
@@ -1152,7 +1190,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
     if (getenv("WUBU_CALL_DEBUG"))
         fprintf(stderr, "[fixups] ncallp=%zu entry_jmp_pos=%zu entry_off=%zu func0=%zu\n",
                 ncallp, entry_jmp_pos, entry_off,
-                p->n_funcs > 0 ? func_off[0] : 0);
+                prog->n_funcs > 0 ? func_off[0] : 0);
     for (size_t i = 0; i < n_patches; i++) {
         size_t t = label_off(&e, patches[i].label);
         if (t == (size_t)-1) continue;
@@ -1170,7 +1208,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
     /* CALL target fixups (MUST run before peephole — it shifts offsets) */
     for (size_t fi2 = 0; fi2 < ncallp; fi2++) {
         size_t t = (size_t)-1;
-        for (int f = 0; f < p->n_funcs; f++)
+        for (int f = 0; f < prog->n_funcs; f++)
             if ((uint32_t)f == callps[fi2].func_id && func_off[f] != (size_t)-1) { t = func_off[f]; break; }
         if (t == (size_t)-1) continue;
         size_t pos = callps[fi2].pos;
@@ -1181,7 +1219,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
         e.code[pos+3] = (uint8_t)((rel >> 24) & 0xFF);
     }
     /* entry trampoline patch: jmp rel32 from entry_jmp_pos to entry_off */
-    if (p->n_funcs > 0 && entry_off != (size_t)-1 && entry_jmp_pos) {
+    if (prog->n_funcs > 0 && entry_off != (size_t)-1 && entry_jmp_pos) {
         int32_t rel = (int32_t)(entry_off - (entry_jmp_pos + 5));
         e.code[entry_jmp_pos]     = 0xE9;
         e.code[entry_jmp_pos + 1] = (uint8_t)(rel & 0xFF);
@@ -1196,11 +1234,12 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
      * Skipped for multi-function programs: shrinking movabs shifts byte
      * offsets and would invalidate the already-applied CALL/trampoline
      * rel32 fixups. */
-    if (p->n_funcs == 0)
+    if (prog->n_funcs == 0)
         e.n = x86_peephole_optimize(e.code, e.n);
 
     *out = e.code;
     *out_size = e.n;
+    if (remapped) { free(remapped->ins); free(remapped); }
     return 0;
 }
 
