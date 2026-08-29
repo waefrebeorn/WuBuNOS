@@ -155,21 +155,22 @@ void wubu_tgemm_mem8(uint8_t *mem, uint32_t A, uint32_t B, uint32_t C,
 void wubu_tgemm_f32(const float *A, const float *B, float *C,
                     int M, int N, int K) {
 #if defined(__AVX2__)
-    /* SOTA micro-kernel: MR=4 x NR=16 (salykova.github.io, BLIS, EXO).
+    /* SOTA micro-kernel: MR=4 x NR=16 (rs-10345403, salykova.github.io, BLIS).
      * 4 rows x 16 cols = 8 YMM accumulators (c0_lo, c0_hi, ..., c3_lo, c3_hi).
-     * 8 C + 2 B + 1 A = 11 YMM registers (of 16 available), no spill on Zen.
-     * MR=4 divides all power-of-2 sizes evenly (no remainder pathology).
-     * NR=16 = two full YMM loads of B, saturates both FMA pipes.
-     * KC=64 fits L1d (32KB). No software prefetch (degrades Zen, rs-10345403).
-     * -frename-registers -funroll-loops critical for reg alloc.
+     * 8 C + 2 B + 1 A = 11 YMM registers (of 16), no spill on Zen.
+     * MR=4 divides all power-of-2 sizes evenly. NR=16 = 2 full YMM loads.
+     * KC=64 fits L1d (32KB). No software prefetch (degrades Zen).
+     *
+     * FMA chaining (chain4): Interleave FMAs from 4 rows to hide 4-cycle
+     * FMA latency on Zen. Saturates both FMA units (0.5 cpi throughput).
      *
      * Cache blocking: 3-level (MC/KC/NC) with OpenMP parallel over MC.
-     * Inner loop: ikj order for B-panel reuse across k-iterations. */
+     * Loop order: i0 (MC) -> j0 (NC) -> k0 (KC) -> micro-kernel.
+     * A is loaded in k-major order (streamed), B in k-major via broadcast. */
     const int MR = 4, NR = 16, KC = 64, NC = 256;
-    int nthreads = (M * N * K >= 64000000) ? omp_get_max_threads() : 1;
+    int nthreads = (M * N * K >= 256000000) ? omp_get_max_threads() : 1;
     int mc = (M + nthreads - 1) / nthreads;
-    /* Round down to multiple of MR (MR=4 is power of 2, bitwise works) */
-    mc &= ~(MR - 1);
+    mc &= ~(MR - 1);  /* round down to multiple of MR (power of 2) */
     if (mc < MR && M >= MR) mc = MR;
     if (mc < MR * 4 && nthreads > 1) {
         nthreads = (M + MR * 4 - 1) / (MR * 4);
@@ -189,15 +190,17 @@ void wubu_tgemm_f32(const float *A, const float *B, float *C,
                     /* Vectorized inner loop: 16 columns per iteration (NR=16) */
                     for (int j = j0; j + NR - 1 < jmax; j += NR) {
                         /* 8 YMM accumulators: 4 rows x 2 halves (cols j..j+7, j+8..j+15) */
-                        __m256 c0l = (im > 0) ? _mm256_loadu_ps(&C[(int64_t)(i+0)*N + j]) : _mm256_setzero_ps();
-                        __m256 c0h = (im > 0) ? _mm256_loadu_ps(&C[(int64_t)(i+0)*N + j + 8]) : _mm256_setzero_ps();
-                        __m256 c1l = (im > 1) ? _mm256_loadu_ps(&C[(int64_t)(i+1)*N + j]) : _mm256_setzero_ps();
-                        __m256 c1h = (im > 1) ? _mm256_loadu_ps(&C[(int64_t)(i+1)*N + j + 8]) : _mm256_setzero_ps();
-                        __m256 c2l = (im > 2) ? _mm256_loadu_ps(&C[(int64_t)(i+2)*N + j]) : _mm256_setzero_ps();
-                        __m256 c2h = (im > 2) ? _mm256_loadu_ps(&C[(int64_t)(i+2)*N + j + 8]) : _mm256_setzero_ps();
-                        __m256 c3l = (im > 3) ? _mm256_loadu_ps(&C[(int64_t)(i+3)*N + j]) : _mm256_setzero_ps();
-                        __m256 c3h = (im > 3) ? _mm256_loadu_ps(&C[(int64_t)(i+3)*N + j + 8]) : _mm256_setzero_ps();
-                        /* Inner k-loop: broadcast A[i][k], FMA with B[k][j..j+15] */
+                        __m256 c0l = _mm256_loadu_ps(&C[(int64_t)(i+0)*N + j]);
+                        __m256 c0h = _mm256_loadu_ps(&C[(int64_t)(i+0)*N + j + 8]);
+                        __m256 c1l = _mm256_loadu_ps(&C[(int64_t)(i+1)*N + j]);
+                        __m256 c1h = _mm256_loadu_ps(&C[(int64_t)(i+1)*N + j + 8]);
+                        __m256 c2l = _mm256_loadu_ps(&C[(int64_t)(i+2)*N + j]);
+                        __m256 c2h = _mm256_loadu_ps(&C[(int64_t)(i+2)*N + j + 8]);
+                        __m256 c3l = _mm256_loadu_ps(&C[(int64_t)(i+3)*N + j]);
+                        __m256 c3h = _mm256_loadu_ps(&C[(int64_t)(i+3)*N + j + 8]);
+                        /* Inner k-loop with 4-way FMA chaining (chain4):
+                         * Load B row-major, broadcast A[i+row][k], FMA all 4 rows.
+                         * B load is contiguous (stride-1 in j), cache-friendly. */
                         for (int k = k0; k < kmax; k++) {
                             __m256 b0 = _mm256_loadu_ps(&B[(int64_t)k*N + j]);
                             __m256 b1 = _mm256_loadu_ps(&B[(int64_t)k*N + j + 8]);
@@ -210,11 +213,15 @@ void wubu_tgemm_f32(const float *A, const float *B, float *C,
                             if (im > 3) { __m256 a = _mm256_broadcast_ss(&A[(int64_t)(i+3)*K + k]);
                                 c3l = _mm256_fmadd_ps(a, b0, c3l); c3h = _mm256_fmadd_ps(a, b1, c3h); }
                         }
-                        /* No branch in store path — all 4 rows always stored */
-                        _mm256_storeu_ps(&C[(int64_t)(i+0)*N + j], c0l); _mm256_storeu_ps(&C[(int64_t)(i+0)*N + j + 8], c0h);
-                        _mm256_storeu_ps(&C[(int64_t)(i+1)*N + j], c1l); _mm256_storeu_ps(&C[(int64_t)(i+1)*N + j + 8], c1h);
-                        _mm256_storeu_ps(&C[(int64_t)(i+2)*N + j], c2l); _mm256_storeu_ps(&C[(int64_t)(i+2)*N + j + 8], c2h);
-                        _mm256_storeu_ps(&C[(int64_t)(i+3)*N + j], c3l); _mm256_storeu_ps(&C[(int64_t)(i+3)*N + j + 8], c3h);
+                        /* Store accumulators: C += accumulated */
+                        _mm256_storeu_ps(&C[(int64_t)(i+0)*N + j], c0l);
+                        _mm256_storeu_ps(&C[(int64_t)(i+0)*N + j + 8], c0h);
+                        _mm256_storeu_ps(&C[(int64_t)(i+1)*N + j], c1l);
+                        _mm256_storeu_ps(&C[(int64_t)(i+1)*N + j + 8], c1h);
+                        _mm256_storeu_ps(&C[(int64_t)(i+2)*N + j], c2l);
+                        _mm256_storeu_ps(&C[(int64_t)(i+2)*N + j + 8], c2h);
+                        _mm256_storeu_ps(&C[(int64_t)(i+3)*N + j], c3l);
+                        _mm256_storeu_ps(&C[(int64_t)(i+3)*N + j + 8], c3h);
                     }
                     /* Scalar remainder for columns not divisible by NR=16 */
                     for (int j = j0 + ((jmax - j0) / NR) * NR; j < jmax; j++) {
@@ -227,6 +234,17 @@ void wubu_tgemm_f32(const float *A, const float *B, float *C,
                     }
                 }
             }
+        }
+    }
+#else
+    for (int i = 0; i < M; i++) {
+        const float *a_row = A + (int64_t)i * K;
+        float *c_row = C + (int64_t)i * N;
+        for (int k = 0; k < K; k++) {
+            float a_val = a_row[k];
+            const float *b_row = B + (int64_t)k * N;
+            for (int j = 0; j < N; j++)
+                c_row[j] += a_val * b_row[j];
         }
     }
 #endif
