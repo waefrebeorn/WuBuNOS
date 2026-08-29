@@ -303,3 +303,6 @@ debug_mir: tools/debug_mir.c $(MIR) $(INTERP) wubu_tgemm_avx512.o holyd_mir_eval
 
 debug_interp: tools/debug_interp.c $(MIR) $(INTERP) wubu_tgemm_avx512.o holyd_mir_eval.c holyd_lexer.c holyd_parse.c holyd_parse_ast.c holyd_codegen.c holyd_codegen_emit.c holyd_codegen_expr.c holyd_codegen_stmt.c holyd_codegen_api.c holyd_runtime.c wubu_preproc.c jit_stub.c
 	$(CC) $(CFLAGS) -I. -I$(OS_ROOT) -o $@ $^ -lm
+
+debug_noopt: tools/debug_noopt.c $(MIR) $(INTERP) wubu_tgemm_avx512.o jit_stub.c
+	$(CC) $(CFLAGS) -I. -I$(OS_ROOT) -o $@ $^ -lm
