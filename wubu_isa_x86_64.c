@@ -1147,7 +1147,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             int sd = VR_ENC(in->dst);
             if (sd >= 0) {
                 /* mov dstreg, [rsi] — dstreg is x86 encoding from reg_x86[] */
-                rex(&e,1,0,0,reg_needs_rex(sd));
+                rex(&e,1,reg_needs_rex(sd),0,0);
                 e8(&e, 0x8B);
                 e8(&e, (uint8_t)(0x06 | ((sd & 7) << 3)));
             } else {
@@ -1267,10 +1267,10 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
     free(func_off);
 
     /* Peephole: wire up the real optimizer (x86_peephole.c).
-     * Skipped for multi-function programs: shrinking movabs shifts byte
-     * offsets and would invalidate the already-applied CALL/trampoline
-     * rel32 fixups. */
-    if (prog->n_funcs == 0)
+     * Skipped for multi-function programs or programs with jumps:
+     * shrinking movabs shifts byte offsets and would invalidate the
+     * already-applied rel32 jump fixups. */
+    if (prog->n_funcs == 0 && n_patches == 0)
         e.n = x86_peephole_optimize(e.code, e.n);
 
     *out = e.code;
