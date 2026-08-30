@@ -52,7 +52,9 @@ void wubu_tgemm_f32_avx512(const float * __restrict__ A,
                             float * __restrict__ C,
                             int M, int N, int K)
 {
-    const int MR = 8, NR = 16, KC = 128, NC = 128;
+    /* Zen 4 tune: MR=8, NR=16, KC=128 (kc*NR*4 = 8KB B panel in L1d).
+     * NC=512 so B-panel packing amortizes over many columns. */
+    const int MR = 8, NR = 16, KC = 128, NC = 512;
     int nthreads = (M * N * K >= 200000000) ? omp_get_max_threads() : 1;
 
     #pragma omp parallel for schedule(dynamic, 1) if(nthreads > 1)
@@ -67,6 +69,7 @@ void wubu_tgemm_f32_avx512(const float * __restrict__ A,
             int kmax = k0 + KC; if (kmax > K) kmax = K;
             int kc = kmax - k0;
 
+            /* Pack B panel: B[k0..k0+kc][j0..j0+nc] -> bpack[k*nc+j] (k-major) */
             for (int k = 0; k < kc; k++)
                 memcpy(&bpack[(size_t)k * nc],
                        &B[(int64_t)(k0 + k) * N + j0],
@@ -88,17 +91,17 @@ void wubu_tgemm_f32_avx512(const float * __restrict__ A,
                     c6=(im>6)?_mm512_loadu_ps(&C[(int64_t)(i0+6)*N+j0+j]):_mm512_setzero_ps();
                     c7=(im>7)?_mm512_loadu_ps(&C[(int64_t)(i0+7)*N+j0+j]):_mm512_setzero_ps();
 
-                    /* Simple k loop (correct for all 8 rows) */
+                    /* Inner k loop: broadcast A, FMA with B panel */
                     for (int k = 0; k < kc; k++) {
                         __m512 bpk = _mm512_loadu_ps(&bpack[(size_t)k*nc+j]);
-                        if(im>0)c0=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i0+0)*K+k0+k]),bpk,c0);
-                        if(im>1)c1=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i0+1)*K+k0+k]),bpk,c1);
-                        if(im>2)c2=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i0+2)*K+k0+k]),bpk,c2);
-                        if(im>3)c3=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i0+3)*K+k0+k]),bpk,c3);
-                        if(im>4)c4=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i0+4)*K+k0+k]),bpk,c4);
-                        if(im>5)c5=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i0+5)*K+k0+k]),bpk,c5);
-                        if(im>6)c6=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i0+6)*K+k0+k]),bpk,c6);
-                        if(im>7)c7=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i0+7)*K+k0+k]),bpk,c7);
+                        if(im>0) c0=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i0+0)*K+k0+k]),bpk,c0);
+                        if(im>1) c1=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i0+1)*K+k0+k]),bpk,c1);
+                        if(im>2) c2=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i0+2)*K+k0+k]),bpk,c2);
+                        if(im>3) c3=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i0+3)*K+k0+k]),bpk,c3);
+                        if(im>4) c4=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i0+4)*K+k0+k]),bpk,c4);
+                        if(im>5) c5=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i0+5)*K+k0+k]),bpk,c5);
+                        if(im>6) c6=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i0+6)*K+k0+k]),bpk,c6);
+                        if(im>7) c7=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i0+7)*K+k0+k]),bpk,c7);
                     }
 
                     if (im > 0) _mm512_storeu_ps(&C[(int64_t)(i0+0)*N+j0+j], c0);
