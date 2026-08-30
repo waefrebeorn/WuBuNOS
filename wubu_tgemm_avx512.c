@@ -103,6 +103,11 @@ void wubu_tgemm_f32_avx512(const float * __restrict__ A,
 
                     int k = 0;
                     for (; k + 3 < kc; k += 4) {
+                        /* Prefetch B panel and A rows ahead to hide memory latency */
+                        if (k + 32 < kc) {
+                            _mm_prefetch((const char*)&bpack[(size_t)(k+32)*nc+j], _MM_HINT_T0);
+                            if (im > 0) _mm_prefetch((const char*)&a_row[0][k+32], _MM_HINT_T0);
+                        }
                         __m512 b0=_mm512_loadu_ps(&bpack[(size_t)(k+0)*nc+j]);
                         __m512 b1=_mm512_loadu_ps(&bpack[(size_t)(k+1)*nc+j]);
                         __m512 b2=_mm512_loadu_ps(&bpack[(size_t)(k+2)*nc+j]);
