@@ -1057,8 +1057,10 @@ HDASTNode *hd_parse_decl(HDParser *p) {
         return hd_parse_decl(p);
     }
 
-    /* Handle extern "C" func_name(params) -> ret_type; */
+    /* Handle extern declarations: extern "C" func(...) or extern type name; */
     if (match(p, HD_KW_EXTERN)) {
+        /* Check for extern "C" function declaration */
+        if (peek(p) == HD_TOK_STRING) {
         /* Expect "C" string literal */
         if (!match(p, HD_TOK_STRING)) {
             parse_error(p, "expected extern string literal (e.g., \"C\")");
@@ -1124,6 +1126,10 @@ HDASTNode *hd_parse_decl(HDParser *p) {
 
         expect(p, HD_TOK_SEMI);
         return ext;
+        } /* end extern "C" */
+        /* extern variable declaration: extern type name; */
+        /* For JIT purposes, treat as a normal variable declaration */
+        return hd_parse_decl(p);
     }
 
     HDType *type = parse_type(p);
