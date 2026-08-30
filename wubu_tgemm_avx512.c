@@ -38,12 +38,12 @@ void tgemm_avx512(int64_t *mem, int64_t A, int64_t B,
  *
  * Zen 4: 512-bit FMA throughput = 1/cycle, latency = 5 cycles.
  *
- * Strategy: MR=8 rows × NR=16 cols, K-unroll by 4.
- * 8 acc + 4 B loads + 4 A broadcasts = 16 ZMM registers used.
- * Zen 4 has 32 ZMM — plenty of headroom.
+ * Parallelization: over (j0,k0) panel pairs for load balance.
+ * Each (j0,k0) pair is an independent unit of work.
+ * For N=1024,K=1024,NC=256,KC=128: 4*8=32 panels -> 12 threads get ~3 each.
  *
- * NC=512 (B-panel = KC*NC*4 = 128*512*4 = 256KB, fits L2).
- * KC=128 (fits L1d at 32KB for B-panel slice).
+ * K-unroll by 4: 4 independent FMAs per iteration hide 5-cycle latency.
+ * NC=256: B-panel = KC*NC*4 = 128*256*4 = 128KB fits L2.
  */
 void wubu_tgemm_f32_avx512(const float * __restrict__ A,
                             const float * __restrict__ B,
@@ -54,19 +54,28 @@ void wubu_tgemm_f32_avx512(const float * __restrict__ A,
 
     int nthreads = (M * (long long)N * K >= 200000000LL) ? omp_get_max_threads() : 1;
 
+    /* Parallelize over (j0,k0) panel pairs for load balance.
+     * Linear index jp -> (j0, k0) decomposition. */
+    int n_jpanels = (N + NC - 1) / NC;
+    int n_kpanels = (K + KC - 1) / KC;
+    int n_panels = n_jpanels * n_kpanels;
+
     #pragma omp parallel for schedule(static) if(nthreads > 1)
-    for (int j0 = 0; j0 < N; j0 += NC) {
-        int jmax = j0 + NC; if (jmax > N) jmax = N;
-        int nc = jmax - j0;
+    for (int jp = 0; jp < n_panels; jp++) {
+        int jp_idx = jp / n_kpanels;
+        int kp_idx = jp % n_kpanels;
+        int j0 = jp_idx * NC;
+        int k0 = kp_idx * KC;
 
-        float *bpack = (float*)aligned_alloc(64, (size_t)KC * nc * sizeof(float));
-        if (!bpack) continue;
-
-        for (int k0 = 0; k0 < K; k0 += KC) {
+            int jmax = j0 + NC; if (jmax > N) jmax = N;
+            int nc = jmax - j0;
             int kmax = k0 + KC; if (kmax > K) kmax = K;
             int kc = kmax - k0;
 
-            /* Pack B panel: B[k0..k0+kc)[j0..j0+nc) -> bpack[k*nc+j] */
+            float *bpack = (float*)aligned_alloc(64, (size_t)KC * nc * sizeof(float));
+            if (!bpack) continue;
+
+            /* Pack B panel */
             for (int k = 0; k < kc; k++)
                 memcpy(&bpack[(size_t)k * nc],
                        &B[(long long)(k0 + k) * N + j0],
@@ -79,7 +88,6 @@ void wubu_tgemm_f32_avx512(const float * __restrict__ A,
                 __m512 c0, c1, c2, c3, c4, c5, c6, c7;
 
                 for (int j = 0; j + NR - 1 < nc; j += NR) {
-                    /* Load C accumulators */
                     c0=(im>0)?_mm512_loadu_ps(&C[(long long)(i0+0)*N+j0+j]):_mm512_setzero_ps();
                     c1=(im>1)?_mm512_loadu_ps(&C[(long long)(i0+1)*N+j0+j]):_mm512_setzero_ps();
                     c2=(im>2)?_mm512_loadu_ps(&C[(long long)(i0+2)*N+j0+j]):_mm512_setzero_ps();
@@ -89,106 +97,36 @@ void wubu_tgemm_f32_avx512(const float * __restrict__ A,
                     c6=(im>6)?_mm512_loadu_ps(&C[(long long)(i0+6)*N+j0+j]):_mm512_setzero_ps();
                     c7=(im>7)?_mm512_loadu_ps(&C[(long long)(i0+7)*N+j0+j]):_mm512_setzero_ps();
 
-                    /* Precompute A pointers for this j-block */
                     const float *a_row[8];
                     for (int ii = 0; ii < im; ii++)
                         a_row[ii] = &A[(long long)(i0 + ii) * K + k0];
 
-                    /* Inner k loop, unrolled by 4 for latency hiding.
-                     * Each iteration: 4 independent B loads, 4 independent A broadcasts,
-                     * 32 independent FMAs. With 5-cycle latency, need 5 FMAs in flight;
-                     * 32 >> 5 so we're fully latency-bound. */
                     int k = 0;
                     for (; k + 3 < kc; k += 4) {
-                        __m512 b0 = _mm512_loadu_ps(&bpack[(size_t)(k+0) * nc + j]);
-                        __m512 b1 = _mm512_loadu_ps(&bpack[(size_t)(k+1) * nc + j]);
-                        __m512 b2 = _mm512_loadu_ps(&bpack[(size_t)(k+2) * nc + j]);
-                        __m512 b3 = _mm512_loadu_ps(&bpack[(size_t)(k+3) * nc + j]);
+                        __m512 b0=_mm512_loadu_ps(&bpack[(size_t)(k+0)*nc+j]);
+                        __m512 b1=_mm512_loadu_ps(&bpack[(size_t)(k+1)*nc+j]);
+                        __m512 b2=_mm512_loadu_ps(&bpack[(size_t)(k+2)*nc+j]);
+                        __m512 b3=_mm512_loadu_ps(&bpack[(size_t)(k+3)*nc+j]);
 
-                        if (im > 0) {
-                            __m512 a0 = _mm512_set1_ps(a_row[0][k+0]);
-                            __m512 a1 = _mm512_set1_ps(a_row[0][k+1]);
-                            __m512 a2 = _mm512_set1_ps(a_row[0][k+2]);
-                            __m512 a3 = _mm512_set1_ps(a_row[0][k+3]);
-                            c0 = _mm512_fmadd_ps(a0, b0, c0);
-                            c0 = _mm512_fmadd_ps(a1, b1, c0);
-                            c0 = _mm512_fmadd_ps(a2, b2, c0);
-                            c0 = _mm512_fmadd_ps(a3, b3, c0);
-                        }
-                        if (im > 1) {
-                            __m512 a0 = _mm512_set1_ps(a_row[1][k+0]);
-                            __m512 a1 = _mm512_set1_ps(a_row[1][k+1]);
-                            __m512 a2 = _mm512_set1_ps(a_row[1][k+2]);
-                            __m512 a3 = _mm512_set1_ps(a_row[1][k+3]);
-                            c1 = _mm512_fmadd_ps(a0, b0, c1);
-                            c1 = _mm512_fmadd_ps(a1, b1, c1);
-                            c1 = _mm512_fmadd_ps(a2, b2, c1);
-                            c1 = _mm512_fmadd_ps(a3, b3, c1);
-                        }
-                        if (im > 2) {
-                            __m512 a0 = _mm512_set1_ps(a_row[2][k+0]);
-                            __m512 a1 = _mm512_set1_ps(a_row[2][k+1]);
-                            __m512 a2 = _mm512_set1_ps(a_row[2][k+2]);
-                            __m512 a3 = _mm512_set1_ps(a_row[2][k+3]);
-                            c2 = _mm512_fmadd_ps(a0, b0, c2);
-                            c2 = _mm512_fmadd_ps(a1, b1, c2);
-                            c2 = _mm512_fmadd_ps(a2, b2, c2);
-                            c2 = _mm512_fmadd_ps(a3, b3, c2);
-                        }
-                        if (im > 3) {
-                            __m512 a0 = _mm512_set1_ps(a_row[3][k+0]);
-                            __m512 a1 = _mm512_set1_ps(a_row[3][k+1]);
-                            __m512 a2 = _mm512_set1_ps(a_row[3][k+2]);
-                            __m512 a3 = _mm512_set1_ps(a_row[3][k+3]);
-                            c3 = _mm512_fmadd_ps(a0, b0, c3);
-                            c3 = _mm512_fmadd_ps(a1, b1, c3);
-                            c3 = _mm512_fmadd_ps(a2, b2, c3);
-                            c3 = _mm512_fmadd_ps(a3, b3, c3);
-                        }
-                        if (im > 4) {
-                            __m512 a0 = _mm512_set1_ps(a_row[4][k+0]);
-                            __m512 a1 = _mm512_set1_ps(a_row[4][k+1]);
-                            __m512 a2 = _mm512_set1_ps(a_row[4][k+2]);
-                            __m512 a3 = _mm512_set1_ps(a_row[4][k+3]);
-                            c4 = _mm512_fmadd_ps(a0, b0, c4);
-                            c4 = _mm512_fmadd_ps(a1, b1, c4);
-                            c4 = _mm512_fmadd_ps(a2, b2, c4);
-                            c4 = _mm512_fmadd_ps(a3, b3, c4);
-                        }
-                        if (im > 5) {
-                            __m512 a0 = _mm512_set1_ps(a_row[5][k+0]);
-                            __m512 a1 = _mm512_set1_ps(a_row[5][k+1]);
-                            __m512 a2 = _mm512_set1_ps(a_row[5][k+2]);
-                            __m512 a3 = _mm512_set1_ps(a_row[5][k+3]);
-                            c5 = _mm512_fmadd_ps(a0, b0, c5);
-                            c5 = _mm512_fmadd_ps(a1, b1, c5);
-                            c5 = _mm512_fmadd_ps(a2, b2, c5);
-                            c5 = _mm512_fmadd_ps(a3, b3, c5);
-                        }
-                        if (im > 6) {
-                            __m512 a0 = _mm512_set1_ps(a_row[6][k+0]);
-                            __m512 a1 = _mm512_set1_ps(a_row[6][k+1]);
-                            __m512 a2 = _mm512_set1_ps(a_row[6][k+2]);
-                            __m512 a3 = _mm512_set1_ps(a_row[6][k+3]);
-                            c6 = _mm512_fmadd_ps(a0, b0, c6);
-                            c6 = _mm512_fmadd_ps(a1, b1, c6);
-                            c6 = _mm512_fmadd_ps(a2, b2, c6);
-                            c6 = _mm512_fmadd_ps(a3, b3, c6);
-                        }
-                        if (im > 7) {
-                            __m512 a0 = _mm512_set1_ps(a_row[7][k+0]);
-                            __m512 a1 = _mm512_set1_ps(a_row[7][k+1]);
-                            __m512 a2 = _mm512_set1_ps(a_row[7][k+2]);
-                            __m512 a3 = _mm512_set1_ps(a_row[7][k+3]);
-                            c7 = _mm512_fmadd_ps(a0, b0, c7);
-                            c7 = _mm512_fmadd_ps(a1, b1, c7);
-                            c7 = _mm512_fmadd_ps(a2, b2, c7);
-                            c7 = _mm512_fmadd_ps(a3, b3, c7);
-                        }
+                        if(im>0){__m512 a0=_mm512_set1_ps(a_row[0][k+0]);__m512 a1=_mm512_set1_ps(a_row[0][k+1]);__m512 a2=_mm512_set1_ps(a_row[0][k+2]);__m512 a3=_mm512_set1_ps(a_row[0][k+3]);
+                            c0=_mm512_fmadd_ps(a0,b0,c0);c0=_mm512_fmadd_ps(a1,b1,c0);c0=_mm512_fmadd_ps(a2,b2,c0);c0=_mm512_fmadd_ps(a3,b3,c0);}
+                        if(im>1){__m512 a0=_mm512_set1_ps(a_row[1][k+0]);__m512 a1=_mm512_set1_ps(a_row[1][k+1]);__m512 a2=_mm512_set1_ps(a_row[1][k+2]);__m512 a3=_mm512_set1_ps(a_row[1][k+3]);
+                            c1=_mm512_fmadd_ps(a0,b0,c1);c1=_mm512_fmadd_ps(a1,b1,c1);c1=_mm512_fmadd_ps(a2,b2,c1);c1=_mm512_fmadd_ps(a3,b3,c1);}
+                        if(im>2){__m512 a0=_mm512_set1_ps(a_row[2][k+0]);__m512 a1=_mm512_set1_ps(a_row[2][k+1]);__m512 a2=_mm512_set1_ps(a_row[2][k+2]);__m512 a3=_mm512_set1_ps(a_row[2][k+3]);
+                            c2=_mm512_fmadd_ps(a0,b0,c2);c2=_mm512_fmadd_ps(a1,b1,c2);c2=_mm512_fmadd_ps(a2,b2,c2);c2=_mm512_fmadd_ps(a3,b3,c2);}
+                        if(im>3){__m512 a0=_mm512_set1_ps(a_row[3][k+0]);__m512 a1=_mm512_set1_ps(a_row[3][k+1]);__m512 a2=_mm512_set1_ps(a_row[3][k+2]);__m512 a3=_mm512_set1_ps(a_row[3][k+3]);
+                            c3=_mm512_fmadd_ps(a0,b0,c3);c3=_mm512_fmadd_ps(a1,b1,c3);c3=_mm512_fmadd_ps(a2,b2,c3);c3=_mm512_fmadd_ps(a3,b3,c3);}
+                        if(im>4){__m512 a0=_mm512_set1_ps(a_row[4][k+0]);__m512 a1=_mm512_set1_ps(a_row[4][k+1]);__m512 a2=_mm512_set1_ps(a_row[4][k+2]);__m512 a3=_mm512_set1_ps(a_row[4][k+3]);
+                            c4=_mm512_fmadd_ps(a0,b0,c4);c4=_mm512_fmadd_ps(a1,b1,c4);c4=_mm512_fmadd_ps(a2,b2,c4);c4=_mm512_fmadd_ps(a3,b3,c4);}
+                        if(im>5){__m512 a0=_mm512_set1_ps(a_row[5][k+0]);__m512 a1=_mm512_set1_ps(a_row[5][k+1]);__m512 a2=_mm512_set1_ps(a_row[5][k+2]);__m512 a3=_mm512_set1_ps(a_row[5][k+3]);
+                            c5=_mm512_fmadd_ps(a0,b0,c5);c5=_mm512_fmadd_ps(a1,b1,c5);c5=_mm512_fmadd_ps(a2,b2,c5);c5=_mm512_fmadd_ps(a3,b3,c5);}
+                        if(im>6){__m512 a0=_mm512_set1_ps(a_row[6][k+0]);__m512 a1=_mm512_set1_ps(a_row[6][k+1]);__m512 a2=_mm512_set1_ps(a_row[6][k+2]);__m512 a3=_mm512_set1_ps(a_row[6][k+3]);
+                            c6=_mm512_fmadd_ps(a0,b0,c6);c6=_mm512_fmadd_ps(a1,b1,c6);c6=_mm512_fmadd_ps(a2,b2,c6);c6=_mm512_fmadd_ps(a3,b3,c6);}
+                        if(im>7){__m512 a0=_mm512_set1_ps(a_row[7][k+0]);__m512 a1=_mm512_set1_ps(a_row[7][k+1]);__m512 a2=_mm512_set1_ps(a_row[7][k+2]);__m512 a3=_mm512_set1_ps(a_row[7][k+3]);
+                            c7=_mm512_fmadd_ps(a0,b0,c7);c7=_mm512_fmadd_ps(a1,b1,c7);c7=_mm512_fmadd_ps(a2,b2,c7);c7=_mm512_fmadd_ps(a3,b3,c7);}
                     }
-                    /* Remainder */
                     for (; k < kc; k++) {
-                        __m512 bpk = _mm512_loadu_ps(&bpack[(size_t)k*nc+j]);
+                        __m512 bpk=_mm512_loadu_ps(&bpack[(size_t)k*nc+j]);
                         if(im>0){__m512 a=_mm512_set1_ps(a_row[0][k]);c0=_mm512_fmadd_ps(a,bpk,c0);}
                         if(im>1){__m512 a=_mm512_set1_ps(a_row[1][k]);c1=_mm512_fmadd_ps(a,bpk,c1);}
                         if(im>2){__m512 a=_mm512_set1_ps(a_row[2][k]);c2=_mm512_fmadd_ps(a,bpk,c2);}
@@ -219,11 +157,9 @@ void wubu_tgemm_f32_avx512(const float * __restrict__ A,
                     }
                 }
             }
+            free(bpack);
         }
-        free(bpack);
     }
-}
-
 /*
  * BF16 GEMM: convert to FP32 then use optimized FP32 path.
  */
