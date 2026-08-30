@@ -1249,7 +1249,51 @@ HDASTNode *hd_parse_decl(HDParser *p) {
             if (peek(p) != HD_TOK_RPAREN) {
                 HDType *pt = parse_type(p);
                 char pname[HD_MAX_IDENT_LEN] = {0};
-                if (peek(p) == HD_TOK_IDENT) {
+                /* Function pointer parameter: int(*fn)(int) — after parsing
+                 * the base type 'int', next token is '('. Skip (*name)(params). */
+                if (peek(p) == HD_TOK_LPAREN) {
+                    int saved_pos = p->lex->pos;
+                    advance(p); /* ( */
+                    if (peek(p) == HD_TOK_STAR) {
+                        advance(p); /* * */
+                        /* Skip parameter name if present */
+                        if (peek(p) == HD_TOK_IDENT) {
+                            strncpy(pname, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
+                            advance(p);
+                        }
+                        expect(p, HD_TOK_RPAREN);
+                        /* Skip parameter list (params) */
+                        if (peek(p) == HD_TOK_LPAREN) {
+                            advance(p); /* ( */
+                            int depth = 1;
+                            while (depth > 0 && peek(p) != HD_TOK_EOF) {
+                                if (peek(p) == HD_TOK_LPAREN) depth++;
+                                else if (peek(p) == HD_TOK_RPAREN) depth--;
+                                if (depth > 0) advance(p);
+                            }
+                            if (peek(p) == HD_TOK_RPAREN) advance(p); /* closing ) */
+                        }
+                        /* Build function pointer type */
+                        HDType *fn_type = (HDType *)calloc(1, sizeof(HDType));
+                        fn_type->kind = HD_TYPE_FUNC;
+                        fn_type->param_types = (HDType **)calloc(HD_MAX_PARAMS, sizeof(HDType *));
+                        fn_type->n_params = 0;
+                        HDType *fpt = (HDType *)calloc(1, sizeof(HDType));
+                        fpt->kind = HD_TYPE_PTR;
+                        fpt->base = fn_type;
+                        fpt->size = 8;
+                        pt = fpt;
+                    } else {
+                        /* Not a function pointer — backtrack */
+                        p->lex->pos = saved_pos;
+                        hd_lex_next(p->lex);
+                        /* Parse as identifier */
+                        if (peek(p) == HD_TOK_IDENT) {
+                            strncpy(pname, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
+                            advance(p);
+                        }
+                    }
+                } else if (peek(p) == HD_TOK_IDENT) {
                     strncpy(pname, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
                     advance(p);
                 }
@@ -1259,8 +1303,39 @@ HDASTNode *hd_parse_decl(HDParser *p) {
                 while (match(p, HD_TOK_COMMA) && fn->n_params < HD_MAX_PARAMS) {
                     pt = parse_type(p);
                     pname[0] = '\0';
-                    if (peek(p) == HD_TOK_IDENT) {
-                        strncpy(pname, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
+                    /* Function pointer in subsequent params */
+                    if (peek(p) == HD_TOK_LPAREN) {
+                        int saved_pos2 = p->lex->pos;
+                        advance(p);
+                        if (peek(p) == HD_TOK_STAR) {
+                            advance(p);
+                            if (peek(p) == HD_TOK_IDENT) advance(p);
+                            expect(p, HD_TOK_RPAREN);
+                            if (peek(p) == HD_TOK_LPAREN) {
+                                advance(p);
+                                int depth2 = 1;
+                                while (depth2 > 0 && peek(p) != HD_TOK_EOF) {
+                                    if (peek(p) == HD_TOK_LPAREN) depth2++;
+                                    else if (peek(p) == HD_TOK_RPAREN) depth2--;
+                                    if (depth2 > 0) advance(p);
+                                }
+                                if (peek(p) == HD_TOK_RPAREN) advance(p);
+                            }
+                            HDType *fn2 = (HDType *)calloc(1, sizeof(HDType));
+                            fn2->kind = HD_TYPE_FUNC;
+                            fn2->param_types = (HDType **)calloc(HD_MAX_PARAMS, sizeof(HDType *));
+                            fn2->n_params = 0;
+                            HDType *fpt2 = (HDType *)calloc(1, sizeof(HDType));
+                            fpt2->kind = HD_TYPE_PTR;
+                            fpt2->base = fn2;
+                            fpt2->size = 8;
+                            pt = fpt2;
+                        } else {
+                            p->lex->pos = saved_pos2;
+                            hd_lex_next(p->lex);
+                            if (peek(p) == HD_TOK_IDENT) advance(p);
+                        }
+                    } else if (peek(p) == HD_TOK_IDENT) {
                         advance(p);
                     }
                     fn->param_types[fn->n_params] = pt;
