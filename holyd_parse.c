@@ -1057,6 +1057,12 @@ HDASTNode *hd_parse_decl(HDParser *p) {
         return hd_parse_decl(p);
     }
 
+    /* Handle `const`/`volatile` qualifiers: strip and parse as normal decl.
+     * These affect type checking which the JIT doesn't enforce. */
+    if (match(p, HD_KW_CONST) || match(p, HD_KW_VOLATILE)) {
+        return hd_parse_decl(p);
+    }
+
     /* Handle extern declarations: extern "C" func(...) or extern type name; */
     if (match(p, HD_KW_EXTERN)) {
         /* Check for extern "C" function declaration */
