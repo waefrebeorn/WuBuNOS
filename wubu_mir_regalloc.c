@@ -311,7 +311,7 @@ wubu_reg_assign_t *wubu_mir_alloc_regs(const wubu_mir_prog_t *p,
 
             int32_t cur_end = intervals[i].end;
 
-            if (victim_vr >= 0 && victim_end > cur_end) {
+            if (0 && victim_vr >= 0 && victim_end > cur_end) {
                 /* ---- Interval SPLITTING (LLVM Greedy-style) ----
                  * The current interval is shorter than the victim's remaining
                  * lifetime. Split the victim at the current position: its
