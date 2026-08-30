@@ -160,6 +160,43 @@ wubu_reg_assign_t *wubu_mir_alloc_regs(const wubu_mir_prog_t *p,
         if (ns >= 2) last_use[in->b] = (int32_t)i;
     }
 
+    /* ---- Step 1b: extend live ranges across loop back-edges ---- */
+    /* For each label, find its position. For each JMP/JZ/JNZ that jumps
+     * backward to a label, extend the last_use of all VRs used between
+     * the label and the branch to the branch position. This ensures
+     * loop-carried VRs stay live throughout the loop body. */
+    /* Build label -> position map */
+    int32_t *label_pos = (int32_t *)malloc((p->n_labels > 0 ? p->n_labels : 1) * sizeof(int32_t));
+    if (label_pos) {
+        for (uint32_t l = 0; l < p->n_labels; l++) label_pos[l] = -1;
+        for (size_t i = 0; i < n_ins; i++) {
+            if (p->ins[i].op == MIR_LABEL && p->ins[i].label < p->n_labels)
+                label_pos[p->ins[i].label] = (int32_t)i;
+        }
+        /* For each backward branch, extend live ranges */
+        for (size_t i = 0; i < n_ins; i++) {
+            const wubu_mir_instr_t *in = &p->ins[i];
+            if ((in->op == MIR_JMP || in->op == MIR_JZ || in->op == MIR_JNZ) &&
+                in->label < p->n_labels) {
+                int32_t target = label_pos[in->label];
+                if (target >= 0 && target < (int32_t)i) {
+                    /* Backward branch: extend all VRs in [target, i] to i */
+                    for (size_t j = (size_t)target; j <= i; j++) {
+                        const wubu_mir_instr_t *jn = &p->ins[j];
+                        if (op_has_dst(jn->op) && jn->dst < n_vr)
+                            if (last_use[jn->dst] < (int32_t)i) last_use[jn->dst] = (int32_t)i;
+                        int ns2 = op_num_srcs(jn->op);
+                        if (ns2 >= 1 && jn->a < n_vr)
+                            if (last_use[jn->a] < (int32_t)i) last_use[jn->a] = (int32_t)i;
+                        if (ns2 >= 2 && jn->b < n_vr)
+                            if (last_use[jn->b] < (int32_t)i) last_use[jn->b] = (int32_t)i;
+                    }
+                }
+            }
+        }
+        free(label_pos);
+    }
+
     /* ---- Step 2: build sorted interval list ---- */
     int n_intervals = 0;
     for (size_t v = 0; v < n_vr; v++)
