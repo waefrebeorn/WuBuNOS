@@ -229,7 +229,7 @@ size_t x86_peephole_optimize(uint8_t *code, size_t n) {
     int max_passes = 10;
     do {
         prev_n = n;
-        n = shrink_movabs(code, n);
+        // n = shrink_movabs(code, n);   /* REMOVED: changes instr sizes, corrupts rel32 offsets */
         n = eliminate_self_mov_reg(code, n);
         n = eliminate_store_reload(code, n);
         n = eliminate_zero_sub(code, n);

@@ -24,6 +24,7 @@
 
 #include "wubu_mir_regalloc.h"
 #include <stdlib.h>
+#include <stdio.h>
 
 /* ------------------------------------------------------------------ */
 /* Helpers: classify MIR opcodes                                      */
@@ -194,6 +195,7 @@ wubu_reg_assign_t *wubu_mir_alloc_regs(const wubu_mir_prog_t *p,
         if (out_count) *out_count = 0;
         return NULL;
     }
+    for (size_t v = 0; v < n_vr; v++) assign[v].reg = -1;
     for (size_t v = 0; v < n_vr; v++) {
         assign[v].reg   = -1;
         assign[v].stack = 0;
@@ -207,6 +209,15 @@ wubu_reg_assign_t *wubu_mir_alloc_regs(const wubu_mir_prog_t *p,
      * (capped at 6 arg regs, plus v0 makes 7). */
     uint32_t n_args = p->n_args;
     if (n_args > 6) n_args = 6;
+
+    if (getenv("WUBU_DEBUG_REGS")) {
+        fprintf(stderr, "[DEBUG_REGS] n_vr=%u n_intervals=%d n_phys_regs=%d n_args=%u\n",
+                n_vr, n_intervals, n_phys_regs, n_args);
+        for (int i = 0; i < n_intervals && i < 15; i++) {
+            fprintf(stderr, "[DEBUG_REGS] interval[%d] vr=%u start=%d end=%d\n",
+                    i, intervals[i].vr, intervals[i].start, intervals[i].end);
+        }
+    }
     /* v0 -> reg 0 always (return register). Args -> regs 1..n_args. */
     if (n_vr > 0) {
         assign[0].reg = 0;
@@ -241,19 +252,19 @@ wubu_reg_assign_t *wubu_mir_alloc_regs(const wubu_mir_prog_t *p,
     for (int r = 0; r < n_phys_regs; r++)
         reg_vr[r] = -1;
 
-    /* Seed the active set with pre-assigned arg vrs.
-     * Args -> regs 1..n_args. v0 (return) is in reg 0 and stays active
-     * until its live range expires.
-     * Their registers are occupied until their live ranges expire. */
-    if (n_vr > 0) {
-        reg_vr[0] = (int32_t)0;
-        active[active_count++] = 0;
-    }
+    /* Reserve physical registers for pre-assigned vrs (v0, args).
+     * v0 is the implicit return register (always physical reg 0).
+     * arg vrs v1..n_args are pre-assigned to regs 1..n_args.
+     * These registers are occupied but NOT seeded into the active set —
+     * if a pre-assigned VR doesn't appear in any MIR instruction its
+     * first_def/last_use would be -1, causing the expire logic to
+     * immediately drop it and free the register for other VRs.
+     * Instead, just mark the physical registers as occupied. */
+    reg_vr[0] = (int32_t)0;  /* v0 always in physical reg 0 */
     for (uint32_t a = 1; a <= n_args && a < n_vr; a++) {
         int32_t phys = (int32_t)a;  /* v1 -> reg 1, v2 -> reg 2, ... */
         if (phys >= 0 && phys < n_phys_regs) {
-            reg_vr[phys] = (int32_t)a;
-            active[active_count++] = a;
+            reg_vr[phys] = (int32_t)a;  /* mark as occupied */
         }
     }
 
@@ -281,6 +292,11 @@ wubu_reg_assign_t *wubu_mir_alloc_regs(const wubu_mir_prog_t *p,
 
         /* Find a free physical register */
         int32_t chosen = -1;
+        if (getenv("WUBU_DEBUG_REGS")) {
+            fprintf(stderr, "[DEBUG_REGS] allocating vr=%u pos=%d active_count=%d reg_vr=", vr, pos, active_count);
+            for (int r = 0; r < n_phys_regs; r++) fprintf(stderr, "%d ", reg_vr[r]);
+            fprintf(stderr, "\n");
+        }
         for (int r = 0; r < n_phys_regs; r++) {
             if (reg_vr[r] < 0) {
                 chosen = r;
@@ -353,6 +369,12 @@ wubu_reg_assign_t *wubu_mir_alloc_regs(const wubu_mir_prog_t *p,
     free(last_use);
 
     if (out_count) *out_count = n_vr;
+    if (getenv("WUBU_DEBUG_REGS")) {
+        for (size_t v = 0; v < n_vr && v < 15; v++) {
+            fprintf(stderr, "[DEBUG_REGS] assign[%zu] reg=%d stack=%d spill_after=%u\n",
+                    v, assign[v].reg, assign[v].stack, assign[v].spill_after);
+        }
+    }
     return assign;
 }
 

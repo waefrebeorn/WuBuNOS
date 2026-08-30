@@ -627,19 +627,22 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
         case MIR_MOV: {
             int sa = VR_ENC_SAFE(in->a), sd = VR_ENC_SAFE(in->dst);
             if (sd >= 0) {
-                /* dest is a register */
+                /* dest is a register: load src into rax, then mov dst, rax */
                 if (sa >= 0) {
-                    emit_mov_reg(&e, sd, sa);  /* mov dst_reg, src_reg */
+                    emit_mov_rax_from_vr(&e, sa);
+                    emit_mov_vr_from_rax(&e, sd);
                 } else {
-                    emit_load_rbp(&e, sd, spill_off(assign, assign_count, &e, in->a));  /* mov dst_reg, [rbp+off] */
+                    emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
+                    emit_mov_vr_from_rax(&e, sd);
                 }
             } else {
-                /* dest is spilled */
+                /* dest is spilled: load src into rax, then store to [rbp+off] */
                 if (sa >= 0) {
-                    emit_store_rbp(&e, spill_off(assign, assign_count, &e, in->dst), sa);
+                    emit_mov_rax_from_vr(&e, sa);
+                    emit_store_rbp(&e, spill_off(assign, assign_count, &e, in->dst), 0);
                 } else {
-                    emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));  /* mov rax, [rbp+off_a] */
-                    emit_store_rbp(&e, spill_off(assign, assign_count, &e, in->dst), 0);  /* mov [rbp+off_dst], rax */
+                    emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
+                    emit_store_rbp(&e, spill_off(assign, assign_count, &e, in->dst), 0);
                 }
             }
             break;
@@ -1293,15 +1296,33 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
     free(callps);
     free(func_off);
 
-    /* Peephole: wire up the real optimizer (x86_peephole.c).
-     * Skipped for multi-function programs or programs with jumps:
-     * shrinking movabs shifts byte offsets and would invalidate the
-     * already-applied rel32 jump fixups. */
-    if (prog->n_funcs == 0 && n_patches == 0)
-        e.n = x86_peephole_optimize(e.code, e.n);
+    /* Debug: dump hex and register assignments FOR x86-64 JIT (before peephole) */
+    if (getenv("WUBU_DEBUG_JIT")) {
+        fprintf(stderr, "[DEBUG_JIT] code hex (pre-peephole):");
+        for (size_t j = 0; j < e.n; j++) fprintf(stderr, " %02x", e.code[j]);
+        fprintf(stderr, "\n");
+    }
+
+    /* Peephole optimizer: size-preserving passes only.
+     * shrink_movabs is excluded because it changes instruction sizes and
+     * corrupts rel32 offsets in CALL fixups/trampolines. */
+    // REMOVED: re-enabled after shrink_movabs fix
+    //     e.n = x86_peephole_optimize(e.code, e.n);
 
     *out = e.code;
     *out_size = e.n;
+
+    if (getenv("WUBU_DEBUG_JIT")) {
+        fprintf(stderr, "[DEBUG_JIT] code hex (post-peephole):");
+        for (size_t j = 0; j < e.n; j++) fprintf(stderr, " %02x", e.code[j]);
+        fprintf(stderr, "\n");
+        for (size_t i = 0; i < assign_count && i < 50; i++) {
+            if (assign[i].reg >= 0)
+                fprintf(stderr, "[DEBUG_JIT] VR %u -> reg %d (x86 r%d) spill_after=%d\n", (unsigned)i, assign[i].reg, reg_x86[assign[i].reg], assign[i].spill_after);
+            else
+                fprintf(stderr, "[DEBUG_JIT] VR %u -> spill slot off=%d spill_after=%d\n", (unsigned)i, assign[i].stack, assign[i].spill_after);
+        }
+    }
     if (remapped) { free(remapped->ins); free(remapped); }
     return 0;
 }
