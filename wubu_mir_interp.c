@@ -436,12 +436,13 @@ op_fret:
 op_ret:
     if (call_sp > 0) {
         /* returning from a called function: restore the caller's
-         * register file + memory (the MIR shares absolute vrs across
-         * invocations), preserving vr0 as the return value. */
+         * register file (the MIR shares absolute vrs across invocations).
+         * Memory is NOT restored — globals and locals use disjoint addresses
+         * (allocated by wubu_mir_alloc), so changes to globals persist
+         * across calls. Recursion is not supported (locals would overlap). */
         call_frame_t *f = &call_stack[--call_sp];
         int64_t retval = vr[in->a];
         memcpy(vr, f->vr_save, ((size_t)max_vr + 1) * sizeof(int64_t));
-        memcpy(mem, f->mem_save, (size_t)mem_size * sizeof(int64_t));
         vr[0] = retval;
         free(f->vr_save);
         free(f->mem_save);

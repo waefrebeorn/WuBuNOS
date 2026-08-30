@@ -1146,9 +1146,17 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             break;
         }
         case MIR_CALL: {
-            /* native call rel32 to the callee body (patched after emission).
-             * Flat-register model matches the retro backends: args in v1..vN,
-             * result in v0, no caller-save. */
+            /* Save caller-saved registers across the call.
+             * x86-64 SysV caller-saved: rax, rcx, rdx, rsi, rdi, r8-r11.
+             * Our pool uses r10, r11, r8, r9, rdx (caller-saved).
+             * Push in order: r10, r11, r8, r9, rdx. Pop in reverse. */
+            static const int caller_saved[] = {10, 11, 8, 9, 2}; /* r10,r11,r8,r9,rdx */
+            for (int s = 0; s < 5; s++) {
+                int reg = caller_saved[s];
+                if (reg >= 8) { e8(&e, 0x41); e8(&e, 0x50 + (reg & 7)); }
+                else { e8(&e, 0x50 + reg); }
+            }
+            /* native call rel32 to the callee body */
             e8(&e, 0xE8);                       /* call rel32 */
             if (ncallp == ccap) {
                 ccap = ccap ? ccap * 2 : 8;
@@ -1158,6 +1166,13 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             callps[ncallp].func_id = in->func_id;
             ncallp++;
             e.n += 4;
+            /* Restore caller-saved registers (same order as push, since call
+             * inserted return address above our pushes) */
+            for (int s = 0; s < 5; s++) {
+                int reg = caller_saved[s];
+                if (reg >= 8) { e8(&e, 0x41); e8(&e, 0x58 + (reg & 7)); }
+                else { e8(&e, 0x58 + reg); }
+            }
             break;
         }
 
