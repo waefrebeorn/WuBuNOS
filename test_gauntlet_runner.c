@@ -141,8 +141,8 @@ int main(int argc, char **argv) {
     gauntlet_state_t g;
     gauntlet_init(&g, target_names, N_TARGETS);
 
-    printf("WuBuOS Test Gauntlet — C18 pure · %d ISAs · %u targets%s\n\n",
-           N_TARGETS, g.n_targets, core_only ? " (--core built-in suites)" : "");
+    printf("WuBuOS Test Gauntlet — C18 pure · %ld ISAs · %u targets%s\n\n",
+           (long)N_TARGETS, g.n_targets, core_only ? " (--core built-in suites)" : "");
 
     /* Collect test suites (built-in core first, then the external 19k). */
     const test_entry_t *builtin_suites[] = {

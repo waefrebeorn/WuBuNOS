@@ -88,7 +88,7 @@ test_mir_opt: $(MIR) wubu_tgemm_avx512.o $(ISA) $(INTERP) $(OS_INTERP) isa-test/
 	$(CC) $(CFLAGS) -I. $^ $(LDFLAGS) -o $@
 
 # Universal test gauntlet (needs full JIT runtime — see OS Makefile for canonical build)
-gauntlet: $(FRONT) $(MIR) wubu_tgemm_avx512.o $(ISA) $(INTERP) $(OS_INTERP) $(JIT_SRC) $(GAUN)
+gauntlet: $(FRONT) $(MIR) wubu_tgemm_avx512.o $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) $(JIT_SRC) $(GAUN) jit_stubs_arm64.c $(OS_ROOT)/runtime/wubu_spawn.c
 	$(CC) $(CFLAGS) -I. -Itest_gauntlet $^ $(LDFLAGS) -o gauntlet_runner
 
 # ---- Run targets ----
