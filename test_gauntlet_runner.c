@@ -306,7 +306,9 @@ int main(int argc, char **argv) {
                             printf("  FAIL %-14s %-10s expected=%lld got=%lld\n",
                                    t->name, target_names[k],
                                    (long long)t->expected, (long long)val);
-                    } else e++;
+                    } else {
+                        e++;
+                    }
 
                     FILE *of2 = fopen(fn, "w");
                     if (of2) { fprintf(of2, "%u %u %u\n", p, f, e); fclose(of2); }

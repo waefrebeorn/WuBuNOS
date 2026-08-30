@@ -891,6 +891,20 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
                 free(assign);
                 return -1;
             }
+            /* Truncate integer arithmetic results to 32-bit C int semantics.
+             * movsxd rax, eax (48 63 C0): sign-extend lower 32 bits → 64 bits.
+             * This makes INT_MAX+1 wrap to INT_MIN (negative), matching C.
+             * Only applies to the integer arithmetic/bitwise group, not float/cmp. */
+            switch (in->op) {
+            case MIR_ADD: case MIR_SUB: case MIR_MUL: case MIR_DIV: case MIR_MOD:
+            case MIR_AND: case MIR_OR: case MIR_XOR:
+            case MIR_SHL: case MIR_SHR:
+            case MIR_NEG: case MIR_NOT:
+                e8(&e, 0x48); e8(&e, 0x63); e8(&e, 0xC0);
+                break;
+            default:
+                break;
+            }
             /* Store result — skip if next instr is RET consuming this dst */
             int sd = VR_ENC(in->dst);
             if (sd >= 0) {
@@ -923,6 +937,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             }
             if (in->op == MIR_SHL) { rex(&e,1,0,0,0); e8(&e, 0xD3); e8(&e, 0xE0); }
             else { rex(&e,1,0,0,0); e8(&e, 0xD3); e8(&e, 0xE8); }
+            e8(&e, 0x48); e8(&e, 0x63); e8(&e, 0xC0);  /* movsxd rax,eax — 32-bit truncate */
 
             int sd = VR_ENC(in->dst);
             if (sd >= 0) emit_mov_vr_from_rax(&e, sd);
@@ -968,6 +983,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             if (sa >= 0) emit_mov_rax_from_vr(&e, sa);
             else emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
             rex(&e,1,0,0,0); e8(&e, 0xF7); e8(&e, 0xD8);  /* neg rax */
+            e8(&e, 0x48); e8(&e, 0x63); e8(&e, 0xC0);  /* movsxd rax,eax — 32-bit truncate */
             int sd = VR_ENC(in->dst);
             if (sd >= 0) emit_mov_vr_from_rax(&e, sd);
             else emit_store_rbp(&e, spill_off(assign, assign_count, &e, in->dst), 0);
@@ -978,6 +994,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             if (sa >= 0) emit_mov_rax_from_vr(&e, sa);
             else emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
             rex(&e,1,0,0,0); e8(&e, 0xF7); e8(&e, 0xD0);  /* not rax */
+            e8(&e, 0x48); e8(&e, 0x63); e8(&e, 0xC0);  /* movsxd rax,eax — 32-bit truncate */
             int sd = VR_ENC(in->dst);
             if (sd >= 0) emit_mov_vr_from_rax(&e, sd);
             else emit_store_rbp(&e, spill_off(assign, assign_count, &e, in->dst), 0);
