@@ -294,3 +294,7 @@ debug_jit: tools/debug_jit.c $(MIR) wubu_tgemm_avx512.o $(filter-out wubu_isa_ji
 
 
 
+test_fib_debug: tools/test_fib_debug.c $(FRONT) $(MIR) wubu_tgemm_avx512.o $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) $(JIT_SRC) jit_stubs_arm64.c $(OS_ROOT)/runtime/wubu_spawn.c
+	$(CC) $(CFLAGS) -I. $^ $(LDFLAGS) -o $@
+jit_test: tools/jit_test.c $(FRONT) $(MIR) wubu_tgemm_avx512.o $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) $(JIT_SRC) jit_stubs_arm64.c $(OS_ROOT)/runtime/wubu_spawn.c
+	$(CC) $(CFLAGS) -I. -I$(OS_ROOT) $^ $(LDFLAGS) -o $@

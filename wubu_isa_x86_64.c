@@ -454,38 +454,67 @@ static void wubu_tgemm_naive(int64_t *mem, int64_t A, int64_t B,
 }
 #endif
 /* ---- VR remapping for function call support ---- */
+/* Compresses sparse high VRs (>= 4096) into a dense range starting
+ * right after the max low VR. This keeps the register allocator's
+ * assign[] array small and avoids OOB issues with spill slots. */
 static wubu_mir_prog_t *x86_remap_vrs(const wubu_mir_prog_t *p) {
-    uint32_t max_vr = 0;
+    uint32_t max_low_vr = 0;
     for (size_t i = 0; i < p->n; i++) {
         const wubu_mir_instr_t *in = &p->ins[i];
-        if (in->dst > max_vr) max_vr = in->dst;
-        if (in->a > max_vr) max_vr = in->a;
-        if (in->b > max_vr) max_vr = in->b;
+        if (in->dst < 4096 && in->dst > max_low_vr) max_low_vr = in->dst;
+        if (in->a < 4096 && in->a > max_low_vr) max_low_vr = in->a;
+        if (in->b < 4096 && in->b > max_low_vr) max_low_vr = in->b;
     }
-    if (max_vr < 4096) return NULL;
-    uint32_t *map = (uint32_t *)calloc((size_t)max_vr + 1, sizeof(uint32_t));
-    uint32_t next_id = 4096;
-    for (uint32_t v = 0; v <= max_vr; v++) map[v] = v;
+    uint32_t next_id = max_low_vr + 1;
+    /* First pass: count how many unique high VRs exist */
+    uint32_t *map = (uint32_t *)calloc(4096, sizeof(uint32_t));
+    (void)map; /* unused for now */
+    /* Second pass: assign sequential IDs to high VRs */
+    uint32_t *hmap = NULL;
+    size_t hcap = 0;
+    uint32_t hcount = 0;
     for (size_t i = 0; i < p->n; i++) {
         const wubu_mir_instr_t *in = &p->ins[i];
         uint32_t vrs[3] = {in->dst, in->a, in->b};
         for (int j = 0; j < 3; j++) {
-            if (vrs[j] >= 4096 && map[vrs[j]] == vrs[j]) {
-                map[vrs[j]] = next_id++;
+            if (vrs[j] >= 4096) {
+                /* Check if already mapped */
+                uint32_t mapped = 0;
+                for (size_t h = 0; h < hcount; h += 2) {
+                    if (hmap[h] == vrs[j]) { mapped = hmap[h+1]; break; }
+                }
+                if (!mapped) {
+                    if (hcount + 2 > hcap) { hcap = hcap ? hcap * 2 : 64; hmap = realloc(hmap, hcap * sizeof(uint32_t)); }
+                    hmap[hcount] = vrs[j];
+                    hmap[hcount+1] = next_id++;
+                    hcount += 2;
+                }
             }
         }
     }
+    free(map);
+    /* Apply remapping */
     wubu_mir_prog_t *rp = (wubu_mir_prog_t *)malloc(sizeof(*rp));
     *rp = *p;
     rp->ins = (wubu_mir_instr_t *)malloc(p->n * sizeof(wubu_mir_instr_t));
     memcpy(rp->ins, p->ins, p->n * sizeof(wubu_mir_instr_t));
     for (size_t i = 0; i < rp->n; i++) {
         wubu_mir_instr_t *in = &rp->ins[i];
-        if (in->dst <= max_vr) in->dst = map[in->dst];
-        if (in->a <= max_vr) in->a = map[in->a];
-        if (in->b <= max_vr) in->b = map[in->b];
+        uint32_t vrs[3] = {in->dst, in->a, in->b};
+        for (int j = 0; j < 3; j++) {
+            if (vrs[j] >= 4096) {
+                for (size_t h = 0; h < hcount; h += 2) {
+                    if (hmap[h] == vrs[j]) {
+                        if (j == 0) in->dst = hmap[h+1];
+                        else if (j == 1) in->a = hmap[h+1];
+                        else in->b = hmap[h+1];
+                        break;
+                    }
+                }
+            }
+        }
     }
-    free(map);
+    free(hmap);
     return rp;
 }
 
@@ -1351,14 +1380,8 @@ static int64_t x86_run(const uint8_t *code, size_t size, int64_t arg) {
     }
 
     int64_t (*fn)(void) = (int64_t (*)(void))exec;
-    if (getenv("WUBU_CALL_DEBUG") && size > 40) {
-        fprintf(stderr, "[run] size=%zu code:", size);
-        for (size_t q = 0; q < size && q < 90; q++) fprintf(stderr, " %02X", ((const uint8_t*)code)[q]);
-        fprintf(stderr, "\n");
-    }
     int64_t r = fn();
 
-    if (wubu_jit_mem_ptr) { munmap(wubu_jit_mem_ptr, 64*1024*1024); wubu_jit_mem_ptr = NULL; }
     jit_free_exec(exec, size);
     return r;
 }
