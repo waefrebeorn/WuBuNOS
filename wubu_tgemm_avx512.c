@@ -75,43 +75,21 @@ void wubu_tgemm_f32_avx512(const float * __restrict__ A,
             for (int i0 = 0; i0 < M; i0 += MR) {
                 int imax = i0 + MR; if (imax > M) imax = M;
                 int im = imax - i0;
+                __m512 c0, c1, c2, c3, c4, c5, c6, c7;
 
                 for (int j = 0; j + NR - 1 < nc; j += NR) {
-                    __m512 c0=(im>0)?_mm512_loadu_ps(&C[(int64_t)(i0+0)*N+j0+j]):_mm512_setzero_ps();
-                    __m512 c1=(im>1)?_mm512_loadu_ps(&C[(int64_t)(i0+1)*N+j0+j]):_mm512_setzero_ps();
-                    __m512 c2=(im>2)?_mm512_loadu_ps(&C[(int64_t)(i0+2)*N+j0+j]):_mm512_setzero_ps();
-                    __m512 c3=(im>3)?_mm512_loadu_ps(&C[(int64_t)(i0+3)*N+j0+j]):_mm512_setzero_ps();
-                    __m512 c4=(im>4)?_mm512_loadu_ps(&C[(int64_t)(i0+4)*N+j0+j]):_mm512_setzero_ps();
-                    __m512 c5=(im>5)?_mm512_loadu_ps(&C[(int64_t)(i0+5)*N+j0+j]):_mm512_setzero_ps();
-                    __m512 c6=(im>6)?_mm512_loadu_ps(&C[(int64_t)(i0+6)*N+j0+j]):_mm512_setzero_ps();
-                    __m512 c7=(im>7)?_mm512_loadu_ps(&C[(int64_t)(i0+7)*N+j0+j]):_mm512_setzero_ps();
+                    /* Load C accumulators for this NR block */
+                    c0=(im>0)?_mm512_loadu_ps(&C[(int64_t)(i0+0)*N+j0+j]):_mm512_setzero_ps();
+                    c1=(im>1)?_mm512_loadu_ps(&C[(int64_t)(i0+1)*N+j0+j]):_mm512_setzero_ps();
+                    c2=(im>2)?_mm512_loadu_ps(&C[(int64_t)(i0+2)*N+j0+j]):_mm512_setzero_ps();
+                    c3=(im>3)?_mm512_loadu_ps(&C[(int64_t)(i0+3)*N+j0+j]):_mm512_setzero_ps();
+                    c4=(im>4)?_mm512_loadu_ps(&C[(int64_t)(i0+4)*N+j0+j]):_mm512_setzero_ps();
+                    c5=(im>5)?_mm512_loadu_ps(&C[(int64_t)(i0+5)*N+j0+j]):_mm512_setzero_ps();
+                    c6=(im>6)?_mm512_loadu_ps(&C[(int64_t)(i0+6)*N+j0+j]):_mm512_setzero_ps();
+                    c7=(im>7)?_mm512_loadu_ps(&C[(int64_t)(i0+7)*N+j0+j]):_mm512_setzero_ps();
 
-                    /* Pre-load A values into registers to reduce broadcast overhead */
-                    /* Unroll k by 2 for better ILP */
-                    int k = 0;
-                    for (; k + 1 < kc; k += 2) {
-                        __m512 b0 = _mm512_loadu_ps(&bpack[(size_t)(k+0)*nc+j]);
-                        __m512 b1 = _mm512_loadu_ps(&bpack[(size_t)(k+1)*nc+j]);
-                        if(im>0){__m512 a0=_mm512_set1_ps(A[(int64_t)(i0+0)*K+k0+k]);
-                                  c0=_mm512_fmadd_ps(a0,b0,c0);
-                                  c0=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i0+0)*K+k0+k+1]),b1,c0);}
-                        if(im>1){__m512 a1=_mm512_set1_ps(A[(int64_t)(i0+1)*K+k0+k]);
-                                  c1=_mm512_fmadd_ps(a1,b0,c1);
-                                  c1=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i0+1)*K+k0+k+1]),b1,c1);}
-                        if(im>2){__m512 a2=_mm512_set1_ps(A[(int64_t)(i0+2)*K+k0+k]);
-                                  c2=_mm512_fmadd_ps(a2,b0,c2);
-                                  c2=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i0+2)*K+k0+k+1]),b1,c2);}
-                        if(im>3){__m512 a3=_mm512_set1_ps(A[(int64_t)(i0+3)*K+k0+k]);
-                                  c3=_mm512_fmadd_ps(a3,b0,c3);
-                                  c3=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i0+3)*K+k0+k+1]),b1,c3);}
-                        if(im>4){__m512 a4=_mm512_set1_ps(A[(int64_t)(i0+4)*K+k0+k]);
-                                  c4=_mm512_fmadd_ps(a4,b0,c4);
-                                  c4=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i0+4)*K+k0+k+1]),b1,c4);}
-                        if(im>5){__m512 a5=_mm512_set1_ps(A[(int64_t)(i0+5)*K+k0+k]);
-                                  c5=_mm512_fmadd_ps(a5,b0,c5);
-                                  c5=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i0+5)*K+k0+k+1]),b1,c5);}
-                    }
-                    for (; k < kc; k++) {
+                    /* Simple k loop (correct for all 8 rows) */
+                    for (int k = 0; k < kc; k++) {
                         __m512 bpk = _mm512_loadu_ps(&bpack[(size_t)k*nc+j]);
                         if(im>0)c0=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i0+0)*K+k0+k]),bpk,c0);
                         if(im>1)c1=_mm512_fmadd_ps(_mm512_set1_ps(A[(int64_t)(i0+1)*K+k0+k]),bpk,c1);
@@ -129,6 +107,8 @@ void wubu_tgemm_f32_avx512(const float * __restrict__ A,
                     if (im > 3) _mm512_storeu_ps(&C[(int64_t)(i0+3)*N+j0+j], c3);
                     if (im > 4) _mm512_storeu_ps(&C[(int64_t)(i0+4)*N+j0+j], c4);
                     if (im > 5) _mm512_storeu_ps(&C[(int64_t)(i0+5)*N+j0+j], c5);
+                    if (im > 6) _mm512_storeu_ps(&C[(int64_t)(i0+6)*N+j0+j], c6);
+                    if (im > 7) _mm512_storeu_ps(&C[(int64_t)(i0+7)*N+j0+j], c7);
                 }
 
                 /* Scalar remainder */
