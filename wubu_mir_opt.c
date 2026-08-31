@@ -71,11 +71,15 @@ static void fold_pass(wubu_mir_prog_t *p)
             continue;
 
         /* Unary ops: check operand 'a' */
-        if (in->op == MIR_NEG || in->op == MIR_NOT || in->op == MIR_MOV) {
+        /* NOTE: MIR_NEG is NOT folded here because it may be applied to
+         * float/double bits (f64 stored as int64_t raw bits). Integer
+         * negation of f64 bits is NOT the same as float negation (which
+         * only flips the sign bit). The JIT handles MIR_NEG correctly
+         * for both int and float. */
+        if (in->op == MIR_NOT || in->op == MIR_MOV) {
             if (in->a < nvr && is_const[in->a]) {
                 int64_t result;
                 switch (in->op) {
-                case MIR_NEG: result = -const_val[in->a]; break;
                 case MIR_NOT: result = ~const_val[in->a]; break;
                 case MIR_MOV: result = const_val[in->a]; break;
                 default: result = const_val[in->a]; break;
@@ -321,11 +325,12 @@ static void fold_dce_pass(wubu_mir_prog_t *p)
              * defined (phi merge): doing so would overwrite the other arm. */
             if (in->dst < nvr && def_count[in->dst] > 1) continue;
 
-            if (in->op == MIR_NEG || in->op == MIR_NOT || in->op == MIR_MOV) {
+            /* Skip MIR_NEG for float constants — integer negation of f64 bits
+             * is not the same as float negation. The JIT handles it correctly. */
+            if (in->op == MIR_NOT || in->op == MIR_MOV) {
                 if (in->a < nvr && is_const[in->a] && def_count[in->a] <= 1) {
                     int64_t result;
                     switch (in->op) {
-                    case MIR_NEG: result = -const_val[in->a]; break;
                     case MIR_NOT: result = ~const_val[in->a]; break;
                     case MIR_MOV: result = const_val[in->a]; break;
                     default: result = const_val[in->a]; break;
