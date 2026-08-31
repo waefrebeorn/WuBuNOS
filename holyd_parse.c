@@ -936,7 +936,10 @@ static HDASTNode *parse_stmt(HDParser *p) {
                            itok == HD_KW_U0);
         if (type_start)
             n->init_expr = hd_parse_decl(p);   /* consumes decl + trailing ; */
-        else {
+        else if (peek(p) == HD_TOK_SEMI) {
+            n->init_expr = NULL;               /* empty init: for(; ...) */
+            expect(p, HD_TOK_SEMI);            /* consume the ; */
+        } else {
             n->init_expr = parse_expr(p);
             expect(p, HD_TOK_SEMI);
         }
