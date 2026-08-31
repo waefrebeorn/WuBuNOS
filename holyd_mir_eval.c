@@ -820,6 +820,12 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
          * (the value is already in the right bit pattern). For float↔int,
          * emit conversion. */
         wubu_vr_t val = mir_gen_expr(g, n->child);
+        if (getenv("WUBU_DEBUG_MIR")) {
+            fprintf(stderr, "[DEBUG_MIR] CAST: type=%d child_type=%d val=%d\n",
+                    n->type ? (int)n->type->kind : -1,
+                    (n->child && n->child->type) ? (int)n->child->type->kind : -1,
+                    val);
+        }
         if (!n->type) return val;
         bool to_f64 = (n->type->kind == HD_TYPE_F64);
         bool from_f64 = n->child && n->child->type && (n->child->type->kind == HD_TYPE_F64);
@@ -1085,6 +1091,16 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
         wubu_mir_free(prog);
         free(pp);
         return -1;
+    }
+
+    /* DEBUG: dump MIR before optimization */
+    if (getenv("WUBU_DEBUG_MIR")) {
+        fprintf(stderr, "[DEBUG_MIR] Before optimization:\n");
+        for (size_t i = 0; i < prog->n; i++) {
+            const wubu_mir_instr_t *in = &prog->ins[i];
+            fprintf(stderr, "  [%zu] op=%d dst=%d a=%d b=%d imm=%lld\n",
+                    i, in->op, in->dst, in->a, in->b, (long long)in->imm);
+        }
     }
 
     /* Optimize the canonical MIR once (benefits ALL backends). Side-effect

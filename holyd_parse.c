@@ -402,6 +402,9 @@ static HDASTNode *parse_primary(HDParser *p) {
         case HD_TOK_FLOAT: {
             HDASTNode *n = hd_ast_new(HD_AST_FLOAT_LIT);
             n->float_val = p->lex->tok.float_val;
+            HDType *ft = (HDType *)calloc(1, sizeof(HDType));
+            ft->kind = HD_TYPE_F64; ft->size = 8;
+            n->type = ft;
             advance(p);
             return n;
         }
