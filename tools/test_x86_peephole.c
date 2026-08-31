@@ -23,13 +23,16 @@ int main(void){
     size_t n2 = x86_peephole_optimize(selfmov11, sizeof selfmov11);
     t(n2==1 && selfmov11[0]==0xC3, "self-mov r11,r11 should be deleted");
 
-    /* 3. shrink_movabs: 48 B8 + imm32-in-range -> 5-byte mov */
+    /* 3. shrink_movabs: 48 B8 + imm32-in-range -> 5-byte mov
+     * The public peephole API doesn't apply shrink_movabs because it changes
+     * instruction sizes and corrupts label offsets captured before peephole.
+     * See x86_peephole.c for the rationale. */
     uint64_t v = 42;
     uint8_t mb[] = {0x48,0xB8, (uint8_t)(v&0xFF),(uint8_t)((v>>8)&0xFF),
                     (uint8_t)((v>>16)&0xFF),(uint8_t)((v>>24)&0xFF),
                     0,0,0,0};  /* 10 bytes, high 4 zero */
     size_t n3 = x86_peephole_optimize(mb, sizeof mb);
-    t(n3==5 && mb[0]==0xB8, "movabs rax,42 should shrink to 5-byte mov");
+    t(n3==10 && mb[0]==0x48 && mb[1]==0xB8, "movabs rax,42 stays 10 bytes (shrink_movabs intentionally disabled for rel32 safety)");
 
     /* 4. non-self MOV must survive */
     uint8_t realmov[] = {0x48,0x8B,0xC1, 0xC3};  /* mov rax,rcx; ret */
