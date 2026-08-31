@@ -1012,10 +1012,10 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         /* Simple approach: emit comparisons inline */
         HDASTNode *body = n->body; /* BLOCK of CASE nodes */
         if (body && body->kind == HD_AST_BLOCK) {
-            /* Collect case values */
+            /* Collect case values (skip default case — it has cond==NULL) */
             for (uint32_t i = 0; i < body->n_stmts; i++) {
                 HDASTNode *stmt = body->stmts[i];
-                if (stmt->kind == HD_AST_CASE && ncases < 64) {
+                if (stmt->kind == HD_AST_CASE && stmt->cond != NULL && ncases < 64) {
                     /* Evaluate case value */
                     wubu_vr_t cval = mir_gen_expr(g, stmt->cond);
                     uint32_t case_label = wubu_mir_new_label(g->prog);
@@ -1034,7 +1034,7 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             int ci = 0;
             for (uint32_t i = 0; i < body->n_stmts; i++) {
                 HDASTNode *stmt = body->stmts[i];
-                if (stmt->kind == HD_AST_CASE && ci < ncases) {
+                if (stmt->kind == HD_AST_CASE && stmt->cond != NULL && ci < ncases) {
                     wubu_mir_place_label(g->prog, cases[ci].label);
                     /* Emit case body statements */
                     if (stmt->body && stmt->body->kind == HD_AST_BLOCK) {
@@ -1044,7 +1044,8 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                     } else if (stmt->body) {
                         mir_gen_stmt(g, stmt->body);
                     }
-                    wubu_mir_jmp(g->prog, break_label);
+                    /* Note: no automatic JMP break_label — fall-through is the
+                     * default C semantics. Break statements emit their own JMP. */
                     ci++;
                 } else if (stmt->kind == HD_AST_CASE && stmt->cond == NULL) {
                     /* Default case (cond == NULL) */
@@ -1059,7 +1060,15 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 }
             }
             /* If no default case, place the default label here */
-            wubu_mir_place_label(g->prog, default_label);
+            int has_default = 0;
+            for (uint32_t i = 0; i < body->n_stmts; i++) {
+                if (body->stmts[i]->kind == HD_AST_CASE && body->stmts[i]->cond == NULL) {
+                    has_default = 1; break;
+                }
+            }
+            if (!has_default) {
+                wubu_mir_place_label(g->prog, default_label);
+            }
         }
         wubu_mir_place_label(g->prog, break_label);
         /* Push break label for any break statements inside */
