@@ -559,6 +559,42 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
         }
     }
 
+    /* ---- Step 1b: spill entry-point constants used across functions ----
+     * Constants defined in the entry point (before first function) and used
+     * inside functions cannot live in registers across function calls — the
+     * callee may clobber the register. Force these to stack slots so each
+     * function loads them from a known location. This handles global variable
+     * addresses (e.g. VR = wubu_mir_alloc result) without affecting VRs that
+     * are local to a single function. */
+    if (prog->n_funcs > 0 && prog->funcs[0].start > 0) {
+        /* Find VRs defined in entry point */
+        uint8_t *entry_def = (uint8_t *)calloc(assign_count, sizeof(uint8_t));
+        if (entry_def) {
+            for (size_t i = 0; i < prog->funcs[0].start && i < prog->n; i++) {
+                const wubu_mir_instr_t *in = &prog->ins[i];
+                if (in->op == MIR_CONST && in->dst < assign_count)
+                    entry_def[in->dst] = 1;
+            }
+            /* Check if any entry-defined VR is used in any function */
+            for (int f = 0; f < prog->n_funcs; f++) {
+                for (size_t i = prog->funcs[f].start; i < prog->funcs[f].end; i++) {
+                    const wubu_mir_instr_t *in = &prog->ins[i];
+                    uint32_t srcs[2] = {in->a, in->b};
+                    for (int j = 0; j < 2; j++) {
+                        if (srcs[j] < assign_count && entry_def[srcs[j]] && assign[srcs[j]].reg >= 0) {
+                            /* This entry-point constant is used in a function — spill it */
+                            int slot = next_slot++;
+                            assign[srcs[j]].stack = -(int32_t)((slot + 1) * 8);
+                            assign[srcs[j]].reg = -1;
+                            if ((size_t)(slot + 1) > n_spilled) n_spilled = (size_t)slot + 1;
+                        }
+                    }
+                }
+            }
+            free(entry_def);
+        }
+    }
+
     /* Variable memory model: MIR programs address a flat int64[] array.
      * Memory is accessed via prog.mem (embedded pointer), NOT stack frame.
      * Only spilled registers need stack space. */
@@ -598,8 +634,8 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
     e8(&e, 0x55);                      /* push rbp */
     rex(&e,1,0,0,0); e8(&e, 0x89); e8(&e, 0xE5);  /* mov rbp, rsp */
     /* rbx = [wubu_jit_mem_ptr] (load mem base from global) */
-    rex(&e,1,0,0,1); e8(&e, 0xBB); e64(&e, (uint64_t)&wubu_jit_mem_ptr); /* movabs rbx, &wubu_jit_mem_ptr */
-    rex(&e,1,0,0,1); e8(&e, 0x8B); e8(&e, 0x1B);  /* mov rbx, [rbx] */
+    rex(&e,1,0,0,0); e8(&e, 0xBB); e64(&e, (uint64_t)&wubu_jit_mem_ptr); /* movabs rbx, &wubu_jit_mem_ptr */
+    rex(&e,1,0,0,0); e8(&e, 0x8B); e8(&e, 0x1B);  /* mov rbx, [rbx] */
     if (e.frame > 0) {
         e8(&e, 0x48); e8(&e, 0x81); e8(&e, 0xEC); e32(&e, (uint32_t)e.frame);
     }
