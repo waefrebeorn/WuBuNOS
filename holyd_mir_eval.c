@@ -1029,11 +1029,15 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
          * is a high-vr that holds slot_addr; copy the incoming arg (v1..vN)
          * into the slot, and register the param name so references load it. */
         for (int pi = 0; pi < fn->n_params; pi++) {
-            wubu_vr_t slot_addr = g.next_vr++;   /* high-vr: memory address value */
-            wubu_vr_t base = g.next_vr++;        /* high-vr: holds slot_addr */
-            wubu_mir_const_to(prog, base, (int64_t)slot_addr);
-            wubu_mir_store(prog, base, (wubu_vr_t)(pi + 1));
-            mir_bind_var(&g, fn->param_names[pi], base, base, 0);
+            /* Allocate memory for this parameter and get its address
+             * as a high VR (same pattern as global/local var allocation). */
+            wubu_vr_t addr = mir_new_vr(&g);  /* high VR for the address */
+            int64_t mem_addr = (int64_t)(g.prog->total_mem + 1);
+            g.prog->total_mem = mem_addr + 1 - 1;
+            wubu_mir_const_to(g.prog, addr, mem_addr);  /* addr VR = memory address */
+            /* Copy the argument (in v1..vN) to the parameter's memory slot */
+            wubu_mir_store(prog, addr, (wubu_vr_t)(pi + 1));
+            mir_bind_var(&g, fn->param_names[pi], addr, addr, 0);
         }
         /* Set up early-return: RETURN emits `result_vr = expr; jmp ret_label`,
          * and the epilogue (placed after the body) moves result_vr into vr0
