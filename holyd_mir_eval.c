@@ -66,6 +66,10 @@ typedef struct {
      * trailing statements (MIR is single-exit). 0 when not in a function body. */
     wubu_vr_t fn_ret_vr;
     uint32_t fn_ret_label;
+    /* label tracking for goto */
+    char label_names[64][HD_MAX_IDENT_LEN];
+    uint32_t label_ids[64];
+    int n_labels;
     /* function table for MIR_CALL (collected during TU generation) */
     const HDASTNode *func_ast[MIR_MAX_FUNCTIONS];
     int func_id_of[MIR_MAX_FUNCTIONS];     /* -1 until assigned */
@@ -304,9 +308,9 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
         wubu_vr_t last = 0;
         for (uint32_t i = 0; i < n->n_stmts; i++) {
             last = mir_gen_stmt(g, n->stmts[i]);
-            /* If this top-level statement is a RETURN, subsequent statements
-             * are unreachable (they would overwrite the return value). Stop. */
-            if (n->stmts[i]->kind == HD_AST_RETURN) break;
+            /* If this top-level statement is a RETURN or GOTO, subsequent
+             * statements are unreachable. Stop generating them. */
+            if (n->stmts[i]->kind == HD_AST_RETURN || n->stmts[i]->kind == HD_AST_GOTO) break;
         }
         /* Pop scope: remove vars added in this block so outer scope is restored */
         if (pushed)
@@ -928,6 +932,44 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         wubu_vr_t rv = mir_new_vr(g);
         wubu_mir_mov_to(g->prog, rv, 0);
         return rv;
+    }
+    case HD_AST_LABEL: {
+        /* label: — place a MIR_LABEL with the label name */
+        /* Check if this label already has a placeholder (from a forward goto) */
+        uint32_t lbl = 0;
+        for (int i = 0; i < g->n_labels; i++) {
+            if (strcmp(g->label_names[i], n->ident) == 0) { lbl = g->label_ids[i]; break; }
+        }
+        if (lbl == 0) {
+            lbl = wubu_mir_new_label(g->prog);
+            if (n->ident[0] && g->n_labels < 64) {
+                strncpy(g->label_names[g->n_labels], n->ident, HD_MAX_IDENT_LEN - 1);
+                g->label_names[g->n_labels][HD_MAX_IDENT_LEN - 1] = '\0';
+                g->label_ids[g->n_labels] = lbl;
+                g->n_labels++;
+            }
+        }
+        wubu_mir_place_label(g->prog, lbl);
+        return 0;
+    }
+    case HD_AST_GOTO: {
+        /* goto label; — jump to the named label */
+        /* Find the label */
+        uint32_t lbl = 0;
+        for (int i = 0; i < g->n_labels; i++) {
+            if (strcmp(g->label_names[i], n->ident) == 0) { lbl = g->label_ids[i]; break; }
+        }
+        if (lbl == 0) {
+            /* Forward reference — create a placeholder label */
+            lbl = wubu_mir_new_label(g->prog);
+            if (n->ident[0] && g->n_labels < 64) {
+                strncpy(g->label_names[g->n_labels], n->ident, HD_MAX_IDENT_LEN - 1);
+                g->label_ids[g->n_labels] = lbl;
+                g->n_labels++;
+            }
+        }
+        wubu_mir_jmp(g->prog, lbl);
+        return 0;
     }
     case HD_AST_SWITCH: {
         /* switch(expr) { case VAL: ... break; default: ... }
