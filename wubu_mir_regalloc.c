@@ -203,16 +203,58 @@ wubu_reg_assign_t *wubu_mir_alloc_regs(const wubu_mir_prog_t *p,
      * Extend last_use of such VRs to the instruction after the call.
      * This prevents the allocator from assigning caller-saved registers
      * to VRs that hold global variable addresses across function calls. */
-    /* First, build a list of CALL positions */
     for (size_t i = 0; i < n_ins; i++) {
         if (p->ins[i].op != MIR_CALL) continue;
-        /* Find VRs used before this call (scan from start to i) */
         for (size_t v = 0; v < n_vr; v++) {
             if (first_def[v] < 0 || first_def[v] >= (int32_t)i) continue;
-            /* VR v is defined before the call. Is it used after? */
             if (last_use[v] > (int32_t)i) {
-                /* VR v is live across the call — extend to after call */
                 last_use[v] = (int32_t)(i + 1) > last_use[v] ? (int32_t)(i + 1) : last_use[v];
+            }
+        }
+    }
+
+    /* ---- Step 1d: extend live ranges across function boundaries ---- */
+    /* The MIR layout emits function bodies BEFORE the caller code (the entry
+     * point calls main, then main's body is emitted after all other function
+     * bodies). This means a VR written by the caller (e.g. v1 = arg) has its
+     * first_def INSIDE main's body (high instruction index) but its last_use
+     * INSIDE the callee's body (low instruction index). The linear scan would
+     * see last_use < first_def and treat the VR as dead.
+     *
+     * Fix: for each function body, find VRs that are READ inside the body
+     * and WRITTEN outside the body. Extend their live range to span from the
+     * earliest write to the latest read. This ensures args (v1..vN) stay live
+     * from the caller's setup through the callee's body. */
+    for (int f = 0; f < p->n_funcs; f++) {
+        uint32_t fstart = p->funcs[f].start;
+        uint32_t fend = p->funcs[f].end;
+        if (fend <= fstart) continue;
+        for (size_t v = 0; v < n_vr; v++) {
+            if (first_def[v] < 0) continue;
+            /* Is this VR read inside the function body? */
+            int32_t read_inside = -1;
+            for (uint32_t i = fstart; i < fend; i++) {
+                const wubu_mir_instr_t *in = &p->ins[i];
+                int ns = op_num_srcs(in->op);
+                if (ns >= 1 && in->a == (wubu_vr_t)v) { read_inside = (int32_t)i; break; }
+                if (ns >= 2 && in->b == (wubu_vr_t)v) { read_inside = (int32_t)i; break; }
+                if (in->op == MIR_STORE && in->b == (wubu_vr_t)v) { read_inside = (int32_t)i; break; }
+            }
+            if (read_inside < 0) continue;
+            /* Is this VR written OUTSIDE the function body? */
+            if (first_def[v] < (int32_t)fstart || first_def[v] >= (int32_t)fend) {
+                /* Extend live range to cover both the write and the read */
+                if (first_def[v] < read_inside) {
+                    /* Normal case: write before read — extend last_use */
+                    if (last_use[v] < read_inside) last_use[v] = read_inside;
+                } else {
+                    /* Reverse case: read before write (callee body before caller body)
+                     * Extend first_def to before the read, and last_use to after the write */
+                    first_def[v] = (int32_t)fstart;  /* live from start of callee */
+                    if (last_use[v] < first_def[v]) last_use[v] = first_def[v];
+                    /* Also extend to cover the actual write position */
+                    if (last_use[v] < (int32_t)first_def[v] + 1) last_use[v] = (int32_t)first_def[v] + 1;
+                }
             }
         }
     }

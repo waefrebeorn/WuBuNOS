@@ -125,15 +125,27 @@ int main(int argc, char **argv) {
             if (!drv) { printf("no driver '%s'\n", tn); return 1; }
             wubu_mir_prog_t prog;
             if (hd_build_mir(src, &prog) != 0) { printf("build failed\n"); return 1; }
+            /* Allocate mem like hd_run_prog does (JIT needs it for LOAD/STORE) */
+            int64_t *mem_ptr = prog.mem;
+            if (mem_ptr == NULL) {
+                int64_t mem_hi = prog.total_mem;
+                if ((int64_t)(prog.next_vr_hi) - 1 > mem_hi) mem_hi = (int64_t)(prog.next_vr_hi) - 1;
+                int64_t mem_size = (mem_hi < 1) ? 1 : (mem_hi + 1);
+                mem_ptr = (int64_t *)calloc((size_t)mem_size, sizeof(int64_t));
+            }
+            wubu_mir_prog_t prog_copy = prog;
+            prog_copy.mem = mem_ptr;
             uint8_t *code; size_t sz;
-            if (drv->compile(&prog, &code, &sz) != 0) { printf("compile failed\n"); return 1; }
+            if (drv->compile(&prog_copy, &code, &sz) != 0) { printf("compile failed\n"); free(mem_ptr); wubu_mir_free(&prog); return 1; }
             printf("=== %s asm for: %s ===\n", tn, src);
             for (size_t i = 0; i + 1 < sz; i += 2)
                 printf("  +%zu: 0x%04X\n", i, (code[i]<<8)|code[i+1]);
             if (sz & 1) printf("  +%zu: 0x%02X\n", sz-1, code[sz-1]);
-            int64_t r = drv->run(code, sz, 0);
+            int64_t r = drv->run(code, sz, (int64_t)mem_ptr);
             printf("result=%lld\n", (long long)r);
-            free(code); wubu_mir_free(&prog);
+            free(code);
+            if (mem_ptr != prog.mem) free(mem_ptr);
+            wubu_mir_free(&prog);
             return 0;
         }
     }

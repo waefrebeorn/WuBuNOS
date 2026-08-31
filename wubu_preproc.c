@@ -193,11 +193,188 @@ static void pp_expand_line(const char *line, char *out, size_t out_cap)
     out[o] = '\0';
 }
 
+/* Strip __attribute__((...)) annotations from a line in-place.
+ * Handles nested parens. */
+static void strip_attributes(char *line)
+{
+    char *p = line;
+    char *out = line;
+    while (*p) {
+        /* Look for __attribute__ */
+        if (strncmp(p, "__attribute__", 13) == 0 && (p == line || !pp_is_ident_char(p[-1]))) {
+            p += 13;
+            while (*p == ' ' || *p == '\t') p++;
+            if (*p == '(') {
+                p++;
+                int depth = 1;
+                while (*p && depth > 0) {
+                    if (*p == '(') depth++;
+                    else if (*p == ')') depth--;
+                    if (depth > 0) p++;
+                }
+                if (*p == ')') p++;
+            }
+            continue;
+        }
+        *out++ = *p++;
+    }
+    *out = '\0';
+}
+
+/* Strip __asm__("...") or __asm volatile("...") inline assembly. */
+static void strip_inline_asm(char *line)
+{
+    char *p = line;
+    while ((p = strstr(p, "__asm")) != NULL) {
+        /* Check it's a whole word */
+        if (p > line && pp_is_ident_char(p[-1])) { p++; continue; }
+        char *start = p;
+        p += 5; /* __asm */
+        /* Skip optional __volatile__ or volatile */
+        while (*p == ' ' || *p == '\t') p++;
+        if (strncmp(p, "__volatile__", 12) == 0) { p += 12; }
+        else if (strncmp(p, "volatile", 8) == 0) { p += 8; }
+        while (*p == ' ' || *p == '\t') p++;
+        /* Skip ((...)) with nested paren/string handling */
+        if (*p == '(') {
+            p++;
+            int depth = 1;
+            while (*p && depth > 0) {
+                if (*p == '"') {
+                    p++;
+                    while (*p && *p != '"') {
+                        if (*p == '\\') p++; /* skip escaped char */
+                        if (*p) p++;
+                    }
+                    if (*p == '"') p++;
+                    continue;
+                }
+                if (*p == '(') depth++;
+                else if (*p == ')') depth--;
+                if (depth > 0) p++;
+            }
+            if (*p == ')') p++;
+        }
+        /* Remove the whole asm statement including trailing semicolon */
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == ';') p++;
+        memmove(start, p, strlen(p) + 1);
+        p = start;
+    }
+}
+
+/* Strip __extension__, __inline, __inline__, __forceinline, __cdecl, etc. */
+static void strip_compiler_keywords(char *line)
+{
+    static const char *kw[] = {
+        "__extension__", "__inline", "__inline__", "__forceinline",
+        "__cdecl", "__stdcall", "__fastcall", "__thiscall",
+        "__declspec", "__asm__", "__asm", "__volatile__",
+        "__restrict__", "__restrict", "__signed__",
+        "__builtin_va_list", "__builtin_offsetof",
+        NULL
+    };
+    for (int i = 0; kw[i]; i++) {
+        char *p = line;
+        size_t klen = strlen(kw[i]);
+        while ((p = strstr(p, kw[i])) != NULL) {
+            /* Only match whole words */
+            if ((p == line || !pp_is_ident_char(p[-1])) &&
+                !pp_is_ident_char(p[klen])) {
+                /* Check if followed by ((...)) for __declspec */
+                char *after = p + klen;
+                while (*after == ' ' || *after == '\t') after++;
+                if (*after == '(') {
+                    int depth = 0;
+                    char *q = after;
+                    do {
+                        if (*q == '(') depth++;
+                        else if (*q == ')') depth--;
+                        q++;
+                    } while (depth > 0 && *q);
+                    memmove(p, q, strlen(q) + 1);
+                } else {
+                    memmove(p, p + klen, strlen(p + klen) + 1);
+                }
+            } else {
+                p += klen;
+            }
+        }
+    }
+}
+
+/* Strip volatile, const, register, restrict qualifiers from a token.
+ * These affect code generation but our JIT treats all variables the same. */
+static void strip_type_qualifiers(char *line)
+{
+    /* We don't strip these from the source — the parser handles them.
+     * But we do need to handle __volatile__ etc. which are already
+     * handled by strip_compiler_keywords. */
+    (void)line;
+}
+
 /* Preprocess a full source string: strips directives (#define/#include)
  * and expands macros. Returns a malloc'd string (caller frees). */
 char *wubu_preprocess(const char *src)
 {
     pp_reset();
+    /* Predefined macros that gcc torture tests and real code rely on */
+    struct { const char *name; const char *val; } builtins[] = {
+        {"__INT_MAX__", "2147483647"},
+        {"__LONG_MAX__", "9223372036854775807L"},
+        {"__LONG_LONG_MAX__", "9223372036854775807LL"},
+        {"__CHAR_BIT__", "8"},
+        {"__SCHAR_MAX__", "127"},
+        {"__SHRT_MAX__", "32767"},
+        {"__SIZE_MAX__", "18446744073709551615UL"},
+        {"__PTRDIFF_MAX__", "9223372036854775807L"},
+        {"__INT8_MAX__", "127"},
+        {"__INT16_MAX__", "32767"},
+        {"__INT32_MAX__", "2147483647"},
+        {"__INT64_MAX__", "9223372036854775807L"},
+        {"__UINT8_MAX__", "255U"},
+        {"__UINT16_MAX__", "65535U"},
+        {"__UINT32_MAX__", "4294967295U"},
+        {"__UINT64_MAX__", "18446744073709551615UL"},
+        {"__SIZEOF_INT__", "4"},
+        {"__SIZEOF_LONG__", "8"},
+        {"__SIZEOF_LONG_LONG__", "8"},
+        {"__SIZEOF_POINTER__", "8"},
+        {"__SIZEOF_FLOAT__", "4"},
+        {"__SIZEOF_DOUBLE__", "8"},
+        {"__SIZEOF_SIZE_T__", "8"},
+        {"__GNUC__", "4"},
+        {"__GNUC_MINOR__", "2"},
+        {"__GNUC_PATCHLEVEL__", "1"},
+        {"__VERSION__", "\"4.2.1\""},
+        {"__STDC__", "1"},
+        {"__STDC_VERSION__", "201112L"},
+        {"__x86_64__", "1"},
+        {"__LP64__", "1"},
+        {"__linux__", "1"},
+        {"__ELF__", "1"},
+        {"__ORDER_LITTLE_ENDIAN__", "1234"},
+        {"__ORDER_BIG_ENDIAN__", "4321"},
+        {"__BYTE_ORDER__", "1234"},
+        {"__SIZE_TYPE__", "unsigned long"},
+        {"__PTRDIFF_TYPE__", "long"},
+        {"__WCHAR_TYPE__", "int"},
+        {"__INTPTR_TYPE__", "long"},
+        {"__UINTPTR_TYPE__", "unsigned long"},
+        {"unix", "1"},
+        {"linux", "1"},
+        {NULL, NULL}
+    };
+    for (int i = 0; builtins[i].name; i++) {
+        PP_Macro m;
+        strncpy(m.name, builtins[i].name, PP_NAME_LEN - 1);
+        strncpy(m.body, builtins[i].val, PP_BODY_LEN - 1);
+        m.fn_like = 0;
+        m.n_params = 0;
+        int idx = pp_find(m.name);
+        if (idx < 0) { idx = g_n_macros++; }
+        g_macros[idx] = m;
+    }
     size_t cap = strlen(src) * 4 + 4096;
     char *out = (char *)malloc(cap);
     if (!out) return NULL;
@@ -205,6 +382,19 @@ char *wubu_preprocess(const char *src)
 
     char *copy = strdup(src);
     if (!copy) { free(out); return NULL; }
+
+    /* First pass: join line continuations (backslash-newline) */
+    {
+        char *p = copy, *q = copy;
+        while (*p) {
+            if (*p == '\\' && p[1] == '\n') {
+                p += 2; /* skip backslash-newline */
+            } else {
+                *q++ = *p++;
+            }
+        }
+        *q = '\0';
+    }
 
     char *save = NULL;
     char *line = strtok_r(copy, "\n", &save);
@@ -222,15 +412,50 @@ char *wubu_preprocess(const char *src)
                     if (idx < 0) { idx = g_n_macros++; }
                     g_macros[idx] = m;
                 }
+            } else if (strcmp(dir, "ifdef") == 0 || strcmp(dir, "ifndef") == 0) {
+                /* Strip the conditional block — keep the #ifdef'd code */
+                char name[64];
+                sscanf(tl + 6, "%63s", name);
+                /* For now, keep the code inside #ifdef blocks */
+                (void)name;
+            } else if (strcmp(dir, "endif") == 0) {
+                /* End of conditional — just drop */
+            } else if (strcmp(dir, "if") == 0) {
+                /* Conditional compilation — keep code for now */
+            } else if (strcmp(dir, "else") == 0) {
+                /* Drop */
+            } else if (strcmp(dir, "pragma") == 0) {
+                /* Drop all #pragma directives */
+            } else if (strcmp(dir, "error") == 0 || strcmp(dir, "warning") == 0) {
+                /* Drop */
+            } else if (strcmp(dir, "line") == 0) {
+                /* Drop */
+            } else if (strcmp(dir, "undef") == 0) {
+                char name[64];
+                sscanf(tl + 6, "%63s", name);
+                int idx = pp_find(name);
+                if (idx >= 0) {
+                    /* Remove by shifting */
+                    for (int i = idx; i < g_n_macros - 1; i++)
+                        g_macros[i] = g_macros[i+1];
+                    g_n_macros--;
+                }
             }
-            /* #include, #ifdef, #endif, etc.: dropped (stub) */
+            /* #include and others: dropped (stub) */
         } else {
-            /* expand macros in this line */
+            /* Strip __attribute__, __extension__, inline asm, etc. */
             char exp[8192];
-            pp_expand_line(line, exp, sizeof(exp));
-            size_t l = strlen(exp);
+            strncpy(exp, line, sizeof(exp) - 1);
+            exp[sizeof(exp) - 1] = '\0';
+            strip_compiler_keywords(exp);
+            strip_attributes(exp);
+            strip_inline_asm(exp);
+            /* expand macros in this line */
+            char exp2[8192];
+            pp_expand_line(exp, exp2, sizeof(exp2));
+            size_t l = strlen(exp2);
             if (o + l + 2 < cap) {
-                memcpy(out + o, exp, l);
+                memcpy(out + o, exp2, l);
                 o += l;
                 out[o++] = '\n';
             }

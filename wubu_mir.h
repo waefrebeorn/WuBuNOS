@@ -202,7 +202,7 @@ typedef enum {
 } wubu_mir_op_t;
 
 #define MIR_MAX_FUNCTIONS 256
-#define MIR_MAX_CALL_ARGS 8
+#define MIR_MAX_CALL_ARGS 32
 #define MIR_MAX_CALL_DEPTH 256
 typedef struct {
     char name[HD_MAX_IDENT_LEN];   /* function name ("" for anonymous) */

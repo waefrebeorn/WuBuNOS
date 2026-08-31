@@ -815,6 +815,24 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         wubu_mir_place_label(g->prog, end_label);
         return merge;
     }
+    case HD_AST_CAST: {
+        /* (type)expr — cast. For integer-to-integer casts, this is a no-op
+         * (the value is already in the right bit pattern). For float↔int,
+         * emit conversion. */
+        wubu_vr_t val = mir_gen_expr(g, n->child);
+        if (!n->type) return val;
+        bool to_f64 = (n->type->kind == HD_TYPE_F64);
+        bool from_f64 = n->child && n->child->type && (n->child->type->kind == HD_TYPE_F64);
+        if (to_f64 && !from_f64) {
+            /* int → float */
+            return wubu_mir_unop(g->prog, MIR_ITOF, val);
+        } else if (!to_f64 && from_f64) {
+            /* float → int */
+            return wubu_mir_unop(g->prog, MIR_FTOI, val);
+        }
+        /* Integer-to-integer cast: no-op (same bit width) */
+        return val;
+    }
     case HD_AST_SIZEOF: {
         /* sizeof(type) or sizeof(expr) — emit the type size as a constant. */
         int size = 8; /* default: pointer */

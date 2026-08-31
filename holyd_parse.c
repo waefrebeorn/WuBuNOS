@@ -118,11 +118,22 @@ static HDType *parse_type(HDParser *p) {
                           * x86-64). Consume the optional second `long` so
                           * `long long x;` / `sizeof(long long)` parse. */
                          if (peek(p) == HD_KW_I64) advance(p);
+                         /* `long int` == `long` — consume the redundant `int` */
+                         else if (peek(p) == HD_KW_I32) advance(p);
+                         /* `long double` == `double` (F64) */
+                         else if (peek(p) == HD_KW_F64) { t->kind = HD_TYPE_F64; advance(p); }
                          break;
         case HD_KW_U8:   t->kind = HD_TYPE_U8;   advance(p); break;
         case HD_KW_U16:  t->kind = HD_TYPE_U16;  advance(p); break;
-        case HD_KW_U32:  t->kind = HD_TYPE_U32;  advance(p); break;
-        case HD_KW_U64:  t->kind = HD_TYPE_U64;  advance(p); break;
+        case HD_KW_U32:  t->kind = HD_TYPE_U32;  advance(p);
+                         /* `unsigned long` == `unsigned long int` == `unsigned long` */
+                         if (peek(p) == HD_KW_I64) { advance(p); }
+                         else if (peek(p) == HD_KW_I32) { advance(p); }
+                         break;
+        case HD_KW_U64:  t->kind = HD_TYPE_U64;  advance(p);
+                         /* `unsigned long` == `unsigned long int` */
+                         if (peek(p) == HD_KW_I64 || peek(p) == HD_KW_I32) advance(p);
+                         break;
         case HD_KW_F64:  t->kind = HD_TYPE_F64;  advance(p); break;
         case HD_KW_BOOL:  t->kind = HD_TYPE_BOOL; advance(p); break;
         case HD_KW_ENUM: {
