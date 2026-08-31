@@ -197,6 +197,26 @@ wubu_reg_assign_t *wubu_mir_alloc_regs(const wubu_mir_prog_t *p,
         free(label_pos);
     }
 
+    /* ---- Step 1c: extend live ranges across function calls ---- */
+    /* For each CALL, any VR that is used both before and after the call
+     * must survive the call (be in a callee-saved register or spilled).
+     * Extend last_use of such VRs to the instruction after the call.
+     * This prevents the allocator from assigning caller-saved registers
+     * to VRs that hold global variable addresses across function calls. */
+    /* First, build a list of CALL positions */
+    for (size_t i = 0; i < n_ins; i++) {
+        if (p->ins[i].op != MIR_CALL) continue;
+        /* Find VRs used before this call (scan from start to i) */
+        for (size_t v = 0; v < n_vr; v++) {
+            if (first_def[v] < 0 || first_def[v] >= (int32_t)i) continue;
+            /* VR v is defined before the call. Is it used after? */
+            if (last_use[v] > (int32_t)i) {
+                /* VR v is live across the call — extend to after call */
+                last_use[v] = (int32_t)(i + 1) > last_use[v] ? (int32_t)(i + 1) : last_use[v];
+            }
+        }
+    }
+
     /* ---- Step 2: build sorted interval list ---- */
     int n_intervals = 0;
     for (size_t v = 0; v < n_vr; v++)
