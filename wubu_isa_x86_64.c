@@ -566,7 +566,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
 
     x86_emitter_t e;
     memset(&e, 0, sizeof(e));
-    e.frame = n_spilled * 8 + 16 + 72;  /* spills + padding + 9 regs for CALL save/restore */
+    e.frame = n_spilled * 8 + 16 + 64;  /* spills + padding + 8 regs for CALL save/restore */
     /* Ensure 16-byte stack alignment for host calls (wubu_tgemm_parallel etc.).
      * SysV ABI requires %rsp ≡ 0 (mod 16) at call sites. The JIT prologue does
      * `push rbp` (8 bytes), making %rsp ≡ 8 (mod 16). So e.frame must be ≡ 8 (mod 16). */
@@ -1146,12 +1146,13 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             break;
         }
         case MIR_CALL: {
-            /* Save ALL allocator registers across the call.
-             * The callee may clobber any register (flat VR model).
-             * Push all 9, then pop in reverse order after call returns. */
-            static const int all_regs[] = {10, 11, 12, 13, 14, 15, 8, 9, 2};
-            for (int s = 0; s < 9; s++) {
-                int reg = all_regs[s];
+            /* Save all allocator registers EXCEPT r10 (VR0) across the call.
+             * r10 holds the return value from the callee — saving/restoring
+             * it would clobber the result. The callee may clobber any other
+             * register (flat VR model). Save 8 regs: r11-r15, r8, r9, rdx. */
+            static const int caller_saved[] = {11, 12, 13, 14, 15, 8, 9, 2};
+            for (int s = 0; s < 8; s++) {
+                int reg = caller_saved[s];
                 if (reg >= 8) { e8(&e, 0x41); e8(&e, 0x50 + (reg & 7)); }
                 else { e8(&e, 0x50 + reg); }
             }
@@ -1166,8 +1167,8 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             ncallp++;
             e.n += 4;
             /* Restore all registers in reverse order (LIFO) */
-            for (int s = 8; s >= 0; s--) {
-                int reg = all_regs[s];
+            for (int s = 7; s >= 0; s--) {
+                int reg = caller_saved[s];
                 if (reg >= 8) { e8(&e, 0x41); e8(&e, 0x58 + (reg & 7)); }
                 else { e8(&e, 0x58 + reg); }
             }
