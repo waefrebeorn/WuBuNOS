@@ -329,8 +329,8 @@ wubu_reg_assign_t *wubu_mir_alloc_regs(const wubu_mir_prog_t *p,
         uint32_t vr  = intervals[i].vr;
         int32_t  pos = intervals[i].start;
 
-        /* Skip pre-assigned vrs (args already placed above) */
-        if (vr >= 1 && vr <= n_args) continue;
+        /* Skip pre-assigned vrs (v0 return register and args already placed above) */
+        if (vr == 0 || (vr >= 1 && vr <= n_args)) continue;
 
         /* Expire active intervals whose last_use < pos */
         int write = 0;
