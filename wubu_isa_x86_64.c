@@ -559,44 +559,6 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
         }
     }
 
-    /* ---- Step 1b: spill entry-point constants used across functions ----
-     * Constants defined in the entry point (before first function) and used
-     * inside functions cannot live in registers across function calls — the
-     * callee may clobber the register. Force these to stack slots so each
-     * function loads them from a known location. This handles global variable
-     * addresses (e.g. VR = wubu_mir_alloc result) without affecting VRs that
-     * are local to a single function. */
-    if (prog->n_funcs > 0 && prog->funcs[0].start > 0) {
-        /* Find VRs defined in entry point */
-        uint8_t *entry_def = (uint8_t *)calloc(assign_count, sizeof(uint8_t));
-        if (entry_def) {
-            for (size_t i = 0; i < prog->funcs[0].start && i < prog->n; i++) {
-                const wubu_mir_instr_t *in = &prog->ins[i];
-                if (in->op == MIR_CONST && in->dst < assign_count)
-                    entry_def[in->dst] = 1;
-            }
-            /* Check if any entry-defined VR is used in any function */
-            for (int f = 0; f < prog->n_funcs; f++) {
-                for (size_t i = prog->funcs[f].start; i < prog->funcs[f].end; i++) {
-                    const wubu_mir_instr_t *in = &prog->ins[i];
-                    uint32_t srcs[2] = {in->a, in->b};
-                    for (int j = 0; j < 2; j++) {
-                        if (srcs[j] < assign_count && entry_def[srcs[j]] && assign[srcs[j]].reg >= 0) {
-                            /* This entry-point constant is used in a function — spill it */
-                            int old_reg = assign[srcs[j]].reg;
-                            int slot = next_slot++;
-                            assign[srcs[j]].stack = -(int32_t)((slot + 1) * 8);
-                            assign[srcs[j]].reg = -1;
-                            if ((size_t)(slot + 1) > n_spilled) n_spilled = (size_t)slot + 1;
-                            fprintf(stderr, "[CROSS_SPILL] VR %u spilled to slot %d (was reg %d)\n", srcs[j], slot, old_reg);
-                        }
-                    }
-                }
-            }
-            free(entry_def);
-        }
-    }
-
     /* Variable memory model: MIR programs address a flat int64[] array.
      * Memory is accessed via prog.mem (embedded pointer), NOT stack frame.
      * Only spilled registers need stack space. */
@@ -662,14 +624,6 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
     #define NEXT_IS_RET(vr) (i + 1 < prog->n && prog->ins[i+1].op == MIR_RET && prog->ins[i+1].a == (wubu_vr_t)(vr))
 
     int result_in_rax = 0;  /* set when last op skipped store to keep result in rax */
-    if (getenv("WUBU_DEBUG_REGS")) {
-        for (size_t v = 0; v < assign_count && v < 30; v++) {
-            if (assign[v].reg >= 0)
-                fprintf(stderr, "[EMIT] VR %zu -> reg %d (x86 r%d)\n", v, assign[v].reg, reg_x86[assign[v].reg]);
-            else
-                fprintf(stderr, "[EMIT] VR %zu -> spill off=%d\n", v, assign[v].stack);
-        }
-    }
 
     for (size_t i = 0; i < prog->n; i++) {
         const wubu_mir_instr_t *in = &prog->ins[i];
@@ -689,7 +643,6 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             if (dst_enc >= 0) {
                 /* mov reg, imm — on x86-64 REX.W + B8+rd is ALWAYS movabs
                  * (imm64); there is no mov r64, imm32 form. So emit imm64. */
-                if (in->dst == 23) fprintf(stderr, "[CONST_VR23] dst_enc=%d reg=%d\n", dst_enc, assign[23].reg);
                 if (dst_enc >= 8) { e8(&e, 0x49); e8(&e, (uint8_t)(0xB8 + (dst_enc & 7))); }
                 else { e8(&e, 0x48); e8(&e, (uint8_t)(0xB8 + dst_enc)); }
                 e64(&e, (uint64_t)imm);
@@ -1193,7 +1146,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             break;
         }
         case MIR_CALL: {
-            /* Save ALL allocator registers around the call.
+            /* Save ALL allocator registers across the call.
              * The callee may clobber any register (flat VR model).
              * Push all 9, then pop in reverse order after call returns. */
             static const int all_regs[] = {10, 11, 12, 13, 14, 15, 8, 9, 2};
