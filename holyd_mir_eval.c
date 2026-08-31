@@ -929,6 +929,95 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         wubu_mir_mov_to(g->prog, rv, 0);
         return rv;
     }
+    case HD_AST_SWITCH: {
+        /* switch(expr) { case VAL: ... break; default: ... }
+         * Lowered as a chain of if-else:
+         *   if (expr == VAL1) goto case1;
+         *   if (expr == VAL2) goto case2;
+         *   goto default_label;
+         *   case1: ... break_label;
+         *   case2: ... break_label;
+         *   default_label: ...
+         *   break_label: ...
+         */
+        wubu_vr_t cond = mir_gen_expr(g, n->cond);
+        uint32_t break_label = wubu_mir_new_label(g->prog);
+        uint32_t default_label = wubu_mir_new_label(g->prog);
+        /* We need to collect case labels first, then emit them */
+        /* For now, emit a simplified version: chain of comparisons */
+        /* Each case: if (cond == val) { body; jmp break_label } */
+        /* Track case values and their labels */
+        typedef struct { int64_t val; uint32_t label; } case_entry_t;
+        case_entry_t cases[64];
+        int ncases = 0;
+        uint32_t cl = default_label;
+
+        /* First pass: create labels for each case and the default */
+        /* We emit: for each case, cmp + jz to body; after body, jmp break */
+        /* At the end: default label (if any), then break label */
+
+        /* Simple approach: emit comparisons inline */
+        HDASTNode *body = n->body; /* BLOCK of CASE nodes */
+        if (body && body->kind == HD_AST_BLOCK) {
+            /* Collect case values */
+            for (uint32_t i = 0; i < body->n_stmts; i++) {
+                HDASTNode *stmt = body->stmts[i];
+                if (stmt->kind == HD_AST_CASE && ncases < 64) {
+                    /* Evaluate case value */
+                    wubu_vr_t cval = mir_gen_expr(g, stmt->cond);
+                    uint32_t case_label = wubu_mir_new_label(g->prog);
+                    /* Emit: if (cond == cval) goto case_label */
+                    wubu_vr_t cmp = wubu_mir_binop(g->prog, MIR_EQ, cond, cval);
+                    wubu_mir_jnz(g->prog, cmp, case_label);
+                    cases[ncases].val = 0; /* unused */
+                    cases[ncases].label = case_label;
+                    ncases++;
+                }
+            }
+            /* Jump to default if no case matched */
+            wubu_mir_jmp(g->prog, default_label);
+
+            /* Second pass: emit case bodies */
+            int ci = 0;
+            for (uint32_t i = 0; i < body->n_stmts; i++) {
+                HDASTNode *stmt = body->stmts[i];
+                if (stmt->kind == HD_AST_CASE && ci < ncases) {
+                    wubu_mir_place_label(g->prog, cases[ci].label);
+                    /* Emit case body statements */
+                    if (stmt->body && stmt->body->kind == HD_AST_BLOCK) {
+                        for (uint32_t j = 0; j < stmt->body->n_stmts; j++) {
+                            mir_gen_stmt(g, stmt->body->stmts[j]);
+                        }
+                    } else if (stmt->body) {
+                        mir_gen_stmt(g, stmt->body);
+                    }
+                    wubu_mir_jmp(g->prog, break_label);
+                    ci++;
+                } else if (stmt->kind == HD_AST_CASE && stmt->cond == NULL) {
+                    /* Default case (cond == NULL) */
+                    wubu_mir_place_label(g->prog, default_label);
+                    if (stmt->body && stmt->body->kind == HD_AST_BLOCK) {
+                        for (uint32_t j = 0; j < stmt->body->n_stmts; j++) {
+                            mir_gen_stmt(g, stmt->body->stmts[j]);
+                        }
+                    } else if (stmt->body) {
+                        mir_gen_stmt(g, stmt->body);
+                    }
+                }
+            }
+            /* If no default case, place the default label here */
+            wubu_mir_place_label(g->prog, default_label);
+        }
+        wubu_mir_place_label(g->prog, break_label);
+        /* Push break label for any break statements inside */
+        int prev_break = -1;
+        if (g->n_loops < MIRGEN_MAX_VARS) {
+            prev_break = g->loop_done[g->n_loops];
+            g->loop_done[g->n_loops] = break_label;
+            g->n_loops++;
+        }
+        return 0;
+    }
     default:
         /* Unsupported: emit 0 */
         return wubu_mir_const(g->prog, 0);
