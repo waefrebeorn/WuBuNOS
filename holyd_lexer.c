@@ -55,6 +55,7 @@ static const HDKeyword hd_keywords[] = {
     /* C-compatible type keywords (aliases) */
     {"void",     HD_KW_U0},
     {"char",     HD_KW_I8},
+    {"signed",   HD_KW_I32},
     {"short",    HD_KW_I16},
     {"int",      HD_KW_I32},
     {"long",     HD_KW_I64},

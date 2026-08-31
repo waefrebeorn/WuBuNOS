@@ -272,6 +272,8 @@ static void strip_compiler_keywords(char *line)
         "__declspec", "__asm__", "__asm", "__volatile__",
         "__restrict__", "__restrict", "__signed__",
         "__builtin_va_list", "__builtin_offsetof",
+        "inline", "_inline", "register", "auto", "restrict", "_restrict",
+        "signed", "_signed", "const", "_const", "volatile", "_volatile",
         NULL
     };
     for (int i = 0; kw[i]; i++) {
