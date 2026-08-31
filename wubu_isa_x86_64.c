@@ -583,10 +583,12 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
                     for (int j = 0; j < 2; j++) {
                         if (srcs[j] < assign_count && entry_def[srcs[j]] && assign[srcs[j]].reg >= 0) {
                             /* This entry-point constant is used in a function — spill it */
+                            int old_reg = assign[srcs[j]].reg;
                             int slot = next_slot++;
                             assign[srcs[j]].stack = -(int32_t)((slot + 1) * 8);
                             assign[srcs[j]].reg = -1;
                             if ((size_t)(slot + 1) > n_spilled) n_spilled = (size_t)slot + 1;
+                            fprintf(stderr, "[CROSS_SPILL] VR %u spilled to slot %d (was reg %d)\n", srcs[j], slot, old_reg);
                         }
                     }
                 }
@@ -602,7 +604,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
 
     x86_emitter_t e;
     memset(&e, 0, sizeof(e));
-    e.frame = n_spilled * 8 + 16;  /* spills + alignment padding */
+    e.frame = n_spilled * 8 + 16 + 72;  /* spills + padding + 9 regs for CALL save/restore */
     /* Ensure 16-byte stack alignment for host calls (wubu_tgemm_parallel etc.).
      * SysV ABI requires %rsp ≡ 0 (mod 16) at call sites. The JIT prologue does
      * `push rbp` (8 bytes), making %rsp ≡ 8 (mod 16). So e.frame must be ≡ 8 (mod 16). */
@@ -660,6 +662,14 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
     #define NEXT_IS_RET(vr) (i + 1 < prog->n && prog->ins[i+1].op == MIR_RET && prog->ins[i+1].a == (wubu_vr_t)(vr))
 
     int result_in_rax = 0;  /* set when last op skipped store to keep result in rax */
+    if (getenv("WUBU_DEBUG_REGS")) {
+        for (size_t v = 0; v < assign_count && v < 30; v++) {
+            if (assign[v].reg >= 0)
+                fprintf(stderr, "[EMIT] VR %zu -> reg %d (x86 r%d)\n", v, assign[v].reg, reg_x86[assign[v].reg]);
+            else
+                fprintf(stderr, "[EMIT] VR %zu -> spill off=%d\n", v, assign[v].stack);
+        }
+    }
 
     for (size_t i = 0; i < prog->n; i++) {
         const wubu_mir_instr_t *in = &prog->ins[i];
@@ -679,6 +689,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             if (dst_enc >= 0) {
                 /* mov reg, imm — on x86-64 REX.W + B8+rd is ALWAYS movabs
                  * (imm64); there is no mov r64, imm32 form. So emit imm64. */
+                if (in->dst == 23) fprintf(stderr, "[CONST_VR23] dst_enc=%d reg=%d\n", dst_enc, assign[23].reg);
                 if (dst_enc >= 8) { e8(&e, 0x49); e8(&e, (uint8_t)(0xB8 + (dst_enc & 7))); }
                 else { e8(&e, 0x48); e8(&e, (uint8_t)(0xB8 + dst_enc)); }
                 e64(&e, (uint64_t)imm);
@@ -1182,13 +1193,12 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             break;
         }
         case MIR_CALL: {
-            /* Save caller-saved registers across the call.
-             * x86-64 SysV caller-saved: rax, rcx, rdx, rsi, rdi, r8-r11.
-             * Our pool uses r10, r11, r8, r9, rdx (caller-saved).
-             * Push in order: r10, r11, r8, r9, rdx. Pop in reverse. */
-            static const int caller_saved[] = {10, 11, 8, 9, 2}; /* r10,r11,r8,r9,rdx */
-            for (int s = 0; s < 5; s++) {
-                int reg = caller_saved[s];
+            /* Save ALL allocator registers around the call.
+             * The callee may clobber any register (flat VR model).
+             * Push all 9, then pop in reverse order after call returns. */
+            static const int all_regs[] = {10, 11, 12, 13, 14, 15, 8, 9, 2};
+            for (int s = 0; s < 9; s++) {
+                int reg = all_regs[s];
                 if (reg >= 8) { e8(&e, 0x41); e8(&e, 0x50 + (reg & 7)); }
                 else { e8(&e, 0x50 + reg); }
             }
@@ -1202,10 +1212,9 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             callps[ncallp].func_id = in->func_id;
             ncallp++;
             e.n += 4;
-            /* Restore caller-saved registers (same order as push, since call
-             * inserted return address above our pushes) */
-            for (int s = 0; s < 5; s++) {
-                int reg = caller_saved[s];
+            /* Restore all registers in reverse order (LIFO) */
+            for (int s = 8; s >= 0; s--) {
+                int reg = all_regs[s];
                 if (reg >= 8) { e8(&e, 0x41); e8(&e, 0x58 + (reg & 7)); }
                 else { e8(&e, 0x58 + reg); }
             }
