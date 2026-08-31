@@ -302,8 +302,12 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
             pushed = 1;
         }
         wubu_vr_t last = 0;
-        for (uint32_t i = 0; i < n->n_stmts; i++)
+        for (uint32_t i = 0; i < n->n_stmts; i++) {
             last = mir_gen_stmt(g, n->stmts[i]);
+            /* If this top-level statement is a RETURN, subsequent statements
+             * are unreachable (they would overwrite the return value). Stop. */
+            if (n->stmts[i]->kind == HD_AST_RETURN) break;
+        }
         /* Pop scope: remove vars added in this block so outer scope is restored */
         if (pushed)
             g->n_vars = g->scope_var_start[--g->n_scopes];
@@ -416,12 +420,10 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
         return mir_gen_expr(g, n->child);
     case HD_AST_RETURN: {
         wubu_vr_t val = n->child ? mir_gen_expr(g, n->child) : wubu_mir_const(g->prog, 0);
-        if (g->fn_ret_label != 0) {
-            /* early return: store the value and jump to the function epilogue */
-            wubu_mir_mov_to(g->prog, g->fn_ret_vr, val);
-            wubu_mir_jmp(g->prog, g->fn_ret_label);
-            return g->fn_ret_vr;
-        }
+        /* Always emit a direct RET. This ensures that code after a return
+         * (e.g. in a block) doesn't overwrite the return value. */
+        wubu_mir_mov_to(g->prog, 0, val);
+        wubu_mir_ret(g->prog, 0);
         return val;
     }
     case HD_AST_IF: {
