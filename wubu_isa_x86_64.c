@@ -74,7 +74,7 @@ static const int reg_x86[9] = {
     8,   /* 6: r8  */
     9,   /* 7: r9  */
     2,   /* 8: rdx */
-    /* rbx(3) REMOVED: reserved mem base pointer in prologue */
+    /* rbx(3) RESERVED: mem base pointer in prologue */
 };
 
 /* does this x86 encoding need REX.B or REX.R? */
@@ -712,8 +712,20 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             case MIR_ADD: rex(&e,1,0,0,0); e8(&e, 0x01); e8(&e, 0xF8); break; /* add rax,rdi */
             case MIR_SUB: rex(&e,1,0,0,0); e8(&e, 0x29); e8(&e, 0xF8); break; /* sub rax,rdi */
             case MIR_MUL: rex(&e,1,0,0,0); e8(&e, 0x0F); e8(&e, 0xAF); e8(&e, 0xC7); break; /* imul rax,rdi */
-            case MIR_DIV: rex(&e,1,0,0,0); e8(&e, 0x99); rex(&e,1,0,0,0); e8(&e, 0xF7); e8(&e, 0xFF); break;
-            case MIR_MOD: rex(&e,1,0,0,0); e8(&e, 0x99); rex(&e,1,0,0,0); e8(&e, 0xF7); e8(&e, 0xFF); rex(&e,1,0,0,0); e8(&e, 0x89); e8(&e, 0xD0); break;
+            case MIR_DIV: case MIR_MOD: {
+                /* cqo/idiv clobber RDX — save/restore RDX around the division
+                 * to protect any live vr assigned to physical reg index 8 (rdx). */
+                /* push rdx */
+                e8(&e, 0x52);
+                rex(&e,1,0,0,0); e8(&e, 0x99);   /* cqo */
+                rex(&e,1,0,0,0); e8(&e, 0xF7); e8(&e, 0xFF);  /* idiv rdi */
+                if (in->op == MIR_MOD) {
+                    rex(&e,1,0,0,0); e8(&e, 0x89); e8(&e, 0xD0);  /* mov rax, rdx */
+                }
+                /* pop rdx */
+                e8(&e, 0x5A);
+                break;
+            }
             case MIR_AND: rex(&e,1,0,0,0); e8(&e, 0x21); e8(&e, 0xF8); break;
             case MIR_OR:  rex(&e,1,0,0,0); e8(&e, 0x09); e8(&e, 0xF8); break;
             case MIR_XOR: rex(&e,1,0,0,0); e8(&e, 0x31); e8(&e, 0xF8); break;
