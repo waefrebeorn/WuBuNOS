@@ -74,6 +74,10 @@ typedef struct {
     const HDASTNode *func_ast[MIR_MAX_FUNCTIONS];
     int func_id_of[MIR_MAX_FUNCTIONS];     /* -1 until assigned */
     int n_funcs;
+    /* enum constant table */
+    char enum_const_names[64][HD_MAX_IDENT_LEN];
+    int64_t enum_const_vals[64];
+    int n_enum_consts;
 } HDMirGen;
 
 static wubu_vr_t mir_new_vr(HDMirGen *g) {
@@ -527,7 +531,14 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
     }
     case HD_AST_IDENT: {
         wubu_vr_t addr = mir_find_var_addr(g, n->ident);
-        if (addr == 0) return wubu_mir_const(g->prog, 0);
+        if (addr == 0) {
+            /* Check if it's an enum constant */
+            for (int i = 0; i < g->n_enum_consts; i++) {
+                if (strcmp(g->enum_const_names[i], n->ident) == 0)
+                    return wubu_mir_const(g->prog, g->enum_const_vals[i]);
+            }
+            return wubu_mir_const(g->prog, 0);
+        }
         /* In C, an array name used as a value decays to a pointer to its
          * first element — return the array's base address (not a[0]). */
         if (mir_var_is_array(g, n->ident))

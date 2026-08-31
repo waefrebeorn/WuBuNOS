@@ -1169,7 +1169,9 @@ HDASTNode *hd_parse_decl(HDParser *p) {
             if (type->kind == HD_TYPE_ENUM && p->n_enum_consts > 0) {
                 /* build a BLOCK: enum decl + one const VAR_DECL per enumerator */
                 int nconsts = p->n_enum_consts;
-                p->n_enum_consts = 0;  /* consume: they're now in the AST */
+                /* NOTE: do NOT clear n_enum_consts — later declarations may
+                 * reference these enum constants (e.g. `enum Color c = GREEN;`).
+                 * The constants remain available for lookup. */
                 for (int c = 0; c < nconsts; c++) {
                     HDASTNode *vd = hd_ast_new(HD_AST_VAR_DECL);
                     strncpy(vd->ident, p->enum_const_names[c], HD_MAX_IDENT_LEN - 1);
