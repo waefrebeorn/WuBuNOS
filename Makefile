@@ -84,7 +84,7 @@ test_isa_driver: $(MIR) wubu_tgemm_avx512.o $(filter-out wubu_isa_jit_stubs.c,$(
 	$(CC) $(CFLAGS) -I. $^ $(LDFLAGS) -o $@
 
 # MIR optimizer test
-test_mir_opt: $(MIR) wubu_tgemm_avx512.o $(ISA) $(INTERP) $(OS_INTERP) isa-test/test_mir_opt.c
+test_mir_opt: $(MIR) wubu_tgemm_avx512.o $(ISA) wubu_isa_vulkan.c wubu_isa_spirv.c jit/wubu_isa_wasm.c $(INTERP) $(OS_INTERP) isa-test/test_mir_opt.c
 	$(CC) $(CFLAGS) -I. $^ $(LDFLAGS) -o $@
 
 # Universal test gauntlet (needs full JIT runtime — see OS Makefile for canonical build)
