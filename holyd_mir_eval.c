@@ -365,8 +365,13 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
             vr = mir_decl_var_float(g, n->ident);
         else
             vr = mir_decl_var_unsigned(g, n->ident, is_uns);
-        /* Allocate memory for the variable (arrays get arr_size cells, scalars 1, structs = total_size). */
-        wubu_vr_t addr = wubu_mir_alloc(g->prog, arr_size > 0 ? arr_size : 1);
+        /* Allocate memory for the variable (arrays get arr_size cells, scalars 1, structs = total_size).
+         * Use a HIGH VR for the address so it never collides with argument registers
+         * (v1..vN) or instruction-index VRs. */
+        wubu_vr_t addr = mir_new_vr(g);  /* high VR for the address */
+        int64_t mem_addr = (int64_t)(g->prog->total_mem + 1);
+        g->prog->total_mem = mem_addr + (arr_size > 0 ? arr_size : 1) - 1;
+        wubu_mir_const_to(g->prog, addr, mem_addr);  /* addr VR = constant mem_addr */
         /* Search from end to find the most recent declaration (shadowing) */
         for (int i = g->n_vars - 1; i >= 0; i--)
             if (strcmp(g->vars[i].name, n->ident) == 0) {
