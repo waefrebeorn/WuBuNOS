@@ -330,7 +330,7 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
             s->name[HD_MAX_IDENT_LEN - 1] = '\0';
             s->n_members = 0;
             s->total_size = 0;
-            if (n->type && n->type->kind == HD_TYPE_STRUCT) {
+            if (n->type && (n->type->kind == HD_TYPE_STRUCT || n->type->kind == HD_TYPE_UNION)) {
                 fprintf(stderr, "STRUCT_DECL: %s n_members=%d\n", n->ident, n->type->n_members);
                 for (int i = 0; i < n->type->n_members && s->n_members < MAX_MEMBERS; i++) {
                     fprintf(stderr, "  member[%d] name='%s' offset=%lld\n", i, n->type->members[i].name, (long long)n->type->members[i].offset);

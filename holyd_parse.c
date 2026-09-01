@@ -1064,8 +1064,9 @@ HDASTNode *hd_parse_decl(HDParser *p) {
             parse_error(p, "expected typedef name");
             return NULL;
         }
+        const char *tdname = p->lex->tok.text;
         if (p->n_typedefs < 64) {
-            strncpy(p->typedef_names[p->n_typedefs], p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
+            strncpy(p->typedef_names[p->n_typedefs], tdname, HD_MAX_IDENT_LEN - 1);
             p->typedef_types[p->n_typedefs] = base;
             p->n_typedefs++;
         }
@@ -1073,6 +1074,14 @@ HDASTNode *hd_parse_decl(HDParser *p) {
         expect(p, HD_TOK_SEMI);
         HDASTNode *n = hd_ast_new(HD_AST_STRUCT_DECL); /* no-op */
         n->type = base;
+        /* For typedef'd structs/unions with empty tag, set the ident
+         * so the MIR generator can register the type by name */
+        if (base->kind == HD_TYPE_STRUCT || base->kind == HD_TYPE_UNION) {
+            if (base->name[0] == '\0') {
+                strncpy(base->name, tdname, HD_MAX_IDENT_LEN - 1);
+            }
+            strncpy(n->ident, base->name, HD_MAX_IDENT_LEN - 1);
+        }
         return n;
     }
 
