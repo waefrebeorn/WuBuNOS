@@ -29,8 +29,9 @@ typedef struct {
     int is_unsigned;
     int is_float;
     int is_array;
-    int array_size;
-    int is_struct;                  /* 1 if this variable is a struct instance */
+    int array_size;        /* outermost dimension */
+    int array_stride;      /* inner dimension for 2D+ arrays (1 for 1D) */
+    int is_struct;         /* 1 if this variable is a struct instance */
     char struct_name[HD_MAX_IDENT_LEN]; /* struct type name */
 } mir_var_t;
 
@@ -243,8 +244,25 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n);
  * memory address (a value), suitable as the index into mem[].
  * - array IDENT  -> base address (a decays to &a[0])
  * - scalar/pointer IDENT -> the value held in the var (pointer value)
- * - INDEX  -> address_of(left) + index
+ * - INDEX  -> address_of(left) + index * stride
  * - DEREF  -> the pointer's held value */
+
+/* Find the stride for an INDEX node by traversing to the root IDENT
+ * and looking up its array type. Returns the inner dimension size for
+ * multi-dimensional arrays, or 1 for 1D arrays. */
+static int mir_index_stride(HDMirGen *g, const HDASTNode *n) {
+    /* Traverse left spine to find the root IDENT */
+    const HDASTNode *root = n;
+    while (root && root->kind == HD_AST_INDEX) root = root->left;
+    if (!root || root->kind != HD_AST_IDENT) return 1;
+    /* Look up the variable in the symbol table */
+    for (int i = 0; i < g->n_vars; i++) {
+        if (strcmp(g->vars[i].name, root->ident) == 0 && g->vars[i].is_array) {
+            return g->vars[i].array_stride > 0 ? g->vars[i].array_stride : 1;
+        }
+    }
+    return 1;
+}
 static wubu_vr_t mir_address_of(HDMirGen *g, const HDASTNode *n) {
     if (!n) return 0;
     if (n->kind == HD_AST_STRING_LIT)
@@ -261,6 +279,10 @@ static wubu_vr_t mir_address_of(HDMirGen *g, const HDASTNode *n) {
     if (n->kind == HD_AST_INDEX) {
         wubu_vr_t base = mir_address_of(g, n->left);
         wubu_vr_t idx  = mir_gen_expr(g, n->right);
+        int stride = mir_index_stride(g, n);
+        if (stride > 1) {
+            idx = wubu_mir_binop(g->prog, MIR_MUL, idx, wubu_mir_const(g->prog, (int64_t)stride));
+        }
         return wubu_mir_binop(g->prog, MIR_ADD, base, idx);
     }
     return 0;
@@ -276,6 +298,10 @@ static wubu_vr_t mir_lvalue_addr(HDMirGen *g, const HDASTNode *n) {
     if (n->kind == HD_AST_INDEX) {
         wubu_vr_t base = mir_address_of(g, n->left);
         wubu_vr_t idx = mir_gen_expr(g, n->right);
+        int stride = mir_index_stride(g, n);
+        if (stride > 1) {
+            idx = wubu_mir_binop(g->prog, MIR_MUL, idx, wubu_mir_const(g->prog, (int64_t)stride));
+        }
         return wubu_mir_binop(g->prog, MIR_ADD, base, idx);
     }
     if (n->kind == HD_AST_DOT || n->kind == HD_AST_MEMBER) {
@@ -390,6 +416,13 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
                 g->vars[i].addr = addr;
                 g->vars[i].is_array = (arr_size > 0 && !is_struct_var);
                 g->vars[i].array_size = arr_size;
+                /* For multi-dimensional arrays, compute the stride (inner dimension).
+                 * For int w[M][N], stride = N. For int w[N], stride = 1. */
+                g->vars[i].array_stride = 1;
+                if (n->type && n->type->kind == HD_TYPE_ARRAY && n->type->base
+                    && n->type->base->kind == HD_TYPE_ARRAY) {
+                    g->vars[i].array_stride = n->type->base->array_size;
+                }
                 g->vars[i].is_struct = is_struct_var;
                 if (is_struct_var)
                     strncpy(g->vars[i].struct_name, struct_type_name, HD_MAX_IDENT_LEN - 1);
@@ -903,10 +936,14 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         return addr;
     }
     case HD_AST_INDEX: {
-        /* a[i] -> load from address_of(a) + i. array name decays to base;
+        /* a[i] -> load from address_of(a) + i * stride. array name decays to base;
          * pointer var loads its held value. */
         wubu_vr_t base = mir_address_of(g, n->left);
         wubu_vr_t idx = mir_gen_expr(g, n->right);
+        int stride = mir_index_stride(g, n);
+        if (stride > 1) {
+            idx = wubu_mir_binop(g->prog, MIR_MUL, idx, wubu_mir_const(g->prog, (int64_t)stride));
+        }
         wubu_vr_t addr = wubu_mir_binop(g->prog, MIR_ADD, base, idx);
         return wubu_mir_load(g->prog, addr);
     }
