@@ -1123,6 +1123,19 @@ HDASTNode *hd_parse_decl(HDParser *p) {
         /* Parse parameters */
         int pi = 0;
         if (peek(p) != HD_TOK_RPAREN) {
+            /* `void` alone means zero parameters */
+            if (peek(p) == HD_KW_U0 && p->lex->pos < (int)strlen(p->lex->src)) {
+                /* Look ahead: is the next non-void token ')'? */
+                int saved_pos = p->lex->pos;
+                advance(p); /* consume void */
+                if (peek(p) == HD_TOK_RPAREN) {
+                    advance(p); /* consume ) */
+                    ext->extern_n_params = 0;
+                    goto done_extern_params;
+                }
+                /* Not void ) — rewind */
+                p->lex->pos = saved_pos;
+            }
             ext->extern_param_types[pi] = parse_type(p);
             if (peek(p) == HD_TOK_IDENT) {
                 /* Skip parameter name */
@@ -1140,6 +1153,8 @@ HDASTNode *hd_parse_decl(HDParser *p) {
         ext->extern_n_params = pi;
 
         expect(p, HD_TOK_RPAREN);
+
+done_extern_params:
 
         /* Optional -> ret_type for explicit return type */
         if (match(p, HD_TOK_ARROW)) {
@@ -1271,6 +1286,22 @@ HDASTNode *hd_parse_decl(HDParser *p) {
             strncpy(fn->ident, name, HD_MAX_IDENT_LEN - 1);
             fn->n_params = 0;
             advance(p); /* ( */
+            /* `void` alone in the param list means zero parameters: `int foo(void)`.
+             * Without this, `void` is parsed as a parameter *type* (HD_TYPE_VOID)
+             * and the function gets a spurious first parameter that corrupts the
+             * argument registers and memory allocation. */
+            if (peek(p) == HD_KW_U0) {
+                advance(p); /* consume void */
+                if (peek(p) == HD_TOK_RPAREN) {
+                    advance(p); /* consume ) */
+                    fn->n_params = 0;
+                    goto done_params;
+                }
+                /* Not `void )` — it's a parameter named or typed with void.
+                 * Put the token back by re-parsing from the saved position. */
+                /* We already consumed `void`; fall through to normal parsing
+                 * which will treat it as a parameter type. */
+            }
             if (peek(p) != HD_TOK_RPAREN) {
                 HDType *pt = parse_type(p);
                 char pname[HD_MAX_IDENT_LEN] = {0};
@@ -1351,7 +1382,12 @@ HDASTNode *hd_parse_decl(HDParser *p) {
                     fn->n_params++;
                 }
             }
-            expect(p, HD_TOK_RPAREN);
+done_params:
+            if (fn->n_params == 0) {
+                /* void) case: ) already consumed, skip expect(RPAREN) */
+            } else {
+                expect(p, HD_TOK_RPAREN);
+            }
             if (peek(p) == HD_TOK_LBRACE) {
                 fn->body = parse_block(p);
             } else {
