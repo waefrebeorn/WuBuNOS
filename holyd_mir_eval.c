@@ -356,8 +356,8 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
                 is_uns = 1;
             /* array type carries an element count in n->type->array_size */
             if (k == HD_TYPE_ARRAY && n->type->array_size > 0) arr_size = (int)n->type->array_size;
-            /* struct type: allocate memory for all members */
-            if (k == HD_TYPE_STRUCT) {
+            /* struct/union type: allocate memory for all members */
+            if (k == HD_TYPE_STRUCT || k == HD_TYPE_UNION) {
                 is_struct_var = 1;
                 if (n->type->name[0])
                     strncpy(struct_type_name, n->type->name, HD_MAX_IDENT_LEN - 1);
@@ -1158,10 +1158,10 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
     g.has_error = 0;
     prog->next_vr_hi = g.next_vr;  /* reserve mem up to the high-vr param-slot range */
 
-    /* Register struct types from the parser's named_types table */
+    /* Register struct/union types from the parser's named_types table */
     for (int i = 0; i < parse.n_named_types && g.n_structs < MAX_STRUCTS; i++) {
         HDType *t = parse.named_types[i];
-        if (t && t->kind == HD_TYPE_STRUCT && t->n_members > 0) {
+        if (t && (t->kind == HD_TYPE_STRUCT || t->kind == HD_TYPE_UNION) && t->n_members > 0) {
             mir_struct_t *s = &g.structs[g.n_structs++];
             strncpy(s->name, parse.named_type_names[i], HD_MAX_IDENT_LEN - 1);
             s->name[HD_MAX_IDENT_LEN - 1] = '\0';

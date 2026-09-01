@@ -322,8 +322,8 @@ static HDType *parse_type(HDParser *p) {
                 expect(p, HD_TOK_RBRACE);
                 t->kind = comp_kind;
                 if (comp_kind == HD_TYPE_UNION) {
-                    t->size = max_size;
-                    t->align = max_align;
+                    t->size = 1;  /* union = 1 int64 cell (all members overlap) */
+                    t->align = 1;
                 } else {
                     /* Trailing padding: the struct's size must be a multiple
                      * of its alignment (gcc rounds `{int (*fn)(int,int); int
