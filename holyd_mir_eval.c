@@ -430,7 +430,8 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
             }
         if (n->init) {
             if (n->init->kind == HD_AST_BRACE_INIT) {
-                /* array initializer list: store each element */
+                /* array/struct initializer list: store each element.
+                 * Designated initializers (HD_AST_DESIG_INIT) store at a specific offset. */
                 int n_elems = (int)n->init->n_args;
                 /* Reallocate if the initializer determines the size */
                 if (arr_size == 0 && n_elems > 0) {
@@ -441,13 +442,30 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
                             g->vars[i].addr = addr;
                             g->vars[i].is_array = 1;
                             g->vars[i].array_size = arr_size;
+                            g->vars[i].array_stride = 1;
                             break;
                         }
                 }
                 for (uint32_t e = 0; e < n->init->n_args && e < (uint32_t)arr_size; e++) {
-                    wubu_vr_t ev = mir_gen_expr(g, n->init->args[e]);
+                    int offset = (int)e; /* default: sequential */
+                    HDASTNode *elem = n->init->args[e];
+                    wubu_vr_t ev;
+                    if (elem->kind == HD_AST_DESIG_INIT) {
+                        /* Designated initializer: compute offset */
+                        if (elem->ident[0] == '@') {
+                            /* Array index designator: [index] */
+                            offset = (int)elem->int_val;
+                        } else {
+                            /* Field designator: .field — look up struct member offset */
+                            offset = mir_struct_member_offset(g, struct_type_name, elem->ident);
+                            if (offset < 0) offset = (int)e; /* fallback */
+                        }
+                        ev = mir_gen_expr(g, elem->child);
+                    } else {
+                        ev = mir_gen_expr(g, elem);
+                    }
                     wubu_vr_t elem_addr = wubu_mir_binop(g->prog, MIR_ADD, addr,
-                                                          wubu_mir_const(g->prog, (int64_t)e));
+                                                          wubu_mir_const(g->prog, (int64_t)offset));
                     wubu_mir_store(g->prog, elem_addr, ev);
                 }
             } else {

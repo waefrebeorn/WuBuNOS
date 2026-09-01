@@ -473,14 +473,43 @@ static HDASTNode *parse_primary(HDParser *p) {
             return expr;
         }
         case HD_TOK_LBRACE: {
-            /* Braced initializer: {expr, expr, ...} — parse as a list
-             * of expressions for array/struct init. Returns a BRACE_INIT
-             * node containing the element expressions. */
+            /* Braced initializer: {expr, expr, ...} or designated:
+             *   { .field = val, [index] = val, ... }
+             * Returns a BRACE_INIT node containing the element expressions. */
             advance(p); /* consume { */
             HDASTNode *init = hd_ast_new(HD_AST_BRACE_INIT);
             if (!init) { p->has_error = true; return NULL; }
             while (peek(p) != HD_TOK_RBRACE && peek(p) != HD_TOK_EOF) {
-                hd_ast_add_arg(init, parse_assign(p));
+                /* Check for designated initializer: .field = val or [index] = val */
+                if (peek(p) == HD_TOK_DOT) {
+                    /* .field = val */
+                    advance(p); /* consume . */
+                    if (peek(p) != HD_TOK_IDENT) {
+                        parse_error(p, "expected field name after .");
+                        break;
+                    }
+                    HDASTNode *desig = hd_ast_new(HD_AST_DESIG_INIT);
+                    strncpy(desig->ident, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
+                    advance(p); /* consume field name */
+                    expect(p, HD_TOK_ASSIGN);
+                    desig->child = parse_assign(p);
+                    hd_ast_add_arg(init, desig);
+                } else if (peek(p) == HD_TOK_LBRACKET) {
+                    /* [index] = val */
+                    advance(p); /* consume [ */
+                    int64_t idx = 0;
+                    if (peek(p) == HD_TOK_INT) { idx = p->lex->tok.int_val; advance(p); }
+                    else { parse_error(p, "expected constant index in []"); break; }
+                    expect(p, HD_TOK_RBRACKET);
+                    expect(p, HD_TOK_ASSIGN);
+                    HDASTNode *desig = hd_ast_new(HD_AST_DESIG_INIT);
+                    desig->ident[0] = '@'; /* marker: array index designator */
+                    desig->int_val = idx;
+                    desig->child = parse_assign(p);
+                    hd_ast_add_arg(init, desig);
+                } else {
+                    hd_ast_add_arg(init, parse_assign(p));
+                }
                 if (peek(p) == HD_TOK_COMMA) {
                     advance(p);
                     if (peek(p) == HD_TOK_RBRACE) break;
