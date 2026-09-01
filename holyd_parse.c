@@ -291,23 +291,31 @@ static HDType *parse_type(HDParser *p) {
                             if ((int64_t)msz > max_align) max_align = (int)msz;
                         } else {
                             t->members[t->n_members].offset = t->size;
-                            t->size += msz;
-                            int align = (int)msz;
-                            /* A zero-size member (void / undeclared type) is
-                             * ill-formed C, but the frontend must NEVER crash
-                             * on adversarial input. Clamp align to >=1 so the
-                             * `size % align` rounding below can't divide by
-                             * zero (SIGFPE), and keep the AST well-formed so
-                             * no caller hits a dangling NULL type. The member
-                             * is still recorded; codegen will reject a
-                             * zero-size access at use-site if it ever occurs. */
-                            if (align < 1) align = 1;
-                            if (align > t->align) t->align = align;
-                            if ((t->size % align) != 0)
-                                t->size += align - (t->size % align);
+                            t->size += 1;  /* each member = 1 int64 cell in MIR memory */
+                            t->align = 1;  /* all members are 1 cell (8 bytes) */
                         }
                         t->members[t->n_members].type = member_type;
                         t->n_members++;
+                    }
+                    /* Additional declarators: `int a, b, c;` — same type */
+                    while (match(p, HD_TOK_COMMA)) {
+                        if (peek(p) != HD_TOK_IDENT) {
+                            parse_error(p, "expected member name after comma");
+                            break;
+                        }
+                        if (t->n_members < HD_MAX_PARAMS) {
+                            strncpy(t->members[t->n_members].name, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
+                            advance(p);
+                            if (comp_kind == HD_TYPE_UNION) {
+                                t->members[t->n_members].offset = 0;
+                            } else {
+                                t->members[t->n_members].offset = t->size;
+                                t->size += 1;
+                                t->align = 1;
+                            }
+                            t->members[t->n_members].type = member_type;
+                            t->n_members++;
+                        }
                     }
                     expect(p, HD_TOK_SEMI);
                 }
