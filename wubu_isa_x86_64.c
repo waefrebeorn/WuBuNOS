@@ -852,6 +852,9 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
                     e8(&e, 0x66); e8(&e, 0x0F); e8(&e, 0x6E); e8(&e, 0xC0);
                     /* cvttss2si eax, xmm0 : F3 0F 2C C0 */
                     e8(&e, 0xF3); e8(&e, 0x0F); e8(&e, 0x2C); e8(&e, 0xC0);
+                    /* cdqe: sign-extend eax -> rax (48 98 / F7 E8... actually 0x98 with REX.W) */
+                    /* REX.W + cdqe: 48 98 (sign-extends eax into rax as 64-bit) */
+                    e8(&e, 0x48); e8(&e, 0x98);
                 }
                 break;
             }
@@ -991,7 +994,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
                 else { rex(&e,1,0,0,0); e8(&e, 0x8B); e8(&e, 0x8D); e32(&e, (uint32_t)off); }
             }
             if (in->op == MIR_SHL) { rex(&e,1,0,0,0); e8(&e, 0xD3); e8(&e, 0xE0); }
-            else { rex(&e,1,0,0,0); e8(&e, 0xD3); e8(&e, 0xE8); }
+            else { rex(&e,1,0,0,0); e8(&e, 0xD3); e8(&e, 0xF8); }  /* sar rax, cl (arithmetic, matches interpreter >> on int64) */
             /* No movsxd truncation for shifts — matches interpreter 64-bit semantics */
 
             int sd = VR_ENC_SAFE(in->dst);
@@ -1232,7 +1235,6 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             rex(&e,1,0,0,0); e8(&e, 0x01); e8(&e, 0xC6);   /* add rsi, rax */
             int sd = VR_ENC_SAFE(in->dst);
             if (sd >= 0) {
-                /* mov dstreg, [rsi] — dstreg is x86 encoding from reg_x86[] */
                 rex(&e,1,reg_needs_rex(sd),0,0);
                 e8(&e, 0x8B);
                 e8(&e, (uint8_t)(0x06 | ((sd & 7) << 3)));

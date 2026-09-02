@@ -1331,6 +1331,7 @@ done_extern_params:
             fn->type = type;
             strncpy(fn->ident, name, HD_MAX_IDENT_LEN - 1);
             fn->n_params = 0;
+            int fn_params_void_consumed = 0;  /* set when (void) consumed ')' */
             advance(p); /* ( */
             /* `void` alone in the param list means zero parameters: `int foo(void)`.
              * Without this, `void` is parsed as a parameter *type* (HD_TYPE_VOID)
@@ -1341,6 +1342,7 @@ done_extern_params:
                 if (peek(p) == HD_TOK_RPAREN) {
                     advance(p); /* consume ) */
                     fn->n_params = 0;
+                    fn_params_void_consumed = 1;
                     goto done_params;
                 }
                 /* Not `void )` — it's a parameter named or typed with void.
@@ -1429,11 +1431,11 @@ done_extern_params:
                 }
             }
 done_params:
-            if (fn->n_params == 0) {
-                /* void) case: ) already consumed, skip expect(RPAREN) */
-            } else {
-                expect(p, HD_TOK_RPAREN);
-            }
+        /* The void) shortcut (goto done_params) already consumed ')'.
+         * For all other paths we still need to consume ')'. */
+        if (!fn_params_void_consumed) {
+            expect(p, HD_TOK_RPAREN);  /* consume the closing paren */
+        }
             if (peek(p) == HD_TOK_LBRACE) {
                 fn->body = parse_block(p);
             } else {
