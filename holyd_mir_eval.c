@@ -1495,6 +1495,18 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
             /* Copy the argument (in v1..vN) to the parameter's memory slot */
             wubu_mir_store(prog, addr, (wubu_vr_t)(pi + 1));
             mir_bind_var(&g, fn->param_names[pi], addr, addr, 0);
+            /* For pointer-to-struct parameters, mark the variable so -> lookups work */
+            if (fn->param_types[pi] && fn->param_types[pi]->kind == HD_TYPE_PTR && fn->param_types[pi]->base &&
+                (fn->param_types[pi]->base->kind == HD_TYPE_STRUCT || fn->param_types[pi]->base->kind == HD_TYPE_UNION)) {
+                for (int i = 0; i < g.n_vars; i++) {
+                    if (strcmp(g.vars[i].name, fn->param_names[pi]) == 0) {
+                        g.vars[i].is_ptr_struct = 1;
+                        if (fn->param_types[pi]->base->name[0])
+                            strncpy(g.vars[i].struct_name, fn->param_types[pi]->base->name, HD_MAX_IDENT_LEN - 1);
+                        break;
+                    }
+                }
+            }
         }
         /* Set up early-return: RETURN emits `result_vr = expr; jmp ret_label`,
          * and the epilogue (placed after the body) moves result_vr into vr0
