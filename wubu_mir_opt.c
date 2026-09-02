@@ -241,6 +241,16 @@ static void dce_pass(wubu_mir_prog_t *p)
             if (in->a < nvr) used[in->a] = 1;
             continue;
         }
+        /* MIR_CALL: the call reads v1..v_nargs as argument VRs. Without this,
+         * DCE would treat MIR_MOV v1, arg as dead and remove it, leaving
+         * the callee to read garbage from v1. Conservatively mark the first
+         * 32 VRs live — the call ABI in this compiler passes args in v1..vN
+         * (N ≤ MIR_MAX_CALL_ARGS). Marking more than needed is safe; marking
+         * fewer would be wrong. */
+        if (in->op == MIR_CALL) {
+            for (uint32_t v = 1; v <= 32 && v < nvr; v++) used[v] = 1;
+            continue;
+        }
         /* All other ops read a (and possibly b) */
         if (in->a < nvr) used[in->a] = 1;
         if (in->b < nvr) used[in->b] = 1;
