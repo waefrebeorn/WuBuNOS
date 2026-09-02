@@ -1494,7 +1494,13 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
             wubu_mir_const_to(g.prog, addr, mem_addr);  /* addr VR = memory address */
             /* Copy the argument (in v1..vN) to the parameter's memory slot */
             wubu_mir_store(prog, addr, (wubu_vr_t)(pi + 1));
-            mir_bind_var(&g, fn->param_names[pi], addr, addr, 0);
+            int param_is_unsigned = 0;
+            if (fn->param_types[pi]) {
+                HDTypeKind pk = fn->param_types[pi]->kind;
+                if (pk == HD_TYPE_U8 || pk == HD_TYPE_U16 || pk == HD_TYPE_U32 || pk == HD_TYPE_U64)
+                    param_is_unsigned = 1;
+            }
+            mir_bind_var(&g, fn->param_names[pi], addr, addr, param_is_unsigned);
             /* For pointer-to-struct parameters, mark the variable so -> lookups work */
             if (fn->param_types[pi] && fn->param_types[pi]->kind == HD_TYPE_PTR && fn->param_types[pi]->base &&
                 (fn->param_types[pi]->base->kind == HD_TYPE_STRUCT || fn->param_types[pi]->base->kind == HD_TYPE_UNION)) {
