@@ -234,6 +234,86 @@ static void mir_collect_funcs(HDMirGen *g, const HDASTNode *ast) {
     g->prog->n_funcs = g->n_funcs;   /* make the table visible to the interpreter/drivers */
 }
 
+/* Recursively count the maximum number of arguments in any function call.
+ * Returns the max n_args found (clamped to MIR_MAX_CALL_ARGS). */
+static int mir_count_max_args(const HDASTNode *ast) {
+    if (!ast) return 0;
+    int max_args = 0;
+    switch (ast->kind) {
+    case HD_AST_BLOCK:
+        for (uint32_t i = 0; i < ast->n_stmts; i++) {
+            int child_max = mir_count_max_args(ast->stmts[i]);
+            if (child_max > max_args) max_args = child_max;
+        }
+        break;
+    case HD_AST_FUNC_DECL:
+        /* Recurse into function body */
+        if (ast->body) {
+            int child_max = mir_count_max_args(ast->body);
+            if (child_max > max_args) max_args = child_max;
+        }
+        break;
+    case HD_AST_FUNC_CALL:
+        /* Count arguments in this call */
+        if (ast->n_args > (uint32_t)max_args) max_args = ast->n_args;
+        /* Also check the callee expression */
+        if (ast->child) {
+            int callee_max = mir_count_max_args(ast->child);
+            if (callee_max > max_args) max_args = callee_max;
+        }
+        /* Count arguments too */
+        for (int i = 0; i < ast->n_args; i++)
+            if (ast->args[i]) {
+                int arg_max = mir_count_max_args(ast->args[i]);
+                if (arg_max > max_args) max_args = arg_max;
+            }
+        break;
+    default:
+        /* For binary/unary ops, check children */
+        if (ast->left) {
+            int left_max = mir_count_max_args(ast->left);
+            if (left_max > max_args) max_args = left_max;
+        }
+        if (ast->right) {
+            int right_max = mir_count_max_args(ast->right);
+            if (right_max > max_args) max_args = right_max;
+        }
+        if (ast->child) {
+            int child_max = mir_count_max_args(ast->child);
+            if (child_max > max_args) max_args = child_max;
+        }
+        if (ast->cond) {
+            int cond_max = mir_count_max_args(ast->cond);
+            if (cond_max > max_args) max_args = cond_max;
+        }
+        if (ast->body) {
+            int body_max = mir_count_max_args(ast->body);
+            if (body_max > max_args) max_args = body_max;
+        }
+        if (ast->init) {
+            int init_max = mir_count_max_args(ast->init);
+            if (init_max > max_args) max_args = init_max;
+        }
+        if (ast->then_branch) {
+            int then_max = mir_count_max_args(ast->then_branch);
+            if (then_max > max_args) max_args = then_max;
+        }
+        if (ast->else_branch) {
+            int else_max = mir_count_max_args(ast->else_branch);
+            if (else_max > max_args) max_args = else_max;
+        }
+        if (ast->stmts) {
+            for (uint32_t i = 0; i < ast->n_stmts; i++) {
+                int stmt_max = mir_count_max_args(ast->stmts[i]);
+                if (stmt_max > max_args) max_args = stmt_max;
+            }
+        }
+        break;
+    }
+    if (max_args > MIR_MAX_CALL_ARGS) max_args = MIR_MAX_CALL_ARGS;
+    return max_args;
+}
+
 /* Is a comparison operand unsigned? Check the symbol table (var decl) or
  * the node's own type annotation (mirrors the golden JIT's expr_static_type). */
 static int mir_operand_is_unsigned(HDMirGen *g, const HDASTNode *operand) {
@@ -1448,6 +1528,14 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
     /* Phase 1: collect top-level function definitions into the func table
      * (assign stable ids so CALL sites resolve regardless of order). */
     mir_collect_funcs(&g, ast);
+
+    /* Phase 1b: determine max args in the program and pre-allocate argument VRs.
+     * v1..vN are pre-assigned to physical regs 1..N (capped at 6 per ABI). */
+    int max_args = mir_count_max_args(ast);
+    if (getenv("WUBU_DEBUG_REGS")) {
+        fprintf(stderr, "[DEBUG_REGS] mir_count_max_args=%d\n", max_args);
+    }
+    wubu_mir_set_n_args(prog, (uint32_t)max_args);
 
     /* Phase 2: generate top-level (module) statements, skipping function
      * definitions (their bodies are emitted separately in Phase 3).
