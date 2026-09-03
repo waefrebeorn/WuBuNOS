@@ -121,6 +121,37 @@ static int mir_struct_member_offset(HDMirGen *g, const char *struct_name, const 
     return -1;
 }
 
+/* Resolve the struct type name for the left side of a DOT expression.
+ * Handles: direct struct-typed nodes, IDENT vars (via var table), and
+ * CALL/FUNC_CALL nodes (by looking up the callee function's return type). */
+static const char *mir_dot_struct_type(HDMirGen *g, const HDASTNode *left) {
+    if (!left) return NULL;
+    /* Direct type annotation on the node */
+    if (left->type && left->type->kind == HD_TYPE_STRUCT && left->type->name[0])
+        return left->type->name;
+    /* IDENT: look up in var table */
+    if (left->kind == HD_AST_IDENT && left->ident[0]) {
+        for (int i = 0; i < g->n_vars; i++)
+            if (strcmp(g->vars[i].name, left->ident) == 0 && g->vars[i].is_struct)
+                return g->vars[i].struct_name;
+    }
+    /* CALL/FUNC_CALL: look up callee function's return type */
+    if (left->kind == HD_AST_CALL || left->kind == HD_AST_FUNC_CALL) {
+        if (left->callee && left->callee->kind == HD_AST_IDENT && left->callee->ident[0]) {
+            for (int i = 0; i < g->n_funcs; i++) {
+                if (strcmp(g->func_ast[i]->ident, left->callee->ident) == 0) {
+                    HDASTNode *fn = (HDASTNode *)g->func_ast[i];
+                    /* fn->type IS the return type for HD_AST_FUNC_DECL */
+                    if (fn && fn->type && fn->type->kind == HD_TYPE_STRUCT && fn->type->name[0])
+                        return fn->type->name;
+                    break;
+                }
+            }
+        }
+    }
+    return NULL;
+}
+
 /* Get the byte offset of the e-th member of a struct by position. */
 static int mir_struct_member_offset_by_index(HDMirGen *g, const char *struct_name, int index) {
     mir_struct_t *s = mir_find_struct(g, struct_name);
@@ -145,6 +176,13 @@ static const char *mir_find_var_struct_name(HDMirGen *g, const char *name) {
 static int mir_var_is_array(HDMirGen *g, const char *name) {
     for (int i = 0; i < g->n_vars; i++)
         if (strcmp(g->vars[i].name, name) == 0) return g->vars[i].is_array;
+    return 0;
+}
+
+/* symbol table: is the named variable a struct? */
+static int mir_var_is_struct(HDMirGen *g, const char *name) {
+    for (int i = 0; i < g->n_vars; i++)
+        if (strcmp(g->vars[i].name, name) == 0) return g->vars[i].is_struct;
     return 0;
 }
 
@@ -411,6 +449,13 @@ static wubu_vr_t mir_address_of(HDMirGen *g, const HDASTNode *n) {
     }
     if (n->kind == HD_AST_DEREF)
         return mir_gen_expr(g, n->child);      /* *p: address is p's value */
+    if (n->kind == HD_AST_CALL || n->kind == HD_AST_FUNC_CALL) {
+        /* A call returning a struct yields the struct address in its result vr */
+        wubu_vr_t rv = mir_gen_expr(g, n);
+        if (rv == 0) return 0;
+        /* The vr holds the address; the address IS the value */
+        return rv;
+    }
     if (n->kind == HD_AST_INDEX) {
         wubu_vr_t base = mir_address_of(g, n->left);
         wubu_vr_t idx  = mir_gen_expr(g, n->right);
@@ -425,8 +470,23 @@ static wubu_vr_t mir_address_of(HDMirGen *g, const HDASTNode *n) {
         const char *varname = n->left && n->left->kind == HD_AST_IDENT ? n->left->ident : NULL;
         if (varname) {
             wubu_vr_t base = mir_find_var_addr(g, varname);
-            if (base == 0) return 0;
             const char *struct_type = mir_find_var_struct_name(g, varname);
+            int offset = mir_struct_member_offset(g, struct_type ? struct_type : "", n->ident);
+            if (offset < 0) return 0;
+            wubu_vr_t member_addr = wubu_mir_binop(g->prog, MIR_ADD, base, wubu_mir_const(g->prog, (int64_t)offset));
+            return wubu_mir_load(g->prog, member_addr);
+        }
+        /* Fallback: left side is a CALL or other expr returning a struct address */
+        if (n->left && n->ident[0]) {
+            wubu_vr_t base;
+            if (n->left->kind == HD_AST_CALL || n->left->kind == HD_AST_FUNC_CALL) {
+                /* Generate the call once — its return vr holds the struct address */
+                base = mir_gen_expr(g, n->left);
+            } else {
+                base = mir_address_of(g, n);
+            }
+            if (base == 0) return 0;
+            const char *struct_type = mir_dot_struct_type(g, n->left);
             int offset = mir_struct_member_offset(g, struct_type ? struct_type : "", n->ident);
             if (offset < 0) return 0;
             wubu_vr_t member_addr = wubu_mir_binop(g->prog, MIR_ADD, base, wubu_mir_const(g->prog, (int64_t)offset));
@@ -476,6 +536,15 @@ static wubu_vr_t mir_lvalue_addr(HDMirGen *g, const HDASTNode *n) {
             wubu_vr_t base = mir_find_var_addr(g, varname);
             if (base == 0) return 0;
             const char *struct_type = mir_find_var_struct_name(g, varname);
+            int offset = mir_struct_member_offset(g, struct_type ? struct_type : "", n->ident);
+            if (offset < 0) return 0;
+            return wubu_mir_binop(g->prog, MIR_ADD, base, wubu_mir_const(g->prog, (int64_t)offset));
+        }
+        /* Fallback: left side is a CALL or other expr returning struct addr */
+        if (n->left && n->ident[0]) {
+            wubu_vr_t base = mir_address_of(g, n->left);
+            if (base == 0) return 0;
+            const char *struct_type = mir_dot_struct_type(g, n->left);
             int offset = mir_struct_member_offset(g, struct_type ? struct_type : "", n->ident);
             if (offset < 0) return 0;
             return wubu_mir_binop(g->prog, MIR_ADD, base, wubu_mir_const(g->prog, (int64_t)offset));
@@ -549,7 +618,7 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
                     s->n_members++;
                 }
             }
-            s->total_size = (int)n->type->size;  /* size in int64 cells */
+            s->total_size = (int)((n->type->size + 7) / 8);  /* convert bytes to int64 cells */
         }
         return 0;
     }
@@ -591,7 +660,7 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
                 if (struct_size > 0) arr_size = struct_size;
                 /* If struct size not found, use member count from AST type */
                 if (struct_size == 0 && n->type && n->type->n_members > 0) {
-                    arr_size = (int)n->type->size;  /* size in int64 cells */
+                    arr_size = (int)((n->type->size + 7) / 8);  /* bytes -> cells */
                     /* Register unnamed struct type so member lookups work */
                     if (g->n_structs < MAX_STRUCTS) {
                         mir_struct_t *s = &g->structs[g->n_structs++];
@@ -604,7 +673,7 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
                             s->member_is_unsigned[mi] = (n->type->members[mi].type && (n->type->members[mi].type->kind == HD_TYPE_U8 || n->type->members[mi].type->kind == HD_TYPE_U16 || n->type->members[mi].type->kind == HD_TYPE_U32 || n->type->members[mi].type->kind == HD_TYPE_U64)) ? 1 : 0;
                             s->n_members++;
                         }
-                        s->total_size = (int)n->type->size;  /* size in int64 cells */
+                        s->total_size = (int)((n->type->size + 7) / 8);  /* bytes -> cells */
                     }
                 }
             }
@@ -740,9 +809,6 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
                             wubu_mir_store(g->prog, addr, val);
                         }
                     } else {
-                        /* Non-IDENT init (e.g. call returning struct): evaluate
-                         * and copy the struct data cell-by-cell from the
-                         * returned address to the local struct's memory. */
                         wubu_vr_t val = mir_gen_expr(g, n->init);
                         if (arr_size > 0 && val != 0) {
                             for (int m = 0; m < arr_size; m++) {
@@ -766,6 +832,20 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
     case HD_AST_EXPR_STMT:
         return mir_gen_expr(g, n->child);
     case HD_AST_RETURN: {
+        /* For struct returns, v0 must hold the struct's address, not its first cell value */
+        int is_struct_ret = 0;
+        if (n->child && n->child->type && n->child->type->kind == HD_TYPE_STRUCT)
+            is_struct_ret = 1;
+        else if (n->child && n->child->kind == HD_AST_IDENT && n->child->ident[0])
+            is_struct_ret = mir_var_is_struct(g, n->child->ident);
+        if (is_struct_ret) {
+            wubu_vr_t addr = mir_address_of(g, n->child);
+            if (addr != 0) {
+                wubu_mir_mov_to(g->prog, 0, addr);
+                wubu_mir_ret(g->prog, 0);
+                return addr;
+            }
+        }
         wubu_vr_t val = n->child ? mir_gen_expr(g, n->child) : wubu_mir_const(g->prog, 0);
         /* Always emit a direct RET. This ensures that code after a return
          * (e.g. in a block) doesn't overwrite the return value. */
@@ -930,8 +1010,15 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
     case HD_AST_ASSIGN: {
         wubu_vr_t val = mir_gen_expr(g, n->right);
         wubu_vr_t addr = mir_lvalue_addr(g, n->left);
-        /* Handle struct-to-struct assignment: need to copy memory, not scalar */
-        if (addr && n->left->type && n->left->type->kind == HD_TYPE_STRUCT) {
+        /* Handle struct-to-struct assignment: need to copy memory, not scalar.
+         * Check both the AST node type and the var table (for globals where
+         * type info may not be propagated to the IDENT node). */
+        int left_is_struct = 0;
+        if (n->left && n->left->type && n->left->type->kind == HD_TYPE_STRUCT)
+            left_is_struct = 1;
+        else if (n->left && n->left->kind == HD_AST_IDENT && n->left->ident[0])
+            left_is_struct = mir_var_is_struct(g, n->left->ident);
+        if (addr && left_is_struct) {
             /* Get the size of the struct */
             int struct_size = 0;
             const char *struct_name = NULL;
@@ -948,6 +1035,16 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             if (struct_name) {
                 mir_struct_t *s = mir_find_struct(g, struct_name);
                 if (s) struct_size = s->total_size;
+            }
+            /* Fallback: if struct_name lookup failed but we know it's a struct
+             * from the var table, try to get size from the var's array_size */
+            if (struct_size <= 0 && n->left && n->left->kind == HD_AST_IDENT && n->left->ident[0]) {
+                for (int i = 0; i < g->n_vars; i++) {
+                    if (strcmp(g->vars[i].name, n->left->ident) == 0 && g->vars[i].is_struct) {
+                        struct_size = g->vars[i].array_size;
+                        break;
+                    }
+                }
             }
             if (struct_size > 0) {
                 /* Get source address: if RHS is a call returning struct, val is the source addr.
@@ -1625,9 +1722,6 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
     /* Phase 1b: determine max args in the program and pre-allocate argument VRs.
      * v1..vN are pre-assigned to physical regs 1..N (capped at 6 per ABI). */
     int max_args = mir_count_max_args(ast);
-    if (getenv("WUBU_DEBUG_REGS")) {
-        fprintf(stderr, "[DEBUG_REGS] mir_count_max_args=%d\n", max_args);
-    }
     wubu_mir_set_n_args(prog, (uint32_t)max_args);
 
     /* Phase 2: generate top-level (module) statements, skipping function
