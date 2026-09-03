@@ -457,8 +457,8 @@ op_ret:
 op_call:
     {
         if (in->func_id < (uint32_t)p->n_funcs && call_sp < MIR_MAX_CALL_DEPTH) {
-            /* snapshot caller state so the callee (which reuses the
-             * same absolute vrs / memory) cannot clobber it. */
+            /* snapshot caller state so the callee (which reuses
+             * the same absolute vrs / memory) cannot clobber it. */
             call_frame_t *f = &call_stack[call_sp++];
             f->ret_pc = pc + 1;
             f->vr_save = (int64_t *)malloc(((size_t)max_vr + 1) * sizeof(int64_t));

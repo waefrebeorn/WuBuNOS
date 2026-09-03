@@ -88,6 +88,7 @@ static const Probe PROBES[] = {
     {"do-while", "int i=0; do{i++;}while(i<3); i;", 3},
     {"float add", "float a=1.5; float b=2.5; a+b;", 1082130432},
     {"nested struct", "struct A{int x;}; struct A a; a.x=42; a.x;", 42},
+    {"struct return", "struct A{int x;}; struct A f(int v){struct A r; r.x=v; return r;} struct A t; t=f(7); t.x;", 7},
     {"multi-arg call", "int f(int a,int b,int c){return a+b+c;} f(10,20,12);", 42},
     {"deep nest", "int f(int x){return x+1;} f(f(f(f(f(0)))));", 5},
     {"scope shadow", "int x=1; {int x=2; x;} x;", 1},

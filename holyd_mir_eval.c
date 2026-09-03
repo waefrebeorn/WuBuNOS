@@ -443,6 +443,8 @@ static wubu_vr_t mir_address_of(HDMirGen *g, const HDASTNode *n) {
     if (n->kind == HD_AST_IDENT) {
         wubu_vr_t addr = mir_find_var_addr(g, n->ident);
         if (addr == 0) return 0;
+        if (mir_var_is_struct(g, n->ident))
+            return addr;                        /* structs: addr IS the address */
         if (mir_var_is_array(g, n->ident))
             return addr;                       /* &a[0] == a's base */
         return wubu_mir_load(g->prog, addr);   /* a[0] is a pointer var: load it */
@@ -839,11 +841,43 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
         else if (n->child && n->child->kind == HD_AST_IDENT && n->child->ident[0])
             is_struct_ret = mir_var_is_struct(g, n->child->ident);
         if (is_struct_ret) {
-            wubu_vr_t addr = mir_address_of(g, n->child);
-            if (addr != 0) {
-                wubu_mir_mov_to(g->prog, 0, addr);
+            /* Struct return: allocate a persistent static buffer, copy the
+             * struct into it, and return the buffer's address in v0. The
+             * buffer outlives the callee's stack frame, so the caller can
+             * safely read from it. For multi-cell structs, we serialize into
+             * a global static array indexed by g->struct_ret_count. */
+            wubu_vr_t src_addr = mir_address_of(g, n->child);
+            if (src_addr != 0) {
+                const char *ret_struct_name = NULL;
+                if (n->child && n->child->type && n->child->type->kind == HD_TYPE_STRUCT && n->child->type->name[0])
+                    ret_struct_name = n->child->type->name;
+                else if (n->child && n->child->kind == HD_AST_IDENT && n->child->ident[0])
+                    ret_struct_name = mir_find_var_struct_name(g, n->child->ident);
+                int ret_struct_size = 1;
+                if (ret_struct_name) {
+                    mir_struct_t *rs = mir_find_struct(g, ret_struct_name);
+                    if (rs && rs->total_size > 0) ret_struct_size = rs->total_size;
+                }
+                /* Allocate a persistent buffer in the MIR's global memory space.
+                 * Unlike stack-allocated locals, this survives the callee's return. */
+                wubu_vr_t buf_addr = wubu_mir_alloc(g->prog, ret_struct_size);
+                /* Copy ret_struct_size cells from src_addr to buf_addr. */
+                wubu_vr_t src_base = mir_new_vr(g);
+                wubu_mir_mov_to(g->prog, src_base, src_addr);
+                wubu_vr_t dst_base = mir_new_vr(g);
+                wubu_mir_mov_to(g->prog, dst_base, buf_addr);
+                for (int m = 0; m < ret_struct_size; m++) {
+                    wubu_vr_t src_p = wubu_mir_binop(g->prog, MIR_ADD, src_base, wubu_mir_const(g->prog, (int64_t)m));
+                    wubu_vr_t dst_p = wubu_mir_binop(g->prog, MIR_ADD, dst_base, wubu_mir_const(g->prog, (int64_t)m));
+                    wubu_mir_store(g->prog, dst_p, wubu_mir_load(g->prog, src_p));
+                }
+                wubu_mir_mov_to(g->prog, g->fn_ret_vr, buf_addr);
+                wubu_mir_mov_to(g->prog, 0, buf_addr);
+                /* For struct returns, bypass the epilogue (which would
+                 * overwrite v0 with the default fn_ret_vr=0). Emit a direct
+                 * ret so the caller's v0 holds buf_addr. */
                 wubu_mir_ret(g->prog, 0);
-                return addr;
+                return buf_addr;
             }
         }
         wubu_vr_t val = n->child ? mir_gen_expr(g, n->child) : wubu_mir_const(g->prog, 0);
@@ -1056,24 +1090,25 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                     /* val IS the source address (from call return or struct expr) */
                     src_addr = val;
                 }
-                /* Copy struct_size words from src_addr to addr */
+                /* Copy struct_size words from src_addr to addr.
+                 * Loop while i < struct_size: jz exits when (i < struct_size) == 0,
+                 * i.e. when i >= struct_size. */
                 wubu_vr_t src_base = mir_new_vr(g);
                 wubu_mir_mov_to(g->prog, src_base, src_addr);
                 wubu_vr_t dst_base = mir_new_vr(g);
                 wubu_mir_mov_to(g->prog, dst_base, addr);
                 wubu_vr_t i_vr = mir_new_vr(g);
                 wubu_mir_const_to(g->prog, i_vr, 0);
-                wubu_vr_t zero = wubu_mir_const(g->prog, 0);
                 uint32_t copy_label = wubu_mir_new_label(g->prog);
                 uint32_t end_label = wubu_mir_new_label(g->prog);
                 wubu_mir_place_label(g->prog, copy_label);
-                wubu_mir_jz(g->prog, wubu_mir_binop(g->prog, MIR_GE, i_vr, wubu_mir_const(g->prog, struct_size)), end_label);
+                /* jnz exits when (i >= struct_size) — i.e. loop is done. */
+                wubu_mir_jnz(g->prog, wubu_mir_binop(g->prog, MIR_GE, i_vr, wubu_mir_const(g->prog, (int64_t)struct_size)), end_label);
                 wubu_vr_t src_ptr = wubu_mir_binop(g->prog, MIR_ADD, src_base, i_vr);
                 wubu_vr_t dst_ptr = wubu_mir_binop(g->prog, MIR_ADD, dst_base, i_vr);
                 wubu_vr_t data = wubu_mir_load(g->prog, src_ptr);
                 wubu_mir_store(g->prog, dst_ptr, data);
                 wubu_mir_mov_to(g->prog, i_vr, wubu_mir_binop(g->prog, MIR_ADD, i_vr, wubu_mir_const(g->prog, 1)));
-                (void)zero;
                 wubu_mir_jmp(g->prog, copy_label);
                 wubu_mir_place_label(g->prog, end_label);
                 /* Return source address (struct return convention) */
