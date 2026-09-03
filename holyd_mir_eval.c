@@ -951,17 +951,24 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
     case HD_AST_AMP_ASSIGN:
     case HD_AST_PIPE_ASSIGN:
     case HD_AST_CARET_ASSIGN: {
-        /* left = left OP right — supports IDENT, INDEX (a[i]), DEREF (*p) */
+        /* left = left OP right — supports IDENT, INDEX (a[i]), DEREF (*p), MEMBER (s.f) */
         wubu_vr_t addr = mir_lvalue_addr(g, n->left);
         if (addr) {
             wubu_vr_t lhs = wubu_mir_load(g->prog, addr);
             wubu_vr_t rhs = mir_gen_expr(g, n->right);
+            /* Detect float operands so compound assign uses float MIR ops */
+            int is_float = (n->left && n->left->type && n->left->type->kind == HD_TYPE_F64) ||
+                           (n->right && n->right->type && n->right->type->kind == HD_TYPE_F64) ||
+                           (n->left && n->left->kind == HD_AST_IDENT && mir_find_var_is_float(g, n->left->ident)) ||
+                           (n->right && n->right->kind == HD_AST_IDENT && mir_find_var_is_float(g, n->right->ident)) ||
+                           (n->left && n->left->kind == HD_AST_FLOAT_LIT) ||
+                           (n->right && n->right->kind == HD_AST_FLOAT_LIT);
             wubu_mir_op_t op = MIR_ADD;
             switch (n->kind) {
-                case HD_AST_ADD_ASSIGN: op = MIR_ADD; break;
-                case HD_AST_SUB_ASSIGN: op = MIR_SUB; break;
-                case HD_AST_MUL_ASSIGN: op = MIR_MUL; break;
-                case HD_AST_DIV_ASSIGN: op = MIR_DIV; break;
+                case HD_AST_ADD_ASSIGN: op = is_float ? MIR_FADD : MIR_ADD; break;
+                case HD_AST_SUB_ASSIGN: op = is_float ? MIR_FSUB : MIR_SUB; break;
+                case HD_AST_MUL_ASSIGN: op = is_float ? MIR_FMUL : MIR_MUL; break;
+                case HD_AST_DIV_ASSIGN: op = is_float ? MIR_FDIV : MIR_DIV; break;
                 case HD_AST_MOD_ASSIGN: op = MIR_MOD; break;
                 case HD_AST_SHL_ASSIGN: op = MIR_SHL; break;
                 case HD_AST_SHR_ASSIGN: op = MIR_SHR; break;
@@ -1593,6 +1600,18 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
                     param_is_unsigned = 1;
             }
             mir_bind_var(&g, fn->param_names[pi], addr, addr, param_is_unsigned);
+            /* If the parameter is a struct by value, mark is_struct so member access works */
+            if (fn->param_types[pi] && fn->param_types[pi]->kind == HD_TYPE_STRUCT &&
+                fn->param_types[pi]->name[0]) {
+                for (int i = 0; i < g.n_vars; i++) {
+                    if (strcmp(g.vars[i].name, fn->param_names[pi]) == 0) {
+                        g.vars[i].is_struct = 1;
+                        strncpy(g.vars[i].struct_name, fn->param_types[pi]->name, HD_MAX_IDENT_LEN - 1);
+                        g.vars[i].struct_name[HD_MAX_IDENT_LEN - 1] = '\0';
+                        break;
+                    }
+                }
+            }
             /* For pointer-to-struct parameters, mark the variable so -> lookups work */
             if (fn->param_types[pi] && fn->param_types[pi]->kind == HD_TYPE_PTR && fn->param_types[pi]->base &&
                 (fn->param_types[pi]->base->kind == HD_TYPE_STRUCT || fn->param_types[pi]->base->kind == HD_TYPE_UNION)) {
