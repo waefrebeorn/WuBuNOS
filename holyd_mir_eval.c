@@ -1638,10 +1638,9 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
     }
 
     /* DEBUG: dump MIR before optimization */
-    if (getenv("WUBU_DEBUG_MIR")) {
-        for (size_t i = 0; i < prog->n; i++) {
-            const wubu_mir_instr_t *in = &prog->ins[i];
-        }
+    if (getenv("WUBU_DEBUG_MIR_BEFORE")) {
+        fprintf(stderr, "[DEBUG_MIR_BEFORE] ===\n");
+        wubu_mir_dump(prog);
     }
 
     /* Optimize the canonical MIR once (benefits ALL backends). Side-effect
@@ -1651,6 +1650,12 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
     wubu_mir_optimize(prog,
                       MIR_OPT_FOLD | MIR_OPT_STRENGTH | MIR_OPT_DCE |
                       MIR_OPT_COMBINE | MIR_OPT_CSE);
+
+    /* DEBUG: dump MIR after optimization */
+    if (getenv("WUBU_DEBUG_MIR_AFTER")) {
+        fprintf(stderr, "[DEBUG_MIR_AFTER] ===\n");
+        wubu_mir_dump(prog);
+    }
 
     free(pp);
     return 0;

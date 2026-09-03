@@ -105,9 +105,7 @@ static void emit_mov_vr_from_rax(x86_emitter_t *e, int vr_enc) {
 
 /* emit: mov rdi, vr_reg */
 static void emit_mov_rdi_from_vr(x86_emitter_t *e, int vr_enc) {
-    rex(e, 1, reg_needs_rex(vr_enc), 0, 1); /* dst=rdi(7 enc as 7, but rdi is reg 7 in modrm) */
-    /* Actually rdi=7, but we need REX.B=0, REX.R=reg_needs_rex(src) */
-    /* mov rdi, src: mod=11, reg=rdi=7, rm=src */
+    /* rdi x86 encoding is 7. mov rdi, src: REX.W=1, REX.R=reg_needs_rex(src), REX.B=0 */
     rex(e, 1, reg_needs_rex(vr_enc), 0, 0);
     e8(e, 0x89);
     e8(e, (uint8_t)(0xC0 | ((vr_enc & 7) << 3) | 7));

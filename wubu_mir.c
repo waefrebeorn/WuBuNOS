@@ -316,6 +316,14 @@ void wubu_mir_dump(const wubu_mir_prog_t *p)
             printf("  %-6s v%u == 0 -> L%u\n", op_name(in->op), in->a, in->label);
             continue;
         }
+        if (in->op == MIR_JNZ) {
+            printf("  %-6s v%u != 0 -> L%u\n", op_name(in->op), in->a, in->label);
+            continue;
+        }
+        if (in->op == MIR_CALL) {
+            printf("  %-6s f%u -> v%u\n", op_name(in->op), in->func_id, in->dst);
+            continue;
+        }
         if (in->op == MIR_RET) {
             printf("  %-6s v%u\n", op_name(in->op), in->a);
             continue;

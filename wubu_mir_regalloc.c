@@ -247,6 +247,14 @@ wubu_reg_assign_t *wubu_mir_alloc_regs(const wubu_mir_prog_t *p,
                 if (first_def[v] < read_inside) {
                     /* Normal case: write before read — extend last_use */
                     if (last_use[v] < read_inside) last_use[v] = read_inside;
+                    /* Also extend last_use to cover any CALL site in the caller
+                     * that invokes this callee. The caller's code between the
+                     * CALL and the restore may clobber the callee's registers. */
+                    for (size_t i = 0; i < n_ins; i++) {
+                        if (p->ins[i].op == MIR_CALL && p->ins[i].func_id == (uint32_t)f) {
+                            if (last_use[v] < (int32_t)i + 1) last_use[v] = (int32_t)(i + 1);
+                        }
+                    }
                 } else {
                     /* Reverse case: read before write (callee body before caller body)
                      * Extend first_def to before the read, and last_use to after the write */
@@ -254,6 +262,12 @@ wubu_reg_assign_t *wubu_mir_alloc_regs(const wubu_mir_prog_t *p,
                     if (last_use[v] < first_def[v]) last_use[v] = first_def[v];
                     /* Also extend to cover the actual write position */
                     if (last_use[v] < (int32_t)first_def[v] + 1) last_use[v] = (int32_t)first_def[v] + 1;
+                    /* Also extend last_use to cover any CALL site invoking this callee */
+                    for (size_t i = 0; i < n_ins; i++) {
+                        if (p->ins[i].op == MIR_CALL && p->ins[i].func_id == (uint32_t)f) {
+                            if (last_use[v] < (int32_t)i + 1) last_use[v] = (int32_t)(i + 1);
+                        }
+                    }
                 }
             }
         }
@@ -469,7 +483,7 @@ wubu_reg_assign_t *wubu_mir_alloc_regs(const wubu_mir_prog_t *p,
 
     if (out_count) *out_count = n_vr;
     if (getenv("WUBU_DEBUG_REGS")) {
-        for (size_t v = 0; v < n_vr && v < 15; v++) {
+        for (size_t v = 0; v < n_vr && v < 26; v++) {
             fprintf(stderr, "[DEBUG_REGS] assign[%zu] reg=%d stack=%d spill_after=%u\n",
                     v, assign[v].reg, assign[v].stack, assign[v].spill_after);
         }
