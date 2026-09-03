@@ -130,7 +130,7 @@ size_t hd_type_size(const HDType *t) {
         case HD_TYPE_I64:  case HD_TYPE_U64: case HD_TYPE_F64:  return 8;
         case HD_TYPE_PTR:  return 8;
         case HD_TYPE_ARRAY: return t->base ? hd_type_size(t->base) * (size_t)t->array_size : 0;
-        case HD_TYPE_STRUCT: return t->size > 0 ? t->size : 8;
+        case HD_TYPE_STRUCT: return t->size > 0 ? (size_t)(t->size * 8) : 8;
         default: return 8;
     }
 }

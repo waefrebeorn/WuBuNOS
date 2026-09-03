@@ -291,8 +291,8 @@ static HDType *parse_type(HDParser *p) {
                             if ((int64_t)msz > max_align) max_align = (int)msz;
                         } else {
                             t->members[t->n_members].offset = t->size;
-                            t->size += 1;  /* each member = 1 int64 cell in MIR memory */
-                            t->align = 1;  /* all members are 1 cell (8 bytes) */
+                            t->size += (int)((msz + 7) / 8);  /* member size in int64 cells */
+                            t->align = 1;
                         }
                         t->members[t->n_members].type = member_type;
                         t->n_members++;
@@ -310,7 +310,8 @@ static HDType *parse_type(HDParser *p) {
                                 t->members[t->n_members].offset = 0;
                             } else {
                                 t->members[t->n_members].offset = t->size;
-                                t->size += 1;
+                                size_t _msz = hd_type_size(member_type);
+                                t->size += (int)((_msz + 7) / 8);  /* member size in int64 cells */
                                 t->align = 1;
                             }
                             t->members[t->n_members].type = member_type;
