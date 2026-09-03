@@ -519,9 +519,12 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
         wubu_vr_t last = 0;
         for (uint32_t i = 0; i < n->n_stmts; i++) {
             last = mir_gen_stmt(g, n->stmts[i]);
-            /* If this top-level statement is a RETURN or GOTO, subsequent
+            /* If this top-level statement is a RETURN, subsequent
              * statements are unreachable. Stop generating them. */
-            if (n->stmts[i]->kind == HD_AST_RETURN || n->stmts[i]->kind == HD_AST_GOTO) break;
+            if (n->stmts[i]->kind == HD_AST_RETURN) break;
+            /* Note: GOTO should NOT break — the label target may be
+                 * defined later in the same block, and we still need to
+                 * emit those statements. */
         }
         /* Pop scope: remove vars added in this block so outer scope is restored */
         if (pushed)
@@ -1258,12 +1261,13 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         return wubu_mir_load(g->prog, addr);
     }
     case HD_AST_ADDR: {
-        /* &x -> the memory base address of x */
+        /* &x -> the memory address of x (lvalue address-of) */
         if (n->child && n->child->kind == HD_AST_IDENT) {
             wubu_vr_t addr = mir_find_var_addr(g, n->child->ident);
             if (addr) return addr;
         }
-        return wubu_mir_const(g->prog, 0);
+        /* For &s[i], &*p, &s->member, &s.member: delegate to mir_address_of */
+        return mir_address_of(g, n->child);
     }
     case HD_AST_DEREF: {
         /* *p -> load from address held in p */
