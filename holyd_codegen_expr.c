@@ -370,9 +370,9 @@ static int emit_lvalue_addr(HDGen *gen, const HDASTNode *node)
                 }
             }
             if (off != 0) {
-                /* add rax, imm32 */
+                /* add rax, imm32 — offset is in cells, convert to bytes */
                 emit_byte(gen, 0x48); emit_byte(gen, 0x05);
-                emit_dword(gen, (uint32_t)off);
+                emit_dword(gen, (uint32_t)(off * 8));
             }
             return 1;
         }
@@ -1297,7 +1297,11 @@ int gen_expr(HDGen *gen, const HDASTNode *node) {
              * the scalar value to store). */
             gen_expr(gen, node->right);
             HDType *lt = node->left ? expr_static_type(gen, node->left) : NULL;
-            int lhs_sz = (lt && lt->kind == HD_TYPE_STRUCT) ? (int)hd_type_size(lt) : 0;
+            int lhs_sz = 0;
+            if (lt && lt->kind == HD_TYPE_STRUCT) {
+                lhs_sz = lt->size * 8;
+                if (lhs_sz <= 0) lhs_sz = (int)hd_type_size(lt);
+            }
             /* If LHS is a struct IDENT and the RHS expression is a CALL
              * (rax currently holds the callee's &ret-slot), do a rep movsb
              * copy. If RHS is also a struct literal/IDENT, the current
@@ -1440,8 +1444,12 @@ int gen_expr(HDGen *gen, const HDASTNode *node) {
                      * (its param prologue deref-copies). Emit the address,
                      * not the packed value. */
                     HDType *arg_t = expr_static_type(gen, node->args[i]);
-                    if (arg_t && arg_t->kind == HD_TYPE_STRUCT &&
-                        hd_type_size(arg_t) > 8) {
+                    /* Struct-by-value arg: always pass by address (the callee
+                     * does rep movsb to copy). This handles both small structs
+                     * (≤8B packed) and large structs uniformly. The stack layout
+                     * is cell-aligned (8B per member), so we must pass the address
+                     * and let the callee copy the right number of bytes. */
+                    if (arg_t && arg_t->kind == HD_TYPE_STRUCT) {
                         emit_base_addr(gen, node->args[i]);
                     } else {
                         gen_expr(gen, node->args[i]);
@@ -1551,7 +1559,7 @@ int gen_expr(HDGen *gen, const HDASTNode *node) {
                 bool found = false;
                 for (int i = 0; i < st->n_members; i++) {
                     if (strcmp(st->members[i].name, node->ident) == 0) {
-                        int off = (int)st->members[i].offset;
+                        int off = (int)st->members[i].offset * 8;  /* cells→bytes */
                         int msz = st->members[i].type
                                       ? (int)hd_type_size(st->members[i].type)
                                       : 8;
@@ -1582,7 +1590,7 @@ int gen_expr(HDGen *gen, const HDASTNode *node) {
                 bool found = false;
                 for (int i = 0; i < st->n_members; i++) {
                     if (strcmp(st->members[i].name, node->ident) == 0) {
-                        int off = (int)st->members[i].offset;
+                        int off = (int)st->members[i].offset * 8;  /* cells→bytes */
                         int msz = st->members[i].type
                                       ? (int)hd_type_size(st->members[i].type)
                                       : 8;

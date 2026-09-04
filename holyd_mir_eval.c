@@ -773,7 +773,7 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
                                 strncpy(s->member_type_names[mi], n->type->members[mi].type->name, HD_MAX_IDENT_LEN - 1);
                             s->n_members++;
                         }
-                        s->total_size = (int)n->type->size;  /* size in cells */
+                        s->total_size = (int)n->type->size;  /* size in int64 cells */
                         if (s->total_size <= 0) s->total_size = 1;
                     }
                 }

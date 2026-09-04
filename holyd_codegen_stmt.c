@@ -60,7 +60,15 @@ int gen_stmt(HDGen *gen, const HDASTNode *node) {
 
         case HD_AST_RETURN: {
             HDType *ret_t = node->child ? expr_static_type(gen, node->child) : NULL;
-            int ret_sz = (ret_t && ret_t->kind == HD_TYPE_STRUCT) ? (int)hd_type_size(ret_t) : 0;
+            int ret_sz = 0;
+            if (ret_t && ret_t->kind == HD_TYPE_STRUCT) {
+                /* Use the padded cell-count for rep movsb — the stack layout
+                 * is cell-aligned (8 bytes per member), so the copy size must
+                 * match. hd_type_size() returns the packed byte size which
+                 * under-counts for structs with sub-8-byte members. */
+                ret_sz = ret_t->size * 8;
+                if (ret_sz <= 0) ret_sz = (int)hd_type_size(ret_t);
+            }
             /* Struct-by-value return: memcpy the local struct into a
              * 16-byte-aligned .data slot, return rax=&slot. The caller does
              * the matching rep movsb on ASSIGN. Works for ANY struct size
@@ -337,8 +345,13 @@ int gen_stmt(HDGen *gen, const HDASTNode *node) {
                      * pointed at garbage and crashed. */
                     int size = 8;
                     if (node->type) {
-                        size_t tsz = hd_type_size(node->type);
-                        if (tsz > 0) size = (int)tsz;
+                        if (node->type->kind == HD_TYPE_STRUCT) {
+                            size = (int)(node->type->size * 8);
+                            if (size <= 0) size = (int)hd_type_size(node->type);
+                        } else {
+                            size_t tsz = hd_type_size(node->type);
+                            if (tsz > 0) size = (int)tsz;
+                        }
                     }
                     /* A struct/array local must reserve its FULL size, not
                      * 8 bytes, or a member beyond offset 8 (`s.c`) writes
@@ -455,8 +468,15 @@ int gen_stmt(HDGen *gen, const HDASTNode *node) {
                  * keep the 8-byte slot. */
                 size_t psz = 8;
                 if (node->param_types && node->param_types[i]) {
-                    size_t ts = hd_type_size(node->param_types[i]);
-                    if (ts > 8) psz = (ts + 7) & ~(size_t)7;
+                    if (node->param_types[i]->kind == HD_TYPE_STRUCT) {
+                        /* Use padded cell-count for struct params — the caller
+                         * passes by address and the callee copies the full
+                         * cell-aligned struct. */
+                        psz = (node->param_types[i]->size > 0 ? node->param_types[i]->size : 1) * 8;
+                    } else {
+                        size_t ts = hd_type_size(node->param_types[i]);
+                        if (ts > 8) psz = (ts + 7) & ~(size_t)7;
+                    }
                 }
                 int offset = gen->symbols.stack_size + (int)psz;
                 gen->symbols.stack_size += (int)psz;
@@ -530,9 +550,12 @@ int gen_stmt(HDGen *gen, const HDASTNode *node) {
             for (int i = 0; i < node->n_params; i++) {
                 if (!(node->param_types && node->param_types[i])) continue;
                 HDType *pt = node->param_types[i];
-                if (pt && pt->kind == HD_TYPE_STRUCT && hd_type_size(pt) > 8) {
+                if (pt && pt->kind == HD_TYPE_STRUCT) {
                     int off = gen->symbols.locals[i].stack_offset;
-                    size_t psz = (hd_type_size(pt) + 7) & ~(size_t)7;
+                    /* Use padded size (cell-count * 8) for the copy — the
+                     * caller's struct is cell-aligned. */
+                    size_t psz = (pt->size > 0 ? (size_t)pt->size : 1) * 8;
+                    if (psz <= 0) psz = 8;
                     /* lea rdi, [rbp - off] */
                     emit_byte(gen, 0x48); emit_byte(gen, 0x8D); emit_byte(gen, 0xBD);
                     emit_dword(gen, (uint32_t)(-(int32_t)off & 0xFFFFFFFF));
