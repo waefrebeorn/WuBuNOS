@@ -1337,8 +1337,9 @@ int gen_expr(HDGen *gen, const HDASTNode *node) {
                 }
                 /* rax = &lhs */
                 emit_byte(gen, 0x5E);                              /* pop rsi (slot addr) */
-                /* xchg rax, rdi → rax = slot addr (returned), rdi = &lhs */
-                emit_byte(gen, 0x48); emit_byte(gen, 0x97);      /* xchg rax, rdi */
+                /* rax currently holds &lhs (from lea), rsi = slot addr (from pop).
+                 * rep movsb copies FROM rsi TO rdi. Set rdi = &lhs. */
+                emit_byte(gen, 0x48); emit_byte(gen, 0x89); emit_byte(gen, 0xC7); /* mov rdi, rax */
                 /* mov rcx, lhs_sz */
                 emit_byte(gen, 0x48); emit_byte(gen, 0xC7); emit_byte(gen, 0xC1);
                 emit_dword(gen, (uint32_t)lhs_sz);
