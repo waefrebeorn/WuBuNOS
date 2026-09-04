@@ -290,7 +290,11 @@ static HDType *parse_type(HDParser *p) {
                             if ((int64_t)msz > max_size) max_size = (int64_t)msz;
                             if ((int64_t)msz > max_align) max_align = (int)msz;
                         } else {
-                            t->members[t->n_members].offset = t->size;
+                            /* Pack members tightly in bytes. t->size tracks byte offset.
+                             * Each member starts at the next byte offset (no per-member
+                             * rounding). The total struct size is rounded up to cells
+                             * at the end (struct_done). */
+                            t->members[t->n_members].offset = t->size;  /* byte offset */
                             t->size += (int)((msz + 7) / 8);  /* member size in int64 cells */
                             t->align = 1;
                         }
@@ -309,7 +313,7 @@ static HDType *parse_type(HDParser *p) {
                             if (comp_kind == HD_TYPE_UNION) {
                                 t->members[t->n_members].offset = 0;
                             } else {
-                                t->members[t->n_members].offset = t->size;
+                                t->members[t->n_members].offset = t->size;  /* byte offset */
                                 size_t _msz = hd_type_size(member_type);
                                 t->size += (int)((_msz + 7) / 8);  /* member size in int64 cells */
                                 t->align = 1;

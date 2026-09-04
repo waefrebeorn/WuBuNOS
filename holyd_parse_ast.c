@@ -130,7 +130,28 @@ size_t hd_type_size(const HDType *t) {
         case HD_TYPE_I64:  case HD_TYPE_U64: case HD_TYPE_F64:  return 8;
         case HD_TYPE_PTR:  return 8;
         case HD_TYPE_ARRAY: return t->base ? hd_type_size(t->base) * (size_t)t->array_size : 0;
-        case HD_TYPE_STRUCT: return t->size > 0 ? (size_t)(t->size * 8) : 8;
+        case HD_TYPE_STRUCT: {
+            /* Compute actual packed byte size from member types.
+             * The parser stores t->size in cells (over-allocated), but
+             * the real byte size is the sum of member sizes.
+             * Alignment = max member alignment (simplified: use member's natural alignment). */
+            if (t->n_members > 0) {
+                int64_t total_bytes = 0;
+                int64_t max_align = 1;
+                for (int i = 0; i < t->n_members; i++) {
+                    size_t msz = hd_type_size(t->members[i].type);
+                    total_bytes += (int64_t)msz;
+                    /* Member alignment = its natural size (1,2,4,8) */
+                    int64_t mem_align = (int64_t)msz;
+                    if (mem_align > max_align) max_align = mem_align;
+                }
+                /* Round up to struct alignment */
+                if (total_bytes % max_align != 0)
+                    total_bytes += max_align - (total_bytes % max_align);
+                return (size_t)(total_bytes > 0 ? total_bytes : 8);
+            }
+            return t->size > 0 ? (size_t)(t->size * 8) : 8;
+        }
         default: return 8;
     }
 }
