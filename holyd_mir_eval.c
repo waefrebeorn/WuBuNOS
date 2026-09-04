@@ -137,7 +137,7 @@ static const char *mir_dot_struct_type(HDMirGen *g, const HDASTNode *left) {
     /* IDENT: look up in var table */
     if (left->kind == HD_AST_IDENT && left->ident[0]) {
         for (int i = 0; i < g->n_vars; i++)
-            if (strcmp(g->vars[i].name, left->ident) == 0 && g->vars[i].is_struct)
+            if (strcmp(g->vars[i].name, left->ident) == 0 && (g->vars[i].is_struct || g->vars[i].is_ptr_struct))
                 return g->vars[i].struct_name;
     }
     /* CALL/FUNC_CALL: look up callee function's return type */
@@ -188,20 +188,37 @@ static const char *mir_dot_struct_type(HDMirGen *g, const HDASTNode *left) {
             }
         }
     }
-    /* INDEX: arr[i] — look up the array's base type */
+    /* INDEX: arr[i] or p[i] — look up the element type from var table */
     if (left->kind == HD_AST_INDEX) {
         /* Traverse to find the root IDENT */
         const HDASTNode *root = left;
         while (root && root->kind == HD_AST_INDEX) root = root->left;
         if (root && root->kind == HD_AST_IDENT) {
             for (int i = 0; i < g->n_vars; i++) {
-                if (strcmp(g->vars[i].name, root->ident) == 0 && g->vars[i].is_array) {
-                    /* Check if this is a struct array (has struct_name set) */
-                    if (g->vars[i].struct_name[0]) {
+                if (strcmp(g->vars[i].name, root->ident) == 0) {
+                    /* Struct array or pointer-to-struct: return element struct type */
+                    if (g->vars[i].struct_name[0])
                         return g->vars[i].struct_name;
-                    }
                     break;
                 }
+            }
+        }
+    }
+    /* ADD/SUB: pointer arithmetic (p+1, p-1) — get struct type from left operand */
+    if (left->kind == HD_AST_ADD || left->kind == HD_AST_SUB) {
+        return mir_dot_struct_type(g, left->left);
+    }
+    /* DEREF: *p — get struct type from the pointer's pointee type */
+    if (left->kind == HD_AST_DEREF) {
+        if (left->child && left->child->type && left->child->type->kind == HD_TYPE_PTR
+            && left->child->type->base && left->child->type->base->kind == HD_TYPE_STRUCT
+            && left->child->type->base->name[0])
+            return left->child->type->base->name;
+        /* Also check IDENT vars */
+        if (left->child && left->child->kind == HD_AST_IDENT) {
+            for (int i = 0; i < g->n_vars; i++) {
+                if (strcmp(g->vars[i].name, left->child->ident) == 0 && g->vars[i].is_ptr_struct)
+                    return g->vars[i].struct_name;
             }
         }
     }
@@ -1187,6 +1204,9 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 /* If we couldn't find struct type from symbol table, try the node's type annotation */
                 if (!struct_type && n->left->type && n->left->type->kind == HD_TYPE_PTR && n->left->type->base)
                     struct_type = n->left->type->base->name;
+                /* Also try mir_dot_struct_type for complex expressions like (p+1)->a */
+                if (!struct_type)
+                    struct_type = mir_dot_struct_type(g, n->left);
                 /* Also handle &s->member where n->left is ADDR(s) */
                 if (!struct_type && n->left->kind == HD_AST_ADDR && n->left->child) {
                     const HDASTNode *addr_child = n->left->child;
@@ -1240,6 +1260,17 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                     struct_type = inner_struct_type;
                 } else if (n->left->kind == HD_AST_INDEX) {
                     /* arr[i].member: compute address of arr[i], then add member offset */
+                    base = mir_address_of(g, n->left);
+                    if (base == 0) return wubu_mir_const(g->prog, 0);
+                    struct_type = mir_dot_struct_type(g, n->left);
+                } else if (n->left->kind == HD_AST_DEREF) {
+                    /* (*p).member is equivalent to p->member.
+                     * Evaluate the pointer (child of DEREF) to get base address. */
+                    base = mir_gen_expr(g, n->left->child);
+                    if (base == 0) return wubu_mir_const(g->prog, 0);
+                    struct_type = mir_dot_struct_type(g, n->left->child);
+                } else if (n->left->kind == HD_AST_ADDR) {
+                    /* (&s)->member: evaluate &s to get address, use as base */
                     base = mir_address_of(g, n->left);
                     if (base == 0) return wubu_mir_const(g->prog, 0);
                     struct_type = mir_dot_struct_type(g, n->left);
