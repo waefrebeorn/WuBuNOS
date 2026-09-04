@@ -44,6 +44,7 @@ typedef struct {
     char member_names[MAX_MEMBERS][HD_MAX_IDENT_LEN];
     int member_offsets[MAX_MEMBERS];
     int member_is_unsigned[MAX_MEMBERS];
+    char member_type_names[MAX_MEMBERS][HD_MAX_IDENT_LEN]; /* struct type name if member is struct */
     int n_members;
     int total_size;
 } mir_struct_t;
@@ -145,6 +146,42 @@ static const char *mir_dot_struct_type(HDMirGen *g, const HDASTNode *left) {
                     if (fn && fn->type && fn->type->kind == HD_TYPE_STRUCT && fn->type->name[0])
                         return fn->type->name;
                     break;
+                }
+            }
+        }
+    }
+    /* DOT/MEMBER: q.p — look up p's type within q's struct type */
+    if (left->kind == HD_AST_DOT || left->kind == HD_AST_MEMBER) {
+        if (left->ident[0]) {
+            /* Get the struct type of the left side */
+            const char *outer_type = mir_dot_struct_type(g, left->left);
+            if (outer_type && outer_type[0]) {
+                /* Look up the member's type in the struct definition */
+                mir_struct_t *st = mir_find_struct(g, outer_type);
+                if (st) {
+                    for (int mi = 0; mi < st->n_members; mi++) {
+                        if (strcmp(st->member_names[mi], left->ident) == 0) {
+                            /* Found the member; return its type name if it's a struct */
+                            if (left->type && left->type->kind == HD_TYPE_STRUCT && left->type->name[0])
+                                return left->type->name;
+                            /* If member type is not directly available, try to infer from
+                             * the parser's type info stored in the DOT node */
+                            if (left->left && left->left->type && left->left->type->kind == HD_TYPE_STRUCT) {
+                                /* The parser may have member type info */
+                                HDType *parent_type = left->left->type;
+                                for (int pi = 0; pi < parent_type->n_members; pi++) {
+                                    if (strcmp(parent_type->members[pi].name, left->ident) == 0) {
+                                        if (parent_type->members[pi].type &&
+                                            parent_type->members[pi].type->kind == HD_TYPE_STRUCT &&
+                                            parent_type->members[pi].type->name[0])
+                                            return parent_type->members[pi].type->name;
+                                        break;
+                                    }
+                                }
+                            }
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -478,14 +515,67 @@ static wubu_vr_t mir_address_of(HDMirGen *g, const HDASTNode *n) {
             wubu_vr_t member_addr = wubu_mir_binop(g->prog, MIR_ADD, base, wubu_mir_const(g->prog, (int64_t)offset));
             return member_addr;
         }
-        /* Fallback: left side is a CALL or other expr returning a struct address */
+        /* Fallback: left side is a CALL, DOT, or other expr returning a struct address */
         if (n->left && n->ident[0]) {
             wubu_vr_t base;
             if (n->left->kind == HD_AST_CALL || n->left->kind == HD_AST_FUNC_CALL) {
                 /* Generate the call once — its return vr holds the struct address */
                 base = mir_gen_expr(g, n->left);
+            } else if (n->left->kind == HD_AST_DOT || n->left->kind == HD_AST_MEMBER) {
+                /* q.p.x: nested DOT — recursively compute address of q.p, then add x's offset.
+                 * Walk the DOT chain to find the root IDENT and accumulate offsets. */
+                const HDASTNode *dot = n;
+                int total_offset = 0;
+                /* Collect the chain of (struct_type, member_name) pairs from right to left */
+                char chain_types[16][HD_MAX_IDENT_LEN];
+                char chain_names[16][HD_MAX_IDENT_LEN];
+                int chain_offsets[16];
+                int chain_len = 0;
+                while (dot && (dot->kind == HD_AST_DOT || dot->kind == HD_AST_MEMBER)) {
+                    if (chain_len >= 16) break;
+                    strncpy(chain_names[chain_len], dot->ident, HD_MAX_IDENT_LEN - 1);
+                    chain_names[chain_len][HD_MAX_IDENT_LEN - 1] = '\0';
+                    chain_offsets[chain_len] = 0; /* will be filled in reverse */
+                    chain_len++;
+                    dot = dot->left;
+                }
+                /* Now dot should be the root IDENT (or CALL) */
+                const char *root_type = NULL;
+                if (dot && dot->kind == HD_AST_IDENT) {
+                    base = mir_find_var_addr(g, dot->ident);
+                    root_type = mir_find_var_struct_name(g, dot->ident);
+                } else if (dot && (dot->kind == HD_AST_CALL || dot->kind == HD_AST_FUNC_CALL)) {
+                    base = mir_gen_expr(g, dot);
+                    root_type = mir_dot_struct_type(g, dot);
+                } else {
+                    return 0;
+                }
+                /* Walk the chain from right to left, looking up each member's offset */
+                for (int ci = chain_len - 1; ci >= 0; ci--) {
+                    if (!root_type || !root_type[0]) return 0;
+                    mir_struct_t *st = mir_find_struct(g, root_type);
+                    if (!st) return 0;
+                    int off = -1;
+                    for (int mi = 0; mi < st->n_members; mi++) {
+                        if (strcmp(st->member_names[mi], chain_names[ci]) == 0) {
+                            off = st->member_offsets[mi];
+                            /* Update root_type for next iteration */
+                            if (st->member_type_names[mi][0])
+                                root_type = st->member_type_names[mi];
+                            else
+                                root_type = NULL;
+                            break;
+                        }
+                    }
+                    if (off < 0) return 0;
+                    total_offset += off;
+                }
+                if (total_offset > 0) {
+                    base = wubu_mir_binop(g->prog, MIR_ADD, base, wubu_mir_const(g->prog, (int64_t)total_offset));
+                }
+                return base;
             } else {
-                base = mir_address_of(g, n);
+                base = mir_address_of(g, n->left);
             }
             if (base == 0) return 0;
             const char *struct_type = mir_dot_struct_type(g, n->left);
@@ -617,6 +707,8 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
                     s->member_names[s->n_members][HD_MAX_IDENT_LEN - 1] = '\0';
                     s->member_offsets[s->n_members] = (int)n->type->members[i].offset;
                     s->member_is_unsigned[s->n_members] = (n->type->members[i].type && (n->type->members[i].type->kind == HD_TYPE_U8 || n->type->members[i].type->kind == HD_TYPE_U16 || n->type->members[i].type->kind == HD_TYPE_U32 || n->type->members[i].type->kind == HD_TYPE_U64)) ? 1 : 0;
+                    if (n->type->members[i].type && n->type->members[i].type->kind == HD_TYPE_STRUCT && n->type->members[i].type->name[0])
+                        strncpy(s->member_type_names[s->n_members], n->type->members[i].type->name, HD_MAX_IDENT_LEN - 1);
                     s->n_members++;
                 }
             }
@@ -675,6 +767,8 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
                             s->member_names[mi][HD_MAX_IDENT_LEN - 1] = '\0';
                             s->member_offsets[mi] = (int)n->type->members[mi].offset;
                             s->member_is_unsigned[mi] = (n->type->members[mi].type && (n->type->members[mi].type->kind == HD_TYPE_U8 || n->type->members[mi].type->kind == HD_TYPE_U16 || n->type->members[mi].type->kind == HD_TYPE_U32 || n->type->members[mi].type->kind == HD_TYPE_U64)) ? 1 : 0;
+                            if (n->type->members[mi].type && n->type->members[mi].type->kind == HD_TYPE_STRUCT && n->type->members[mi].type->name[0])
+                                strncpy(s->member_type_names[mi], n->type->members[mi].type->name, HD_MAX_IDENT_LEN - 1);
                             s->n_members++;
                         }
                         s->total_size = (int)n->type->size;  /* size in cells */
@@ -1041,6 +1135,27 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                     if (base == 0) return wubu_mir_const(g->prog, 0);
                     /* Look up struct type from the call's return type */
                     struct_type = mir_dot_struct_type(g, n->left);
+                } else if (n->left->kind == HD_AST_DOT || n->left->kind == HD_AST_MEMBER) {
+                    /* q.p.x: nested struct member — recursively compute address of q.p,
+                     * then add offset of x within p's struct type */
+                    const char *inner_struct_type = mir_dot_struct_type(g, n->left);
+                    int inner_offset = mir_struct_member_offset(g, inner_struct_type ? inner_struct_type : "", n->left->ident);
+                    /* Get base address of the root variable */
+                    /* Walk left spine to find root IDENT */
+                    const HDASTNode *dot_node = n->left;
+                    while (dot_node && (dot_node->kind == HD_AST_DOT || dot_node->kind == HD_AST_MEMBER))
+                        dot_node = dot_node->left;
+                    if (dot_node && dot_node->kind == HD_AST_IDENT) {
+                        base = mir_find_var_addr(g, dot_node->ident);
+                        if (base == 0) return wubu_mir_const(g->prog, 0);
+                    } else {
+                        base = mir_address_of(g, n->left);
+                        if (base == 0) return wubu_mir_const(g->prog, 0);
+                    }
+                    if (inner_offset >= 0) {
+                        base = wubu_mir_binop(g->prog, MIR_ADD, base, wubu_mir_const(g->prog, (int64_t)inner_offset));
+                    }
+                    struct_type = inner_struct_type;
                 } else {
                     return wubu_mir_const(g->prog, 0);
                 }
@@ -1856,6 +1971,8 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
                 s->member_names[s->n_members][HD_MAX_IDENT_LEN - 1] = '\0';
                 s->member_offsets[s->n_members] = (int)t->members[j].offset;
                 s->member_is_unsigned[s->n_members] = (t->members[j].type && (t->members[j].type->kind == HD_TYPE_U8 || t->members[j].type->kind == HD_TYPE_U16 || t->members[j].type->kind == HD_TYPE_U32 || t->members[j].type->kind == HD_TYPE_U64)) ? 1 : 0;
+                if (t->members[j].type && t->members[j].type->kind == HD_TYPE_STRUCT && t->members[j].type->name[0])
+                    strncpy(s->member_type_names[s->n_members], t->members[j].type->name, HD_MAX_IDENT_LEN - 1);
                 s->n_members++;
             }
             s->total_size = (int)t->size;  /* size in int64 cells */

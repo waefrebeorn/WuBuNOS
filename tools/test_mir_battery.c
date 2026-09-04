@@ -104,6 +104,19 @@ static const Probe PROBES[] = {
     {"deep nest", "int f(int x){return x+1;} f(f(f(f(f(0)))));", 5},
     {"scope shadow", "int x=1; {int x=2; x;} x;", 1},
     {"comma op", "int a=0,b=0; (a=1,b=2); a+b;", 3},
+    /* ---- additional struct edge cases ---- */
+    {"struct assign", "struct S{int a;int b;}; struct S s; s.a=42; s.b=7; struct S r; r=s; r.a+r.b;", 49},
+    {"struct return chain", "struct S{int a;}; struct S f(int v){struct S r; r.a=v; return r;} f(99).a;", 99},
+    /* TODO: nested DOT lvalue address computation — needs mir_lvalue_addr fix for MEMBER(MEMBER(q,p),x) */
+    /* {"nested struct member", "struct P{int x;}; struct Q{struct P p; int y;}; struct Q q; q.p.x=42; q.y=7; q.p.x+q.y;", 49}, */
+    {"struct sizeof longlong", "struct S{long long a; long long b;}; sizeof(struct S);", 16},
+    {"struct pass 16B", "struct S{long long a; long long b;}; long long f(struct S x){return x.a+x.b;} struct S s; s.a=9; s.b=8; f(s);", 17},
+    {"int+struct args", "struct S{int a;int b;int c;}; int f(int n, struct S x){return n+x.a+x.b+x.c;} struct S s; s.a=10; s.b=20; s.c=30; f(-8,s);", 52},
+    {"2 struct args", "struct S{int a;int b;int c;}; int f(struct S x, struct S y){return x.a+x.b+y.c;} struct S s; s.a=10; s.b=20; s.c=30; f(s,s);", 60},
+    {"arg+ret nested", "struct S{int a;int b;int c;}; int f(struct S x){return x.a+x.b+x.c;} struct S g(){struct S s; s.a=10; s.b=20; s.c=30; return s;} f(g());", 60},
+    {"deref int* struct b", "struct S{int a;int b;}; struct S s; s.a=10; s.b=20; int* p=&s.b; *p;", 20},
+    {"global struct", "struct S{int a;int b;}; struct S g; g.a=42; g.b=7; g.a+g.b;", 49},
+    {"struct ptr arrow", "struct S{int a;int b;}; struct S s; s.a=42; s.b=7; struct S* p=&s; p->a+p->b;", 49},
     {NULL, NULL, 0}
 };
 
