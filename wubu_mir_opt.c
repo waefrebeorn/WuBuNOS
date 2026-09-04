@@ -150,10 +150,25 @@ static void strength_pass(wubu_mir_prog_t *p)
     uint32_t nvr = mir_max_vr(p);
     int64_t *cval = (int64_t *)calloc(nvr ? nvr : 1, sizeof(int64_t));
     int *is_c = (int *)calloc(nvr ? nvr : 1, sizeof(int));
-    if (!cval || !is_c) { free(cval); free(is_c); return; }
+    int *def_count = (int *)calloc(nvr ? nvr : 1, sizeof(int));
+    if (!cval || !is_c || !def_count) { free(cval); free(is_c); free(def_count); return; }
+
+    /* Count definitions per vr. A vr defined more than once (e.g. a loop
+     * variable with phi-merge) is NOT a single constant. */
     for (size_t i = 0; i < p->n; i++) {
         wubu_mir_instr_t *d = &p->ins[i];
-        if (d->op == MIR_CONST && d->dst < nvr) { cval[d->dst] = d->imm; is_c[d->dst] = 1; }
+        if (d->op == MIR_LABEL || d->op == MIR_JMP || d->op == MIR_JZ ||
+            d->op == MIR_JNZ || d->op == MIR_BREAK || d->op == MIR_CONTINUE ||
+            d->op == MIR_RET)
+            continue;
+        if (d->dst < nvr) def_count[d->dst]++;
+    }
+
+    for (size_t i = 0; i < p->n; i++) {
+        wubu_mir_instr_t *d = &p->ins[i];
+        if (d->op == MIR_CONST && d->dst < nvr && def_count[d->dst] <= 1) {
+            cval[d->dst] = d->imm; is_c[d->dst] = 1;
+        }
     }
     for (size_t i = 0; i < p->n; i++) {
         wubu_mir_instr_t *in = &p->ins[i];

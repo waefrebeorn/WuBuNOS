@@ -4,19 +4,15 @@
 #include "holyd_mir_eval.h"
 
 int main(void) {
-    const char *cases[] = {
-        "int v=21; v<<=1; v;",
-        "int v=84; v>>=1; v;",
-        "int f(int n){ int x=n*2; return x+2; } f(20);",
-        "int a[]={1,2,3}; a[2];",
-        "int a[]={1,2,3}; int*p=a; p++; *p;",
-        "struct S{int a;}; struct S s; s.a=42; s.a;",
-        "struct S{int a;int b;}; struct S s; s.a=1; s.b=2; s.a+s.b;",
-        "char s[4]; s[0]='h'; s[1]='i'; s[2]=0; s[0];",
-    };
-    for (int i = 0; i < 8; i++) {
-        long long r = hd_eval_mir(cases[i], NULL);
-        printf("[%d] %s => %lld\n", i, cases[i], r);
-    }
+    const char *src = "struct S{int a;int b;}; struct S f(){struct S s; s.a=42; s.b=7; return s;} struct S r; r=f(); r.b;";
+    wubu_mir_prog_t prog;
+    memset(&prog, 0, sizeof(prog));
+    int rc = hd_build_mir(src, &prog);
+    if (rc != 0) { printf("BUILD ERROR\n"); return 1; }
+    printf("MIR after optimization:\n");
+    wubu_mir_dump(&prog);
+    int64_t result = hd_run_prog(&prog, NULL);
+    printf("Result: %lld\n", (long long)result);
+    wubu_mir_free(&prog);
     return 0;
 }
