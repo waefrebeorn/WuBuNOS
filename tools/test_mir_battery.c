@@ -117,6 +117,7 @@ static const Probe PROBES[] = {
     {"global struct", "struct S{int a;int b;}; struct S g; g.a=42; g.b=7; g.a+g.b;", 49},
     {"struct ptr arrow", "struct S{int a;int b;}; struct S s; s.a=42; s.b=7; struct S* p=&s; p->a+p->b;", 49},
     {"fn ptr member", "struct S{int (*fn)(int,int); int n;}; int add(int x,int y){return x+y;} struct S s; s.fn=add; s.n=5; s.fn(3,4);", 7},
+    {"array member", "struct S{int a[3]; int n;}; struct S s; s.a[0]=1; s.a[1]=2; s.a[2]=3; s.n=3; s.a[0]+s.a[1]+s.a[2];", 6},
     {NULL, NULL, 0}
 };
 
