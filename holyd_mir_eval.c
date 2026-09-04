@@ -34,6 +34,7 @@ typedef struct {
     int is_struct;         /* 1 if this variable is a struct instance */
     int is_ptr_struct;     /* 1 if this variable is a pointer to a struct */
     char struct_name[HD_MAX_IDENT_LEN]; /* struct type name */
+    int fn_ptr_func_id;    /* func_id this pointer var points to, or -1 */
 } mir_var_t;
 
 /* struct member offset table */
@@ -153,21 +154,19 @@ static const char *mir_dot_struct_type(HDMirGen *g, const HDASTNode *left) {
     /* DOT/MEMBER: q.p — look up p's type within q's struct type */
     if (left->kind == HD_AST_DOT || left->kind == HD_AST_MEMBER) {
         if (left->ident[0]) {
-            /* Get the struct type of the left side */
             const char *outer_type = mir_dot_struct_type(g, left->left);
             if (outer_type && outer_type[0]) {
-                /* Look up the member's type in the struct definition */
                 mir_struct_t *st = mir_find_struct(g, outer_type);
                 if (st) {
                     for (int mi = 0; mi < st->n_members; mi++) {
                         if (strcmp(st->member_names[mi], left->ident) == 0) {
-                            /* Found the member; return its type name if it's a struct */
+                            /* Return member type name from mir_struct_t if available */
+                            if (st->member_type_names[mi][0])
+                                return st->member_type_names[mi];
+                            /* Fallback: try parser type annotations */
                             if (left->type && left->type->kind == HD_TYPE_STRUCT && left->type->name[0])
                                 return left->type->name;
-                            /* If member type is not directly available, try to infer from
-                             * the parser's type info stored in the DOT node */
                             if (left->left && left->left->type && left->left->type->kind == HD_TYPE_STRUCT) {
-                                /* The parser may have member type info */
                                 HDType *parent_type = left->left->type;
                                 for (int pi = 0; pi < parent_type->n_members; pi++) {
                                     if (strcmp(parent_type->members[pi].name, left->ident) == 0) {
@@ -244,6 +243,7 @@ static wubu_vr_t mir_decl_var_unsigned(HDMirGen *g, const char *name, int is_uns
         g->vars[g->n_vars].is_float = 0;
         g->vars[g->n_vars].is_array = 0;
         g->vars[g->n_vars].array_size = 0;
+        g->vars[g->n_vars].fn_ptr_func_id = -1;
         g->n_vars++;
     }
     return vr;
@@ -261,6 +261,7 @@ static wubu_vr_t mir_decl_var_float(HDMirGen *g, const char *name) {
         g->vars[g->n_vars].is_float = 1;
         g->vars[g->n_vars].is_array = 0;
         g->vars[g->n_vars].array_size = 0;
+        g->vars[g->n_vars].fn_ptr_func_id = -1;
         g->n_vars++;
     }
     return vr;
@@ -279,6 +280,7 @@ static void mir_bind_var(HDMirGen *g, const char *name, wubu_vr_t vr, wubu_vr_t 
         g->vars[g->n_vars].is_float = 0;
         g->vars[g->n_vars].is_array = 0;
         g->vars[g->n_vars].array_size = 0;
+        g->vars[g->n_vars].fn_ptr_func_id = -1;
         g->n_vars++;
     }
 }
@@ -1243,6 +1245,27 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 return src_addr;
             }
         }
+        /* Function pointer assignment: s.fn = add — store func_id in var for later indirect calls.
+         * Detects: LHS is a DOT/MEMBER on a struct var, RHS is a function IDENT. */
+        if (n->left && (n->left->kind == HD_AST_DOT || n->left->kind == HD_AST_MEMBER) &&
+            n->right && n->right->kind == HD_AST_IDENT && n->right->ident[0]) {
+            /* Resolve the root variable and the function */
+            const HDASTNode *lhs = n->left;
+            while (lhs && (lhs->kind == HD_AST_DOT || lhs->kind == HD_AST_MEMBER))
+                lhs = lhs->left;
+            if (lhs && lhs->kind == HD_AST_IDENT && lhs->ident[0]) {
+                int fid = -1;
+                for (int i = 0; i < g->prog->n_funcs; i++)
+                    if (strcmp(g->prog->funcs[i].name, n->right->ident) == 0) { fid = i; break; }
+                if (fid >= 0) {
+                    for (int i = 0; i < g->n_vars; i++)
+                        if (strcmp(g->vars[i].name, lhs->ident) == 0) {
+                            g->vars[i].fn_ptr_func_id = fid;
+                            break;
+                        }
+                }
+            }
+        }
         if (addr) { wubu_mir_store(g->prog, addr, val); return val; }
         return val;
     }
@@ -1711,6 +1734,25 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         if (n->callee && n->callee->kind == HD_AST_IDENT) {
             for (int i = 0; i < g->prog->n_funcs; i++)
                 if (strcmp(g->prog->funcs[i].name, n->callee->ident) == 0) { fid = i; break; }
+        }
+        /* Function pointer member call: s.fn(args) where callee is a DOT/MEMBER expr.
+         * The function pointer was previously stored as a func_id in the var.
+         * Resolve the root variable name and look up fn_ptr_func_id. */
+        if (fid < 0 && n->callee && (n->callee->kind == HD_AST_DOT || n->callee->kind == HD_AST_MEMBER)) {
+            const HDASTNode *callee = n->callee;
+            /* Walk down to find the root IDENT */
+            while (callee && (callee->kind == HD_AST_DOT || callee->kind == HD_AST_MEMBER))
+                callee = callee->left;
+            if (callee && callee->kind == HD_AST_IDENT && callee->ident[0]) {
+                /* Look up the variable's fn_ptr_func_id */
+                for (int i = 0; i < g->n_vars; i++) {
+                    if (strcmp(g->vars[i].name, callee->ident) == 0 &&
+                        g->vars[i].fn_ptr_func_id >= 0) {
+                        fid = g->vars[i].fn_ptr_func_id;
+                        break;
+                    }
+                }
+            }
         }
         /* Place arguments in v1..vN (calling convention).
          * For struct-by-value arguments, the argument is an address pointing

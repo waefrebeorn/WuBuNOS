@@ -107,8 +107,7 @@ static const Probe PROBES[] = {
     /* ---- additional struct edge cases ---- */
     {"struct assign", "struct S{int a;int b;}; struct S s; s.a=42; s.b=7; struct S r; r=s; r.a+r.b;", 49},
     {"struct return chain", "struct S{int a;}; struct S f(int v){struct S r; r.a=v; return r;} f(99).a;", 99},
-    /* TODO: nested DOT lvalue address computation — needs mir_lvalue_addr fix for MEMBER(MEMBER(q,p),x) */
-    /* {"nested struct member", "struct P{int x;}; struct Q{struct P p; int y;}; struct Q q; q.p.x=42; q.y=7; q.p.x+q.y;", 49}, */
+    {"nested struct member", "struct P{int x;}; struct Q{struct P p; int y;}; struct Q q; q.p.x=42; q.y=7; q.p.x+q.y;", 49},
     {"struct sizeof longlong", "struct S{long long a; long long b;}; sizeof(struct S);", 16},
     {"struct pass 16B", "struct S{long long a; long long b;}; long long f(struct S x){return x.a+x.b;} struct S s; s.a=9; s.b=8; f(s);", 17},
     {"int+struct args", "struct S{int a;int b;int c;}; int f(int n, struct S x){return n+x.a+x.b+x.c;} struct S s; s.a=10; s.b=20; s.c=30; f(-8,s);", 52},
@@ -117,6 +116,7 @@ static const Probe PROBES[] = {
     {"deref int* struct b", "struct S{int a;int b;}; struct S s; s.a=10; s.b=20; int* p=&s.b; *p;", 20},
     {"global struct", "struct S{int a;int b;}; struct S g; g.a=42; g.b=7; g.a+g.b;", 49},
     {"struct ptr arrow", "struct S{int a;int b;}; struct S s; s.a=42; s.b=7; struct S* p=&s; p->a+p->b;", 49},
+    {"fn ptr member", "struct S{int (*fn)(int,int); int n;}; int add(int x,int y){return x+y;} struct S s; s.fn=add; s.n=5; s.fn(3,4);", 7},
     {NULL, NULL, 0}
 };
 
