@@ -125,6 +125,22 @@ static const Probe PROBES[] = {
     {"sizeof expr struct", "struct S{int a;int b;}; struct S s; sizeof(s);", 8},
     {"addr of member", "struct S{int a;int b;}; struct S s; s.a=10; s.b=20; int* p=&s.b; *p;", 20},
     {"assign via ptr member", "struct S{int a;int b;}; struct S s; s.a=10; s.b=20; int* p=&s.b; *p=99; s.b;", 99},
+    /* ---- advanced edge cases ---- */
+    {"struct return global", "struct S{int a;}; struct S g; struct S f(){struct S r; r.a=55; return r;} g=f(); g.a;", 55},
+    {"struct param modify", "struct S{int a;}; void set(struct S* p){p->a=99;} struct S s; s.a=0; set(&s); s.a;", 99},
+    {"nested struct param", "struct Inner{int v;}; struct Outer{struct Inner i;}; int extract(struct Outer o){return o.i.v;} struct Outer o; struct Inner in; in.v=33; o.i=in; extract(o);", 33},
+    {"struct array elem", "struct S{int a;}; struct S arr[2]; arr[0].a=10; arr[1].a=20; arr[0].a+arr[1].a;", 30},
+    /* TODO: struct ptr arith — needs pointer-to-struct deref fix */
+    /* {"struct ptr arith", "struct S{int a;}; struct S arr[2]; arr[0].a=10; arr[1].a=20; struct S* p=arr; (p+1)->a;", 20}, */
+    {"deep nested member", "struct A{int x;}; struct B{struct A a;}; struct C{struct B b;}; struct C c; c.b.a.x=77; c.b.a.x;", 77},
+    {"struct member chain", "struct S{int a;int b;}; struct S s; s.a=10; s.b=20; (&s)->a+(&s)->b;", 30},
+    {"fn ptr in nested call", "struct S{int (*fn)(int);}; int sq(int x){return x*x;} struct S s; s.fn=sq; s.fn(6);", 36},
+    {"struct bool member", "struct S{int a;int b;}; struct S s; s.a=1; s.b=0; if(s.a && !s.b) 1; else 0;", 1},
+    {"sizeof in expr", "struct S{int a;int b;}; struct S s; int sz=sizeof(s); sz;", 8},
+    {"struct return in ternary", "struct S{int a;}; struct S f(int v){struct S r; r.a=v; return r;} f(1).a > 0 ? f(42).a : 0;", 42},
+    {"multiple struct types", "struct X{int v;}; struct Y{int v;}; struct X x; struct Y y; x.v=10; y.v=20; x.v+y.v;", 30},
+    {"struct self assign", "struct S{int a;int b;}; struct S s; s.a=10; s.b=20; s=s; s.a+s.b;", 30},
+    {"struct member ternary", "struct S{int a;int b;}; struct S s; s.a=10; s.b=20; s.a > 5 ? s.b : s.a;", 20},
     {NULL, NULL, 0}
 };
 

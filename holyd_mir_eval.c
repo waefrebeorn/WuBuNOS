@@ -123,6 +123,9 @@ static int mir_struct_member_offset(HDMirGen *g, const char *struct_name, const 
     return -1;
 }
 
+/* Forward declaration: defined later in this file. */
+static mir_struct_t *mir_find_struct_by_size(HDMirGen *g, int size);
+
 /* Resolve the struct type name for the left side of a DOT expression.
  * Handles: direct struct-typed nodes, IDENT vars (via var table), and
  * CALL/FUNC_CALL nodes (by looking up the callee function's return type). */
@@ -185,6 +188,30 @@ static const char *mir_dot_struct_type(HDMirGen *g, const HDASTNode *left) {
             }
         }
     }
+    /* INDEX: arr[i] — look up the array's base type */
+    if (left->kind == HD_AST_INDEX) {
+        /* Traverse to find the root IDENT */
+        const HDASTNode *root = left;
+        while (root && root->kind == HD_AST_INDEX) root = root->left;
+        if (root && root->kind == HD_AST_IDENT) {
+            for (int i = 0; i < g->n_vars; i++) {
+                if (strcmp(g->vars[i].name, root->ident) == 0 && g->vars[i].is_array) {
+                    /* Check if this is a struct array (has struct_name set) */
+                    if (g->vars[i].struct_name[0]) {
+                        return g->vars[i].struct_name;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    return NULL;
+}
+
+/* Find a struct by its total_size (for struct array element lookup). */
+static mir_struct_t *mir_find_struct_by_size(HDMirGen *g, int size) {
+    for (int i = 0; i < g->n_structs; i++)
+        if (g->structs[i].total_size == size) return &g->structs[i];
     return NULL;
 }
 
@@ -468,7 +495,23 @@ static int mir_index_stride(HDMirGen *g, const HDASTNode *n) {
     /* Look up the variable in the symbol table */
     for (int i = 0; i < g->n_vars; i++) {
         if (strcmp(g->vars[i].name, root->ident) == 0 && g->vars[i].is_array) {
-            return g->vars[i].array_stride > 0 ? g->vars[i].array_stride : 1;
+            if (g->vars[i].array_stride > 1)
+                return g->vars[i].array_stride;
+            /* For arrays with element size > 1 cell, compute stride from element type */
+            /* Check if this is a struct array (base type is struct) */
+            if (g->vars[i].is_struct) {
+                mir_struct_t *st = mir_find_struct(g, g->vars[i].struct_name);
+                if (st && st->total_size > 1) return st->total_size;
+            }
+            /* Check the node type for array base type */
+            if (root->type && root->type->kind == HD_TYPE_ARRAY && root->type->base) {
+                if (root->type->base->kind == HD_TYPE_STRUCT) {
+                    mir_struct_t *st = mir_find_struct(g, root->type->base->name);
+                    if (st && st->total_size > 1) return st->total_size;
+                }
+                /* For non-struct arrays, element size is 1 cell */
+            }
+            return 1;
         }
     }
     return 1;
@@ -548,6 +591,10 @@ static wubu_vr_t mir_address_of(HDMirGen *g, const HDASTNode *n) {
                     root_type = mir_find_var_struct_name(g, dot->ident);
                 } else if (dot && (dot->kind == HD_AST_CALL || dot->kind == HD_AST_FUNC_CALL)) {
                     base = mir_gen_expr(g, dot);
+                    root_type = mir_dot_struct_type(g, dot);
+                } else if (dot && dot->kind == HD_AST_INDEX) {
+                    /* arr[0].a: compute address of arr[0], look up struct type from array */
+                    base = mir_address_of(g, dot);
                     root_type = mir_dot_struct_type(g, dot);
                 } else {
                     return 0;
@@ -729,7 +776,17 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
             if (k == HD_TYPE_U8 || k == HD_TYPE_U16 || k == HD_TYPE_U32 || k == HD_TYPE_U64)
                 is_uns = 1;
             /* array type carries an element count in n->type->array_size */
-            if (k == HD_TYPE_ARRAY && n->type->array_size > 0) arr_size = (int)n->type->array_size;
+            if (k == HD_TYPE_ARRAY && n->type->array_size > 0) {
+                arr_size = (int)n->type->array_size;
+                /* For struct arrays, multiply by struct element size */
+                if (n->type->base && n->type->base->kind == HD_TYPE_STRUCT) {
+                    int elem_cells = 0;
+                    mir_struct_t *elem_st = mir_find_struct(g, n->type->base->name);
+                    if (elem_st) elem_cells = elem_st->total_size;
+                    if (elem_cells > 1) arr_size *= elem_cells;
+                    else arr_size *= 1;
+                }
+            }
             if (k == HD_TYPE_PTR && n->type->base &&
                 (n->type->base->kind == HD_TYPE_STRUCT || n->type->base->kind == HD_TYPE_UNION)) {
                 /* Pointer to struct — track struct name for -> member access */
@@ -800,13 +857,24 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
                 /* For multi-dimensional arrays, compute the stride (inner dimension).
                  * For int w[M][N], stride = N. For int w[N], stride = 1. */
                 g->vars[i].array_stride = 1;
-                if (n->type && n->type->kind == HD_TYPE_ARRAY && n->type->base
-                    && n->type->base->kind == HD_TYPE_ARRAY) {
-                    g->vars[i].array_stride = n->type->base->array_size;
+                if (n->type && n->type->kind == HD_TYPE_ARRAY && n->type->base) {
+                    if (n->type->base->kind == HD_TYPE_ARRAY) {
+                        g->vars[i].array_stride = n->type->base->array_size;
+                    } else if (n->type->base->kind == HD_TYPE_STRUCT) {
+                        /* Struct array: stride = struct size in cells */
+                        mir_struct_t *elem_st = mir_find_struct(g, n->type->base->name);
+                        if (elem_st && elem_st->total_size > 1)
+                            g->vars[i].array_stride = elem_st->total_size;
+                    }
                 }
                 g->vars[i].is_struct = is_struct_var;
                 if (is_struct_var)
                     strncpy(g->vars[i].struct_name, struct_type_name, HD_MAX_IDENT_LEN - 1);
+                /* For struct arrays, also store the element struct type name */
+                if (n->type && n->type->kind == HD_TYPE_ARRAY && n->type->base
+                    && n->type->base->kind == HD_TYPE_STRUCT && n->type->base->name[0]) {
+                    strncpy(g->vars[i].struct_name, n->type->base->name, HD_MAX_IDENT_LEN - 1);
+                }
                 break;
             }
         /* If this is a pointer to a struct, mark the var record for -> lookup */
@@ -1119,6 +1187,18 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 /* If we couldn't find struct type from symbol table, try the node's type annotation */
                 if (!struct_type && n->left->type && n->left->type->kind == HD_TYPE_PTR && n->left->type->base)
                     struct_type = n->left->type->base->name;
+                /* Also handle &s->member where n->left is ADDR(s) */
+                if (!struct_type && n->left->kind == HD_AST_ADDR && n->left->child) {
+                    const HDASTNode *addr_child = n->left->child;
+                    if (addr_child->kind == HD_AST_IDENT) {
+                        for (int i = 0; i < g->n_vars; i++) {
+                            if (strcmp(g->vars[i].name, addr_child->ident) == 0 && g->vars[i].is_struct) {
+                                struct_type = g->vars[i].struct_name;
+                                break;
+                            }
+                        }
+                    }
+                }
             } else {
                 /* s.a: struct value — get the variable's memory address */
                 if (n->left->kind == HD_AST_IDENT) {
@@ -1158,6 +1238,11 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                         base = wubu_mir_binop(g->prog, MIR_ADD, base, wubu_mir_const(g->prog, (int64_t)inner_offset));
                     }
                     struct_type = inner_struct_type;
+                } else if (n->left->kind == HD_AST_INDEX) {
+                    /* arr[i].member: compute address of arr[i], then add member offset */
+                    base = mir_address_of(g, n->left);
+                    if (base == 0) return wubu_mir_const(g->prog, 0);
+                    struct_type = mir_dot_struct_type(g, n->left);
                 } else {
                     return wubu_mir_const(g->prog, 0);
                 }
@@ -1358,6 +1443,26 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
     case HD_AST_ADD: {
         wubu_vr_t a = mir_gen_expr(g, n->left);
         wubu_vr_t b = mir_gen_expr(g, n->right);
+        /* Pointer arithmetic: if left is a pointer to struct, scale right by struct size */
+        if (n->left && n->left->type && n->left->type->kind == HD_TYPE_PTR
+            && n->left->type->base && n->left->type->base->kind == HD_TYPE_STRUCT) {
+            mir_struct_t *st = mir_find_struct(g, n->left->type->base->name);
+            if (st && st->total_size > 1) {
+                b = wubu_mir_binop(g->prog, MIR_MUL, b, wubu_mir_const(g->prog, (int64_t)st->total_size));
+            }
+        }
+        /* Also check var table for pointer types (IDENT nodes don't have type annotations) */
+        if (n->left && n->left->kind == HD_AST_IDENT && n->left->ident[0]) {
+            for (int i = 0; i < g->n_vars; i++) {
+                if (strcmp(g->vars[i].name, n->left->ident) == 0 && g->vars[i].is_ptr_struct) {
+                    mir_struct_t *st = mir_find_struct(g, g->vars[i].struct_name);
+                    if (st && st->total_size > 1) {
+                        b = wubu_mir_binop(g->prog, MIR_MUL, b, wubu_mir_const(g->prog, (int64_t)st->total_size));
+                    }
+                    break;
+                }
+            }
+        }
         /* Use float ops if either operand is F64 or a float variable */
         int is_float = (n->left && n->left->type && n->left->type->kind == HD_TYPE_F64) ||
                        (n->right && n->right->type && n->right->type->kind == HD_TYPE_F64) ||
