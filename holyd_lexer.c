@@ -299,7 +299,14 @@ HDTokenType hd_lex_next(HDLexer *lex) {
         case ';': return hd_make_token(lex, HD_TOK_SEMI);
         case ':': return hd_make_token(lex, HD_TOK_COLON);
         case '?': return hd_make_token(lex, HD_TOK_QUESTION);
-        case '.': return hd_make_token(lex, HD_TOK_DOT);
+        case '.': {
+            /* Check for ... (ellipsis) */
+            if (lex->src[lex->pos] == '.' && lex->src[lex->pos + 1] == '.') {
+                lex->pos += 2;
+                return hd_make_token(lex, HD_TOK_ELLIPSIS);
+            }
+            return hd_make_token(lex, HD_TOK_DOT);
+        }
         case '~': return hd_make_token(lex, HD_TOK_TILDE);
 
         /* Multi-char operators */

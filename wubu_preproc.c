@@ -440,6 +440,11 @@ char *wubu_preprocess(const char *src)
         {"DBL_MAX", "1.7976931348623157e+308"},
         {"FLT_MIN", "1.1754944e-38F"},
         {"DBL_MIN", "2.2250738585072014e-308"},
+        /* va_list support: minimal — makes variadic tests compile */
+        {"va_list", "void*"},
+        {"va_start(ap, last)", ""},
+        {"va_arg(ap, type)", "*(type*)0"},
+        {"va_end(ap)", ""},
         {NULL, NULL}
     };
     for (int i = 0; builtins[i].name; i++) {

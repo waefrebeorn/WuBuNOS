@@ -1424,6 +1424,15 @@ done_extern_params:
                 /* We already consumed `void`; fall through to normal parsing
                  * which will treat it as a parameter type. */
             }
+            /* Handle variadic: `void f(...)` or `void f(int n, ...)`. The `...`
+             * (HD_TOK_ELLIPSIS) marks the end of fixed parameters. */
+            if (peek(p) == HD_TOK_ELLIPSIS) {
+                advance(p); /* consume ... */
+                fn->n_params = 0; /* variadic — params handled at runtime */
+                expect(p, HD_TOK_RPAREN);
+                fn_params_void_consumed = 1;
+                goto done_params;
+            }
             if (peek(p) != HD_TOK_RPAREN) {
                 HDType *pt = parse_type(p);
                 char pname[HD_MAX_IDENT_LEN] = {0};
@@ -1468,6 +1477,14 @@ done_extern_params:
                 strncpy(fn->param_names[fn->n_params], pname, HD_MAX_IDENT_LEN - 1);
                 fn->n_params++;
                 while (match(p, HD_TOK_COMMA) && fn->n_params < HD_MAX_PARAMS) {
+                    /* Handle variadic: `void f(int n, ...) */
+                    if (peek(p) == HD_TOK_ELLIPSIS) {
+                        advance(p);
+                        fn->n_params = 0;
+                        expect(p, HD_TOK_RPAREN);
+                        fn_params_void_consumed = 1;
+                        goto done_params;
+                    }
                     pt = parse_type(p);
                     pname[0] = '\0';
                     /* Check for function pointer in subsequent params */
