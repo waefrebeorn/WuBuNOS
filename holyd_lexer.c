@@ -211,6 +211,15 @@ static HDTokenType hd_scan_number(HDLexer *lex) {
     } else {
         lex->tok.int_val = strtoll(buf, NULL, 10);
     }
+    /* Skip integer literal suffixes: L, LL, U, UL, ULL, LU, LLU, etc. */
+    while (!hd_is_at_end(lex)) {
+        char c = hd_peek(lex);
+        if (c == 'L' || c == 'l' || c == 'U' || c == 'u') {
+            hd_advance(lex);
+        } else {
+            break;
+        }
+    }
     return hd_make_token(lex, HD_TOK_INT);
 }
 

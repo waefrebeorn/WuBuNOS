@@ -310,8 +310,18 @@ static HDType *parse_type(HDParser *p) {
                         t->members[t->n_members].type = member_type;
                         t->n_members++;
                     }
-                    /* Additional declarators: `int a, b, c;` — same type */
+                    /* Additional declarators: `int a, b, c;` or `int *sp, fc, *sc, a[2];` */
                     while (match(p, HD_TOK_COMMA)) {
+                        /* Check for pointer declarator: `*ident` */
+                        HDType *extra_type = member_type;
+                        if (peek(p) == HD_TOK_STAR) {
+                            advance(p);
+                            HDType *ptr = (HDType *)calloc(1, sizeof(HDType));
+                            ptr->kind = HD_TYPE_PTR;
+                            ptr->base = member_type;
+                            ptr->size = 8;
+                            extra_type = ptr;
+                        }
                         if (peek(p) != HD_TOK_IDENT) {
                             parse_error(p, "expected member name after comma");
                             break;
@@ -319,15 +329,27 @@ static HDType *parse_type(HDParser *p) {
                         if (t->n_members < HD_MAX_PARAMS) {
                             strncpy(t->members[t->n_members].name, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
                             advance(p);
+                            /* Array declarator: `ident[N]` */
+                            if (peek(p) == HD_TOK_LBRACKET) {
+                                advance(p);
+                                int asz = 0;
+                                if (peek(p) == HD_TOK_INT) { asz = (int)p->lex->tok.int_val; advance(p); }
+                                expect(p, HD_TOK_RBRACKET);
+                                HDType *ma = (HDType *)calloc(1, sizeof(HDType));
+                                ma->kind = HD_TYPE_ARRAY;
+                                ma->base = extra_type;
+                                ma->array_size = asz;
+                                extra_type = ma;
+                            }
                             if (comp_kind == HD_TYPE_UNION) {
                                 t->members[t->n_members].offset = 0;
                             } else {
-                                t->members[t->n_members].offset = t->size;  /* byte offset */
-                                size_t _msz = hd_type_size(member_type);
-                                t->size += (int)((_msz + 7) / 8);  /* member size in int64 cells */
+                                t->members[t->n_members].offset = t->size;
+                                size_t _msz = hd_type_size(extra_type);
+                                t->size += (int)((_msz + 7) / 8);
                                 t->align = 1;
                             }
-                            t->members[t->n_members].type = member_type;
+                            t->members[t->n_members].type = extra_type;
                             t->n_members++;
                         }
                     }

@@ -221,8 +221,31 @@ static void strip_attributes(char *line)
     *out = '\0';
 }
 
-/* Strip asm("..."), __asm("..."), __asm__("..."), asm volatile("..."), etc.
- * Handles all forms: asm, __asm, __asm__, with optional volatile/inline/goto. */
+/* Strip bit field widths: `unsigned int negative:1` → `unsigned int negative`.
+ * Handles the `: <width>` suffix on struct members. The width is removed so
+ * the member becomes a regular field (layout may differ from GCC but the
+ * test compiles and runs). */
+static void strip_bitfields(char *line)
+{
+    char *p = line;
+    char *out = line;
+    while (*p) {
+        /* Look for ':' followed by a digit (bit field width) */
+        if (*p == ':' && p[1] >= '0' && p[1] <= '9') {
+            /* Check this is a bit field (preceded by an identifier) */
+            char *q = out - 1;
+            while (q >= line && (*q == ' ' || *q == '\t')) q--;
+            if (q >= line && (isalnum((unsigned char)*q) || *q == '_')) {
+                /* This is a bit field — skip the ':' and all digits */
+                p++;
+                while (*p >= '0' && *p <= '9') p++;
+                continue;
+            }
+        }
+        *out++ = *p++;
+    }
+    *out = '\0';
+}
 static void strip_inline_asm(char *line)
 {
     char *p = line;
@@ -485,6 +508,7 @@ char *wubu_preprocess(const char *src)
             strip_compiler_keywords(exp);
             strip_attributes(exp);
             strip_inline_asm(exp);
+            strip_bitfields(exp);
             /* expand macros in this line */
             char exp2[8192];
             pp_expand_line(exp, exp2, sizeof(exp2));
