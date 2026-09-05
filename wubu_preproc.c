@@ -272,7 +272,7 @@ static void strip_inline_asm(char *line)
         /* Check it's a whole word (not part of another identifier) */
         if (p > line && pp_is_ident_char(p[-1])) { p++; continue; }
         char *start = p;
-        p += 2; /* "asm" */
+        p += 3; /* "asm" */
         /* Skip optional trailing underscores: __asm, __asm__ */
         while (*p == '_') p++;
         /* Skip optional __volatile__ or volatile */
