@@ -660,6 +660,10 @@ static HDASTNode *parse_unary(HDParser *p) {
         n->child = parse_unary(p);
         return n;
     }
+    /* Handle casts and grouped expressions: (type) expr or (expr) */
+    if (peek(p) == HD_TOK_LPAREN) {
+        return parse_cast(p);
+    }
     if (peek(p) == HD_TOK_PLUS_PLUS) {
         advance(p);
         HDASTNode *n = hd_ast_new(HD_AST_PRE_INC);
@@ -743,7 +747,7 @@ static HDASTNode *parse_cast(HDParser *p) {
         bool is_type = false;
         HDTokenType tok = peek(p);
         if (tok == HD_KW_I8 || tok == HD_KW_I16 || tok == HD_KW_I32 ||
-            tok == HD_KW_I64 || tok == HD_KW_U8 || tok == HD_KW_U16 ||
+            tok == HD_KW_I64 || tok == HD_KW_U0 || tok == HD_KW_U8 || tok == HD_KW_U16 ||
             tok == HD_KW_U32 || tok == HD_KW_U64 || tok == HD_KW_F64 ||
             tok == HD_KW_BOOL || tok == HD_KW_STRUCT || tok == HD_KW_UNION ||
             tok == HD_KW_ENUM || tok == HD_KW_TYPEDEF) {
@@ -766,6 +770,15 @@ static HDASTNode *parse_cast(HDParser *p) {
         if (is_type) {
             /* This is a cast - parse the type */
             HDType *cast_type = parse_type(p);
+            /* Handle pointer types in casts: (int*), (void*), etc. */
+            while (peek(p) == HD_TOK_STAR) {
+                advance(p);
+                HDType *ptr = (HDType *)calloc(1, sizeof(HDType));
+                ptr->kind = HD_TYPE_PTR;
+                ptr->base = cast_type;
+                ptr->size = 8;
+                cast_type = ptr;
+            }
             expect(p, HD_TOK_RPAREN);
             HDASTNode *expr = parse_cast(p);  /* right-associative for nested casts */
             HDASTNode *n = hd_ast_new(HD_AST_CAST);
