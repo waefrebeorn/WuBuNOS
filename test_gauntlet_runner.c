@@ -266,7 +266,7 @@ int main(int argc, char **argv) {
         /* Child processes run in batches of MAX_TESTS_PER_CHILD to prevent
          * malloc arena bloat from OOM under the 4GB cgroup limit. The parent
          * forks a new child when the previous one fills its batch. */
-        #define MAX_TESTS_PER_CHILD 1
+        #define MAX_TESTS_PER_CHILD 1000
         uint32_t batch_start = 0; /* test offset within the flat test array */
         /* Build a flat array of all test pointers for batching. */
         uint32_t total_tests = g.n_tests;
