@@ -440,11 +440,17 @@ char *wubu_preprocess(const char *src)
         {"DBL_MAX", "1.7976931348623157e+308"},
         {"FLT_MIN", "1.1754944e-38F"},
         {"DBL_MIN", "2.2250738585072014e-308"},
-        /* va_list support: minimal — makes variadic tests compile */
-        {"va_list", "void*"},
-        {"va_start(ap, last)", ""},
-        {"va_arg(ap, type)", "*(type*)0"},
+        /* va_list support: proper variadic argument handling.
+         * va_list is an index into a global argument array.
+         * At function entry, variadic functions copy v1..vN to wubu_va_args.
+         * va_start initializes the index, va_arg reads and advances. */
+        {"va_list", "int"},
+        {"va_start(ap, last)", "(ap = 0)"},
+        {"va_arg(ap, type)", "wubu_va_args[ap++]"},
         {"va_end(ap)", ""},
+        /* Variadic argument storage: global array + init code */
+        {"__wubu_va_args_decl", "int wubu_va_args[32];"},
+        {"__wubu_va_save(n)", "do { int __i; for(__i=0; __i<32; __i++) wubu_va_args[__i] = 0; } while(0)"},
         {NULL, NULL}
     };
     for (int i = 0; builtins[i].name; i++) {
@@ -461,6 +467,16 @@ char *wubu_preprocess(const char *src)
     char *out = (char *)malloc(cap);
     if (!out) return NULL;
     size_t o = 0;
+
+    /* Prepend global declarations needed by the preprocessor macros */
+    {
+        const char *globals = 
+            "int wubu_va_args[32];\n"  /* variadic argument storage */
+            ;
+        size_t gl = strlen(globals);
+        memcpy(out + o, globals, gl);
+        o += gl;
+    }
 
     char *copy = strdup(src);
     if (!copy) { free(out); return NULL; }

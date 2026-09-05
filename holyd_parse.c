@@ -1429,6 +1429,7 @@ done_extern_params:
             if (peek(p) == HD_TOK_ELLIPSIS) {
                 advance(p); /* consume ... */
                 fn->n_params = 0; /* variadic — params handled at runtime */
+                fn->is_variadic = 1;
                 expect(p, HD_TOK_RPAREN);
                 fn_params_void_consumed = 1;
                 goto done_params;
@@ -1481,6 +1482,7 @@ done_extern_params:
                     if (peek(p) == HD_TOK_ELLIPSIS) {
                         advance(p);
                         fn->n_params = 0;
+                        fn->is_variadic = 1;
                         expect(p, HD_TOK_RPAREN);
                         fn_params_void_consumed = 1;
                         goto done_params;

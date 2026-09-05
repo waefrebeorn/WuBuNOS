@@ -32,6 +32,7 @@ struct HDASTNode {
     char param_names[HD_MAX_PARAMS][HD_MAX_IDENT_LEN];
     HDType *param_types[HD_MAX_PARAMS];
     int n_params;
+    int is_variadic;           /* For func_decl: 1 if ... parameter */
 
     /* For extern_decl */
     char extern_c_name[HD_MAX_IDENT_LEN];

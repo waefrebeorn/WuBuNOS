@@ -295,6 +295,7 @@ struct HDFunction {
     char name[HD_MAX_IDENT_LEN];
     void *func_ptr;
     int n_params;
+    int is_variadic;    /* 1 if function has ... parameter (variadic) */
     HDType *ret_type;   /* declared return type (struct → sret-capable) */
     size_t code_size;   /* size of function body code (for ELF emission) */
     /* Global RIP-relative fixups emitted INSIDE this function's body. Each
