@@ -1916,9 +1916,14 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         /* For unknown functions (fid < 0), use func_id 0xFFFF that the JIT
          * recognizes as "external" and handles by returning 0 instead of crashing.
          * Without this, unknown func calls resolve to main (func_id 0),
-         * causing infinite recursion or crashes. */
+         * causing infinite recursion or crashes.
+         * Pass the function name so the JIT can emit a real libc call. */
         uint32_t call_fid = (fid >= 0) ? (uint32_t)fid : 0xFFFF;
-        wubu_mir_call(g->prog, call_fid);
+        const char *ext_name = "";
+        if (fid < 0 && n->callee && n->callee->kind == HD_AST_IDENT && n->callee->ident[0]) {
+            ext_name = n->callee->ident;
+        }
+        wubu_mir_call_ext(g->prog, call_fid, ext_name);
         /* Callee returns in vr0; capture it into a fresh vr for the caller. */
         wubu_vr_t rv = mir_new_vr(g);
         wubu_mir_mov_to(g->prog, rv, 0);

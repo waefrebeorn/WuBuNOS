@@ -584,7 +584,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
         if (prog->funcs[f].end > max_func_end) max_func_end = prog->funcs[f].end;
     size_t entry_off = (size_t)-1;
     size_t entry_jmp_pos = 0;
-    typedef struct { size_t pos; uint32_t func_id; } x86_call_fixup_t;
+    typedef struct { size_t pos; uint32_t func_id; char name[HD_MAX_IDENT_LEN]; } x86_call_fixup_t;
     x86_call_fixup_t *callps = NULL;
     size_t ncallp = 0, ccap = 0;
 
@@ -1178,6 +1178,12 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             }
             callps[ncallp].pos = e.n;
             callps[ncallp].func_id = in->func_id;
+            if (in->func_name[0]) {
+                strncpy(callps[ncallp].name, in->func_name, HD_MAX_IDENT_LEN - 1);
+                callps[ncallp].name[HD_MAX_IDENT_LEN - 1] = '\0';
+            } else {
+                callps[ncallp].name[0] = '\0';
+            }
             ncallp++;
             e.n += 4;
             /* Restore all registers in reverse order (LIFO) */

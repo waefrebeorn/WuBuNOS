@@ -245,6 +245,21 @@ void wubu_mir_call(wubu_mir_prog_t *p, uint32_t func_id)
     if (!i) return;
     i->op = MIR_CALL;
     i->func_id = func_id;
+    i->func_name[0] = '\0';
+}
+
+void wubu_mir_call_ext(wubu_mir_prog_t *p, uint32_t func_id, const char *name)
+{
+    wubu_mir_instr_t *i = emit(p);
+    if (!i) return;
+    i->op = MIR_CALL;
+    i->func_id = func_id;
+    if (name) {
+        strncpy(i->func_name, name, HD_MAX_IDENT_LEN - 1);
+        i->func_name[HD_MAX_IDENT_LEN - 1] = '\0';
+    } else {
+        i->func_name[0] = '\0';
+    }
 }
 
 static const char *op_name(wubu_mir_op_t op)

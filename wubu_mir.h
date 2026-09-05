@@ -218,6 +218,7 @@ typedef struct {
     int64_t imm;
     uint32_t label;              /* for JMP/JZ: the target label id */
     uint32_t func_id;            /* for MIR_CALL: index into prog->funcs */
+    char func_name[HD_MAX_IDENT_LEN]; /* for MIR_CALL: external function name ("" if internal) */
 } wubu_mir_instr_t;
 
 typedef struct {
@@ -230,6 +231,12 @@ typedef struct {
     wubu_vr_t next_vr_hi;        /* high-water mark of high-vr address slots (call convention) */
     wubu_mir_func_t funcs[MIR_MAX_FUNCTIONS];
     int n_funcs;
+    /* External function name table for JIT resolution.
+     * When func_id == 0xFFFF, the JIT looks up the name here to emit
+     * a real call to libc instead of xor eax,eax. */
+    char ext_func_names[MIR_MAX_FUNCTIONS][HD_MAX_IDENT_LEN];
+    uint32_t ext_func_ids[MIR_MAX_FUNCTIONS];  /* func_id for each ext entry */
+    int n_ext_funcs;
 } wubu_mir_prog_t;
 
 /* O1: init a program (zeroed = empty) */
@@ -287,7 +294,10 @@ void wubu_mir_tsigmoid(wubu_mir_prog_t *p, wubu_vr_t a, wubu_vr_t b, wubu_vr_t d
 void wubu_mir_tgelu(wubu_mir_prog_t *p, wubu_vr_t a, wubu_vr_t b, wubu_vr_t dst, int64_t imm);
 void wubu_mir_trelu(wubu_mir_prog_t *p, wubu_vr_t a, wubu_vr_t b, wubu_vr_t dst, int64_t imm);
 void wubu_mir_tclamp(wubu_mir_prog_t *p, wubu_vr_t a, wubu_vr_t b, wubu_vr_t dst, int64_t imm);
-/* Emit MIR_CALL to prog->funcs[func_id] (args must be in v1..vN already). */
+/* Emit MIR_CALL to prog->funcs[func_id] (args must be in v1..vN already).
+ * For external calls (func_id == 0xFFFF), name is used by the JIT to
+ * resolve the actual libc function. */
+void wubu_mir_call_ext(wubu_mir_prog_t *p, uint32_t func_id, const char *name);
 void wubu_mir_call(wubu_mir_prog_t *p, uint32_t func_id);
 
 /* Set the number of function arguments (v1..n_args get pre-assigned to arg regs) */

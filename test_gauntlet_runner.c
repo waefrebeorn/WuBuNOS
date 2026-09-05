@@ -13,6 +13,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <unistd.h>
+#include <malloc.h>
 #include <fcntl.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
@@ -239,6 +240,9 @@ int main(int argc, char **argv) {
 
     printf("Tests: %u\nTargets: %u\n\n", g.n_tests, g.n_targets);
 
+    /* Force all allocations through sbrk so malloc_trim can free them */
+    mallopt(M_MMAP_THRESHOLD, 2147483647);
+
     /* Parallel differential battery: fork ONE child per target. Each child
      * parses every test's HolyD into canonical MIR and runs it through its own
      * driver (real encoder path), writing a per-target tally to a temp file.
@@ -262,7 +266,7 @@ int main(int argc, char **argv) {
         /* Child processes run in batches of MAX_TESTS_PER_CHILD to prevent
          * malloc arena bloat from OOM under the 4GB cgroup limit. The parent
          * forks a new child when the previous one fills its batch. */
-        #define MAX_TESTS_PER_CHILD 10
+        #define MAX_TESTS_PER_CHILD 1
         uint32_t batch_start = 0; /* test offset within the flat test array */
         /* Build a flat array of all test pointers for batching. */
         uint32_t total_tests = g.n_tests;
@@ -293,6 +297,8 @@ int main(int argc, char **argv) {
             pid_t pid = fork();
             if (pid == 0) {
                 /* child: run tests [batch, batch_end) for target k. */
+                /* Force all allocations through sbrk so malloc_trim can free them */
+                mallopt(M_MMAP_THRESHOLD, 2147483647);
                 signal(SIGSEGV, SIG_DFL);
                 signal(SIGBUS,  SIG_DFL);
                 signal(SIGILL,  SIG_DFL);
@@ -408,6 +414,8 @@ int main(int argc, char **argv) {
                 if (fscanf(inf, "%u %u %u", &tp_acc, &tf_acc, &te_acc) != 3) {}
                 fclose(inf);
             }
+            /* Release free memory after every batch to prevent OOM */
+            malloc_trim(0);
         }
         free(flat);
         free(flat_suite);
