@@ -512,6 +512,31 @@ static HDASTNode *parse_primary(HDParser *p) {
                     desig->int_val = idx;
                     desig->child = parse_assign(p);
                     hd_ast_add_arg(init, desig);
+                } else if (peek(p) == HD_TOK_IDENT) {
+                    /* Check for GCC extension: fieldname: val
+                     * Save lexer state, advance, check for : */
+                    int saved_pos = p->lex->pos;
+                    int saved_line = p->lex->line;
+                    int saved_col = p->lex->col;
+                    HDToken saved_tok = p->lex->tok;
+                    char saved_text[HD_MAX_IDENT_LEN];
+                    strncpy(saved_text, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
+                    advance(p); /* consume field name */
+                    if (peek(p) == HD_TOK_COLON) {
+                        /* GCC extension: fieldname: val */
+                        advance(p); /* consume : */
+                        HDASTNode *desig = hd_ast_new(HD_AST_DESIG_INIT);
+                        strncpy(desig->ident, saved_text, HD_MAX_IDENT_LEN - 1);
+                        desig->child = parse_assign(p);
+                        hd_ast_add_arg(init, desig);
+                    } else {
+                        /* Not a designator — restore lexer and parse as expression */
+                        p->lex->pos = saved_pos;
+                        p->lex->line = saved_line;
+                        p->lex->col = saved_col;
+                        p->lex->tok = saved_tok;
+                        hd_ast_add_arg(init, parse_assign(p));
+                    }
                 } else {
                     hd_ast_add_arg(init, parse_assign(p));
                 }
