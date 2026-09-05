@@ -127,8 +127,17 @@ static HDType *parse_type(HDParser *p) {
         case HD_KW_U16:  t->kind = HD_TYPE_U16;  advance(p); break;
         case HD_KW_U32:  t->kind = HD_TYPE_U32;  advance(p);
                          /* `unsigned long` == `unsigned long int` == `unsigned long` */
-                         if (peek(p) == HD_KW_I64) { advance(p); }
+                         if (peek(p) == HD_KW_I64) {
+                             advance(p);
+                             /* `unsigned long long` */
+                             if (peek(p) == HD_KW_I64) { advance(p); }
+                             else if (peek(p) == HD_KW_I32) { advance(p); }
+                         }
                          else if (peek(p) == HD_KW_I32) { advance(p); }
+                         /* `unsigned short` == `short` (I16) */
+                         else if (peek(p) == HD_KW_I16) { t->kind = HD_TYPE_U16; advance(p); }
+                         /* `unsigned char` == `char` (I8) */
+                         else if (peek(p) == HD_KW_I8) { t->kind = HD_TYPE_U8; advance(p); }
                          break;
         case HD_KW_U64:  t->kind = HD_TYPE_U64;  advance(p);
                          /* `unsigned long` == `unsigned long int` */
