@@ -241,8 +241,10 @@ int main(int argc, char **argv) {
     printf("Tests: %u\nTargets: %u\n\n", g.n_tests, g.n_targets);
 
     /* Force all allocations through mmap so they are returned to the OS on free.
-     * This prevents malloc arena fragmentation from causing OOM. */
-    mallopt(M_MMAP_THRESHOLD, 128);
+     * This prevents malloc arena fragmentation from causing OOM during
+     * thousands of fork/wait cycles. MALLOC_MMAP_THRESHOLD=0 forces ALL
+     * allocations through mmap (not just large ones). */
+    mallopt(M_MMAP_THRESHOLD, 0);
 
     /* Parallel differential battery: fork ONE child per target. Each child
      * parses every test's HolyD into canonical MIR and runs it through its own
