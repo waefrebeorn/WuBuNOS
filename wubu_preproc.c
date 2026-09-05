@@ -221,10 +221,29 @@ static void strip_attributes(char *line)
     *out = '\0';
 }
 
-/* Strip bit field widths: `unsigned int negative:1` → `unsigned int negative`.
- * Handles the `: <width>` suffix on struct members. The width is removed so
- * the member becomes a regular field (layout may differ from GCC but the
- * test compiles and runs). */
+/* Strip __builtin_ prefix so __builtin_memcpy → memcpy, etc.
+ * HolyD's runtime already provides memcpy/memset/strcmp/strlen. */
+static void strip_builtin_prefix(char *line)
+{
+    char *p = line;
+    while ((p = strstr(p, "__builtin_")) != NULL) {
+        /* Check it's a whole word */
+        if (p > line && (isalnum((unsigned char)p[-1]) || p[-1] == '_')) { p++; continue; }
+        /* Remove the __builtin_ prefix (11 chars) */
+        memmove(p, p + 11, strlen(p + 11) + 1);
+    }
+    /* Strip __complex__ and __real__/__imag__ GCC extensions */
+    char *q;
+    while ((q = strstr(p = line, "__complex__")) != NULL) {
+        memmove(q, q + 11, strlen(q + 11) + 1);
+    }
+    while ((q = strstr(line, "__real__")) != NULL) {
+        memmove(q, q + 8, strlen(q + 8) + 1);
+    }
+    while ((q = strstr(line, "__imag__")) != NULL) {
+        memmove(q, q + 8, strlen(q + 8) + 1);
+    }
+}
 static void strip_bitfields(char *line)
 {
     char *p = line;
@@ -509,6 +528,7 @@ char *wubu_preprocess(const char *src)
             strip_attributes(exp);
             strip_inline_asm(exp);
             strip_bitfields(exp);
+            strip_builtin_prefix(exp);
             /* expand macros in this line */
             char exp2[8192];
             pp_expand_line(exp, exp2, sizeof(exp2));
