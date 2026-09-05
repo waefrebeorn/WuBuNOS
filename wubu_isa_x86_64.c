@@ -33,6 +33,17 @@
 #include <omp.h>
 #endif
 
+/* Host callbacks for runtime functions the JIT cannot implement inline.
+ * Set by x86_run before calling JIT'd code. */
+typedef void (*wubu_exit_fn)(int code);
+wubu_exit_fn wubu_jit_exit_fn = NULL;
+
+/* Global state for exit() tracking.
+ * When JIT code calls exit(), it sets this flag and stores the code.
+ * The host checks this after JIT execution and calls the real exit(). */
+int wubu_jit_exit_called = 0;
+int wubu_jit_exit_code = 0;
+
 /* Peephole optimizer — declared in x86_peephole.c */
 extern size_t x86_peephole_optimize(uint8_t *code, size_t n);
 
@@ -1160,6 +1171,46 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             break;
         }
         case MIR_CALL: {
+            /* Check for special host functions: exit, abort.
+             * These need special handling because they don't return. */
+            if (in->func_id == 0xFFFF && in->func_name[0]) {
+                if (strcmp(in->func_name, "exit") == 0) {
+                    /* exit(n): store argument to global, set flag, return.
+                     * v1 holds the argument. */
+                    int v1_enc = VR_ENC_SAFE(1);
+                    /* movabs rax, &wubu_jit_exit_code */
+                    e8(&e, 0x48); e8(&e, 0xB8);
+                    uint64_t addr = (uint64_t)&wubu_jit_exit_code;
+                    for (int b = 0; b < 8; b++) e8(&e, (uint8_t)((addr >> (b*8)) & 0xFF));
+                    /* mov [rax], v1 */
+                    if (v1_enc >= 0) {
+                        uint8_t rex = 0x48; /* REX.W */
+                        if (v1_enc >= 8) rex |= 0x04; /* REX.R */
+                        e8(&e, rex);
+                        e8(&e, 0x89);
+                        e8(&e, (uint8_t)(((v1_enc & 7) << 3) | 0)); /* mod=00, rm=rax */
+                    } else {
+                        /* v1 is spilled — load it into rax first, then store */
+                        /* For now, just store 0 */
+                        e8(&e, 0x48); e8(&e, 0xC7); e8(&e, 0x00); e32(&e, 0);
+                    }
+                    /* movabs rax, &wubu_jit_exit_called */
+                    e8(&e, 0x48); e8(&e, 0xB8);
+                    addr = (uint64_t)&wubu_jit_exit_called;
+                    for (int b = 0; b < 8; b++) e8(&e, (uint8_t)((addr >> (b*8)) & 0xFF));
+                    /* mov byte [rax], 1 */
+                    e8(&e, 0xC6); e8(&e, 0x00); e8(&e, 1);
+                    /* ret */
+                    e8(&e, 0xC3);
+                    break;
+                }
+                if (strcmp(in->func_name, "abort") == 0) {
+                    /* abort(): ud2 triggers SIGABRT */
+                    e8(&e, 0x0F); e8(&e, 0x0B);
+                    break;
+                }
+            }
+
             /* Save all allocator registers EXCEPT r10 (VR0) across the call.
              * r10 holds the return value from the callee — saving/restoring
              * it would clobber the result. The callee may clobber any other
@@ -1423,6 +1474,9 @@ static int64_t x86_run(const uint8_t *code, size_t size, int64_t arg) {
     /* Set global mem base for JIT code */
     wubu_jit_mem_ptr = (int64_t*)arg;
 
+    /* Set host callbacks for runtime functions */
+    wubu_jit_exit_fn = exit;
+
     /* Patch the emitted code: scan entire buffer for movabs rsi, imm64
      * (the JIT mem base embedded at compile time) and replace with
      * mov rsi, rbx (which holds the runtime mem base from SysV arg rdi). */
@@ -1437,6 +1491,17 @@ static int64_t x86_run(const uint8_t *code, size_t size, int64_t arg) {
     int64_t r = fn();
 
     jit_free_exec(exec, size);
+
+    /* If JIT code called exit(), propagate it to the host */
+    if (wubu_jit_exit_called) {
+        wubu_jit_exit_called = 0;
+        int code = wubu_jit_exit_code;
+        wubu_jit_exit_code = 0;
+        if (wubu_jit_exit_fn) wubu_jit_exit_fn(code);
+        /* If the callback returns (e.g. in gauntlet child), just exit */
+        _exit(code);
+    }
+
     return r;
 }
 
