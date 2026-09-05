@@ -13,11 +13,13 @@
 #include <string.h>
 #include <stdint.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <signal.h>
 #include <errno.h>
+#include <malloc.h>
 #include "wubu_test_gauntlet.h"
 #include "wubu_isa_driver.h"
 #include "holyd_mir_eval.h"
@@ -229,30 +231,53 @@ int main(int argc, char **argv) {
             child[k] = -1;  /* skipped target */
             continue;
         }
-        pid_t pid = fork();
-        if (pid == 0) {
-            /* child: run ALL tests for target k, with PER-TEST crash isolation.
-             * Each test is executed in its own grandchild with a hard timeout,
-             * so a hostile input (e.g. the x86-64 JIT stack-smash on some
-             * gcc-torture cases) kills only that one grandchild — the run
-             * continues and the tally reflects real pass/fail/error counts
-             * instead of collapsing the whole target to all-error. The tally
-             * file is rewritten incrementally so a watchdog kill of THIS child
-             * loses at most the not-yet-run tail, never the work already done. */
-            signal(SIGSEGV, SIG_DFL);
-            signal(SIGBUS,  SIG_DFL);
-            signal(SIGILL,  SIG_DFL);
-            signal(SIGFPE,  SIG_DFL);
-            signal(SIGABRT, SIG_DFL);
+        /* Child processes run in batches of MAX_TESTS_PER_CHILD to prevent
+         * malloc arena bloat from OOM under the 4GB cgroup limit. The parent
+         * forks a new child when the previous one fills its batch. */
+        #define MAX_TESTS_PER_CHILD 19088
+        uint32_t batch_start = 0; /* test offset within the flat test array */
+        /* Build a flat array of all test pointers for batching. */
+        uint32_t total_tests = g.n_tests;
+        const test_entry_t **flat = NULL;
+        uint32_t *flat_suite = NULL; /* suite index for each flat entry */
+        uint32_t *flat_idx = NULL;   /* index within suite for each flat entry */
+        flat = (const test_entry_t **)malloc(total_tests * sizeof(*flat));
+        flat_suite = (uint32_t *)malloc(total_tests * sizeof(*flat_suite));
+        flat_idx = (uint32_t *)malloc(total_tests * sizeof(*flat_idx));
+        if (!flat || !flat_suite || !flat_idx) {
+            free(flat); free(flat_suite); free(flat_idx);
+            fprintf(stderr, "malloc failed\n");
+            return 1;
+        }
+        uint32_t ti = 0;
+        for (uint32_t s = 0; s < n_suites; s++) {
+            for (uint32_t i = 0; i < counts[s]; i++) {
+                flat[ti] = &suites[s][i];
+                flat_suite[ti] = s;
+                flat_idx[ti] = i;
+                ti++;
+            }
+        }
+        uint32_t tp_acc = 0, tf_acc = 0, te_acc = 0; /* accumulated tallies */
+        for (uint32_t batch = 0; batch < total_tests; batch += MAX_TESTS_PER_CHILD) {
+            uint32_t batch_end = batch + MAX_TESTS_PER_CHILD;
+            if (batch_end > total_tests) batch_end = total_tests;
+            pid_t pid = fork();
+            if (pid == 0) {
+                /* child: run tests [batch, batch_end) for target k. */
+                signal(SIGSEGV, SIG_DFL);
+                signal(SIGBUS,  SIG_DFL);
+                signal(SIGILL,  SIG_DFL);
+                signal(SIGFPE,  SIG_DFL);
+                signal(SIGABRT, SIG_DFL);
+                signal(SIGPIPE, SIG_IGN);
+                uint32_t p = 0, f = 0, e = 0;
+                const wubu_isa_driver_t *drv = wubu_isa_find(target_names[k]);
+                char fn[320];
+                snprintf(fn, sizeof(fn), "%s/t%u", tdir, k);
 
-            uint32_t p = 0, f = 0, e = 0;
-            const wubu_isa_driver_t *drv = wubu_isa_find(target_names[k]);
-            char fn[320];
-            snprintf(fn, sizeof(fn), "%s/t%u", tdir, k);
-
-            for (uint32_t s = 0; s < n_suites; s++) {
-                for (uint32_t i = 0; i < counts[s]; i++) {
-                    const test_entry_t *t = &suites[s][i];
+                for (uint32_t t = batch; t < batch_end; t++) {
+                    const test_entry_t *test = flat[t];
 
                     int pfd[2];
                     if (pipe(pfd) != 0) { e++; continue; }
@@ -264,10 +289,10 @@ int main(int argc, char **argv) {
                         buf[0] = (uint8_t)TEST_ERROR;
                         int64_t val = 0;
                         wubu_mir_prog_t prog;
-                        if (hd_build_mir(t->source, &prog) == 0) {
+                        if (hd_build_mir(test->source, &prog) == 0) {
                             val = drv ? hd_run_prog(&prog, drv)
                                       : wubu_mir_interp(&prog);
-                            buf[0] = (uint8_t)((val == t->expected)
+                            buf[0] = (uint8_t)((val == test->expected)
                                               ? TEST_PASS : TEST_FAIL);
                             wubu_mir_free(&prog);
                         }
@@ -298,6 +323,9 @@ int main(int argc, char **argv) {
                         if (r < 0) { settled = 1; break; }  /* ECHILD */
                     }
 
+                    /* Read pipe with O_NONBLOCK so a grandchild that died before
+                     * writing doesn't leave us blocked forever. */
+                    fcntl(pfd[0], F_SETFL, O_NONBLOCK);
                     uint8_t buf[9] = {0};
                     size_t got = 0;
                     while (got < sizeof(buf)) {
@@ -316,19 +344,35 @@ int main(int argc, char **argv) {
                         f++;
                         if (f <= 30)
                             printf("  FAIL %-14s %-10s expected=%lld got=%lld\n",
-                                   t->name, target_names[k],
-                                   (long long)t->expected, (long long)val);
+                                   test->name, target_names[k],
+                                   (long long)test->expected, (long long)val);
                     } else {
                         e++;
                     }
 
                     FILE *of2 = fopen(fn, "w");
-                    if (of2) { fprintf(of2, "%u %u %u\n", p, f, e); fclose(of2); }
+                    if (of2) { setvbuf(of2, NULL, _IONBF, 0); fprintf(of2, "%u %u %u\n", p + tp_acc, f + tf_acc, e + te_acc); fclose(of2); }
+                    malloc_trim(0);
                 }
+                _exit(0);
             }
-            _exit(0);
+            child[k] = pid;
+            /* Wait for this batch to complete before starting the next. */
+            int status = 0;
+            waitpid(pid, &status, 0);
+            /* Read the tally from the file. */
+            char fn[320];
+            snprintf(fn, sizeof(fn), "%s/t%u", tdir, k);
+            FILE *inf = fopen(fn, "r");
+            if (inf) {
+                if (fscanf(inf, "%u %u %u", &tp_acc, &tf_acc, &te_acc) != 3) {}
+                fclose(inf);
+            }
         }
-        child[k] = pid;
+        free(flat);
+        free(flat_suite);
+        free(flat_idx);
+        #undef MAX_TESTS_PER_CHILD
     }
 
     /* Parent: wait for all children, but cap each one with a watchdog so a
