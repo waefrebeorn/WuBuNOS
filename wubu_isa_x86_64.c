@@ -29,6 +29,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <dlfcn.h>
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -1170,22 +1171,35 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
                 if (reg >= 8) { e8(&e, 0x41); e8(&e, 0x50 + (reg & 7)); }
                 else { e8(&e, 0x50 + reg); }
             }
-            /* native call rel32 to the callee body */
-            e8(&e, 0xE8);                       /* call rel32 */
-            if (ncallp == ccap) {
-                ccap = ccap ? ccap * 2 : 8;
-                callps = realloc(callps, ccap * sizeof(*callps));
-            }
-            callps[ncallp].pos = e.n;
-            callps[ncallp].func_id = in->func_id;
-            if (in->func_name[0]) {
+            /* Check if this is an external libc call (has a function name).
+             * If so, emit a 12-byte placeholder for movabs rax,addr; call rax.
+             * Otherwise emit a normal 5-byte call rel32. */
+            if (in->func_id == 0xFFFF && in->func_name[0]) {
+                /* External libc call: reserve 12 bytes as placeholder.
+                 * Will be patched in fixup phase with movabs rax, addr; call rax. */
+                for (int i = 0; i < 12; i++) e8(&e, 0x90); /* nop */
+                if (ncallp == ccap) {
+                    ccap = ccap ? ccap * 2 : 8;
+                    callps = realloc(callps, ccap * sizeof(*callps));
+                }
+                callps[ncallp].pos = e.n - 12; /* start of placeholder */
+                callps[ncallp].func_id = in->func_id;
                 strncpy(callps[ncallp].name, in->func_name, HD_MAX_IDENT_LEN - 1);
                 callps[ncallp].name[HD_MAX_IDENT_LEN - 1] = '\0';
+                ncallp++;
             } else {
+                /* Internal call: normal call rel32 */
+                e8(&e, 0xE8);                       /* call rel32 */
+                if (ncallp == ccap) {
+                    ccap = ccap ? ccap * 2 : 8;
+                    callps = realloc(callps, ccap * sizeof(*callps));
+                }
+                callps[ncallp].pos = e.n;
+                callps[ncallp].func_id = in->func_id;
                 callps[ncallp].name[0] = '\0';
+                ncallp++;
+                e.n += 4;
             }
-            ncallp++;
-            e.n += 4;
             /* Restore all registers in reverse order (LIFO) */
             for (int s = 7; s >= 0; s--) {
                 int reg = caller_saved[s];
@@ -1337,14 +1351,38 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
     for (size_t fi2 = 0; fi2 < ncallp; fi2++) {
         size_t t = (size_t)-1;
         uint32_t fid = callps[fi2].func_id;
-        /* External function marker (0xFFFF) — replace with xor eax,eax */
+        /* External function marker (0xFFFF) */
         if (fid == 0xFFFF) {
-            size_t pos = callps[fi2].pos - 1;  /* pos points to rel32, go back 1 for call opcode */
-            e.code[pos]     = 0x31;  /* xor eax, eax */
-            e.code[pos + 1] = 0xC0;
-            e.code[pos + 2] = 0x90;  /* nop */
-            e.code[pos + 3] = 0x90;  /* nop */
-            e.code[pos + 4] = 0x90;  /* nop */
+            if (callps[fi2].name[0]) {
+                /* Known libc function: patch with movabs rax, addr; call rax.
+                 * The 12-byte placeholder starts at callps[fi2].pos. */
+                void *addr = dlsym(RTLD_DEFAULT, callps[fi2].name);
+                if (addr) {
+                    size_t pos = callps[fi2].pos;
+                    /* movabs rax, imm64 (REX.W + B8 + 8 bytes) */
+                    e.code[pos]     = 0x48;  /* REX.W */
+                    e.code[pos + 1] = 0xB8;  /* mov rax, imm64 */
+                    for (int b = 0; b < 8; b++) {
+                        e.code[pos + 2 + b] = (uint8_t)(((uintptr_t)addr >> (b * 8)) & 0xFF);
+                    }
+                    e.code[pos + 10] = 0xFF; /* call rax */
+                    e.code[pos + 11] = 0xD0;
+                } else {
+                    /* dlsym failed — fall back to xor eax, eax */
+                    size_t pos = callps[fi2].pos;
+                    e.code[pos]     = 0x31;  /* xor eax, eax */
+                    e.code[pos + 1] = 0xC0;
+                    for (int i = 2; i < 12; i++) e.code[pos + i] = 0x90;
+                }
+            } else {
+                /* Unknown external function: replace with xor eax, eax */
+                size_t pos = callps[fi2].pos - 1;  /* pos points to rel32, go back 1 for call opcode */
+                e.code[pos]     = 0x31;  /* xor eax, eax */
+                e.code[pos + 1] = 0xC0;
+                e.code[pos + 2] = 0x90;  /* nop */
+                e.code[pos + 3] = 0x90;  /* nop */
+                e.code[pos + 4] = 0x90;  /* nop */
+            }
             continue;
         }
         for (int f = 0; f < prog->n_funcs; f++)

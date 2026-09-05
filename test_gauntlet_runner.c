@@ -240,8 +240,9 @@ int main(int argc, char **argv) {
 
     printf("Tests: %u\nTargets: %u\n\n", g.n_tests, g.n_targets);
 
-    /* Force all allocations through sbrk so malloc_trim can free them */
-    mallopt(M_MMAP_THRESHOLD, 2147483647);
+    /* Force all allocations through mmap so they are returned to the OS on free.
+     * This prevents malloc arena fragmentation from causing OOM. */
+    mallopt(M_MMAP_THRESHOLD, 128);
 
     /* Parallel differential battery: fork ONE child per target. Each child
      * parses every test's HolyD into canonical MIR and runs it through its own
@@ -297,8 +298,8 @@ int main(int argc, char **argv) {
             pid_t pid = fork();
             if (pid == 0) {
                 /* child: run tests [batch, batch_end) for target k. */
-                /* Force all allocations through sbrk so malloc_trim can free them */
-                mallopt(M_MMAP_THRESHOLD, 2147483647);
+                /* Force all allocations through mmap so they are returned to the OS on free */
+                mallopt(M_MMAP_THRESHOLD, 128);
                 signal(SIGSEGV, SIG_DFL);
                 signal(SIGBUS,  SIG_DFL);
                 signal(SIGILL,  SIG_DFL);
