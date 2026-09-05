@@ -1286,7 +1286,43 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             if (offset < 0) return wubu_mir_const(g->prog, 0);
             wubu_vr_t member_addr = wubu_mir_binop(g->prog, MIR_ADD, base,
                                                     wubu_mir_const(g->prog, (int64_t)offset));
-            return wubu_mir_load(g->prog, member_addr);
+            wubu_vr_t val = wubu_mir_load(g->prog, member_addr);
+            /* Check if this is a bit field */
+            mir_struct_t *st = mir_find_struct(g, struct_type ? struct_type : "");
+            if (st) {
+                for (int mi = 0; mi < st->n_members; mi++) {
+                    if (strcmp(st->member_names[mi], n->ident) == 0) {
+                        int bw = st->member_bit_widths[mi];
+                        int bo = st->member_bit_offsets[mi];
+                        if (bw > 0) {
+                            /* Bit field: shift right by bit_offset, mask to bit_width */
+                            if (bo > 0) {
+                                val = wubu_mir_binop(g->prog, MIR_SHR, val,
+                                                     wubu_mir_const(g->prog, (int64_t)bo));
+                            }
+                            int64_t mask = (bw >= 64) ? -1LL : ((1LL << bw) - 1);
+                            val = wubu_mir_binop(g->prog, MIR_AND, val,
+                                                 wubu_mir_const(g->prog, mask));
+                            /* Sign-extend if signed and sign bit is set */
+                            if (!st->member_is_unsigned[mi] && bw < 64 && bw > 0) {
+                                int64_t sign_bit = 1LL << (bw - 1);
+                                int64_t extend_mask = ~((1LL << bw) - 1);
+                                /* If sign bit is set, OR with extend_mask */
+                                wubu_vr_t masked = wubu_mir_binop(g->prog, MIR_AND, val,
+                                                                  wubu_mir_const(g->prog, sign_bit));
+                                /* Use conditional: if masked != 0, val |= extend_mask */
+                                /* For simplicity, always sign-extend (works for small values) */
+                                /* Actually, let's do proper sign extension */
+                                wubu_vr_t shift_amt = wubu_mir_const(g->prog, (int64_t)(64 - bw));
+                                val = wubu_mir_binop(g->prog, MIR_SHL, val, shift_amt);
+                                val = wubu_mir_binop(g->prog, MIR_SHR, val, shift_amt);
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+            return val;
         }
         return 0;
     }
@@ -1383,6 +1419,34 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                             g->vars[i].fn_ptr_func_id = fid;
                             break;
                         }
+                }
+            }
+        }
+        /* Bit field write: if LHS is a DOT/MEMBER on a struct, check for bit field */
+        if (addr && n->left && (n->left->kind == HD_AST_DOT || n->left->kind == HD_AST_MEMBER) && n->left->ident[0]) {
+            const char *bf_struct_type = mir_dot_struct_type(g, n->left->left);
+            mir_struct_t *bf_st = mir_find_struct(g, bf_struct_type ? bf_struct_type : "");
+            if (bf_st) {
+                for (int bmi = 0; bmi < bf_st->n_members; bmi++) {
+                    if (strcmp(bf_st->member_names[bmi], n->left->ident) == 0) {
+                        int bfw = bf_st->member_bit_widths[bmi];
+                        int bfo = bf_st->member_bit_offsets[bmi];
+                        if (bfw > 0) {
+                            /* Bit field write: read word, clear bits, insert new value */
+                            wubu_vr_t old_word = wubu_mir_load(g->prog, addr);
+                            int64_t bmask = (bfw >= 64) ? -1LL : ((1LL << bfw) - 1);
+                            wubu_vr_t new_val = wubu_mir_binop(g->prog, MIR_AND, val, wubu_mir_const(g->prog, bmask));
+                            if (bfo > 0) {
+                                new_val = wubu_mir_binop(g->prog, MIR_SHL, new_val, wubu_mir_const(g->prog, (int64_t)bfo));
+                            }
+                            int64_t inverted_mask = ~(bmask << bfo);
+                            wubu_vr_t cleared = wubu_mir_binop(g->prog, MIR_AND, old_word, wubu_mir_const(g->prog, inverted_mask));
+                            wubu_vr_t result = wubu_mir_binop(g->prog, MIR_OR, cleared, new_val);
+                            wubu_mir_store(g->prog, addr, result);
+                            return val;
+                        }
+                        break;
+                    }
                 }
             }
         }
