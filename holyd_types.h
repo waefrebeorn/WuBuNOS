@@ -168,11 +168,14 @@ struct HDType {
     int64_t size;              /* size in bytes */
     int64_t align;             /* alignment requirement */
     int n_members;             /* for structs/unions */
+    int bit_pos;               /* current bit offset during struct parsing (bit fields) */
     char name[HD_MAX_IDENT_LEN]; /* for struct/enum/typedef name */
     struct {
         char name[HD_MAX_IDENT_LEN];
         HDType *type;
-        int64_t offset;
+        int64_t offset;            /* byte offset in struct */
+        int bit_width;             /* for bit fields: width in bits (0 = not a bit field) */
+        int bit_offset;            /* for bit fields: bit offset from start of byte */
     } members[32];
     int array_size;            /* for arrays */
     /* for function types */

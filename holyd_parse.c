@@ -218,6 +218,7 @@ static HDType *parse_type(HDParser *p) {
                 advance(p); /* { */
                 int64_t max_size = 0;
                 int max_align = 1;
+                t->bit_pos = 0;  /* initialize bit field tracking */
                 while (peek(p) != HD_TOK_RBRACE && peek(p) != HD_TOK_EOF) {
                     HDType *member_type = parse_type(p);
                     /* Function-pointer member: `int (*fn)(int,int);` — the
@@ -244,6 +245,15 @@ static HDType *parse_type(HDParser *p) {
                     if (t->n_members < HD_MAX_PARAMS) {
                         strncpy(t->members[t->n_members].name, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
                         advance(p); /* consume member name */
+                        /* Parse bit field width: `int name : N;` */
+                        if (peek(p) == HD_TOK_COLON) {
+                            advance(p); /* consume : */
+                            if (peek(p) == HD_TOK_INT) {
+                                int bw = (int)p->lex->tok.int_val;
+                                advance(p);
+                                t->members[t->n_members].bit_width = bw;
+                            }
+                        }
                         if (mem_is_fnp) {
                             /* `int (*fn)(int,int)` — consume `)` then `(params)`.
                              * Build PTR(FUNC(...)). */
@@ -296,15 +306,33 @@ static HDType *parse_type(HDParser *p) {
                         if (comp_kind == HD_TYPE_UNION) {
                             /* union: every member starts at offset 0; size = max */
                             t->members[t->n_members].offset = 0;
+                            t->members[t->n_members].bit_offset = 0;
                             if ((int64_t)msz > max_size) max_size = (int64_t)msz;
                             if ((int64_t)msz > max_align) max_align = (int)msz;
                         } else {
-                            /* Pack members tightly in bytes. t->size tracks byte offset.
-                             * Each member starts at the next byte offset (no per-member
-                             * rounding). The total struct size is rounded up to cells
-                             * at the end (struct_done). */
-                            t->members[t->n_members].offset = t->size;  /* byte offset */
-                            t->size += (int)((msz + 7) / 8);  /* member size in int64 cells */
+                            int bw = t->members[t->n_members].bit_width;
+                            if (bw > 0) {
+                                /* Bit field: pack into current word */
+                                int bit_offset = t->bit_pos;  /* current bit offset in bits */
+                                int bits_available = 32 - (bit_offset % 32);
+                                if (bw > bits_available) {
+                                    /* Doesn't fit — align to next word boundary */
+                                    t->bit_pos = (bit_offset + 31) & ~31;  /* round up to 32 */
+                                    bit_offset = t->bit_pos;
+                                }
+                                t->members[t->n_members].bit_offset = bit_offset;
+                                t->bit_pos = bit_offset + bw;
+                                int byte_offset = bit_offset / 8;
+                                t->members[t->n_members].offset = byte_offset;
+                                /* Update struct size if bit field extends past current size */
+                                int end_byte = (t->bit_pos + 7) / 8;
+                                if (end_byte > t->size) t->size = end_byte;
+                            } else {
+                                /* Regular member: byte offset */
+                                t->members[t->n_members].offset = t->size;  /* byte offset */
+                                t->members[t->n_members].bit_offset = 0;
+                                t->size += (int)((msz + 7) / 8);  /* member size in int64 cells */
+                            }
                             t->align = 1;
                         }
                         t->members[t->n_members].type = member_type;

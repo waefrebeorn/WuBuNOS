@@ -43,7 +43,9 @@ typedef struct {
 typedef struct {
     char name[HD_MAX_IDENT_LEN];
     char member_names[MAX_MEMBERS][HD_MAX_IDENT_LEN];
-    int member_offsets[MAX_MEMBERS];
+    int member_offsets[MAX_MEMBERS];       /* byte offset in struct */
+    int member_bit_widths[MAX_MEMBERS];    /* bit field width (0 = not bit field) */
+    int member_bit_offsets[MAX_MEMBERS];   /* bit offset within byte */
     int member_is_unsigned[MAX_MEMBERS];
     char member_type_names[MAX_MEMBERS][HD_MAX_IDENT_LEN]; /* struct type name if member is struct */
     int n_members;
@@ -772,6 +774,8 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
                     strncpy(s->member_names[s->n_members], n->type->members[i].name, HD_MAX_IDENT_LEN - 1);
                     s->member_names[s->n_members][HD_MAX_IDENT_LEN - 1] = '\0';
                     s->member_offsets[s->n_members] = (int)n->type->members[i].offset;
+                    s->member_bit_widths[s->n_members] = n->type->members[i].bit_width;
+                    s->member_bit_offsets[s->n_members] = n->type->members[i].bit_offset;
                     s->member_is_unsigned[s->n_members] = (n->type->members[i].type && (n->type->members[i].type->kind == HD_TYPE_U8 || n->type->members[i].type->kind == HD_TYPE_U16 || n->type->members[i].type->kind == HD_TYPE_U32 || n->type->members[i].type->kind == HD_TYPE_U64)) ? 1 : 0;
                     if (n->type->members[i].type && n->type->members[i].type->kind == HD_TYPE_STRUCT && n->type->members[i].type->name[0])
                         strncpy(s->member_type_names[s->n_members], n->type->members[i].type->name, HD_MAX_IDENT_LEN - 1);
