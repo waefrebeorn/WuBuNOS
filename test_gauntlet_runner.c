@@ -110,10 +110,13 @@ int main(int argc, char **argv) {
      * iteration during debugging; combines with --core). */
     int core_only = (argc > 1 && strcmp(argv[1], "--core") == 0);
     const char *only_target = NULL;
+    const char *only_suite = NULL;
     for (int ai = 1; ai < argc; ai++) {
         if (strcmp(argv[ai], "--target") == 0 && ai + 1 < argc) {
             only_target = argv[ai + 1];
-            break;
+        }
+        if (strcmp(argv[ai], "--suite") == 0 && ai + 1 < argc) {
+            only_suite = argv[ai + 1];
         }
     }
 
@@ -170,6 +173,9 @@ int main(int argc, char **argv) {
         gauntlet_stress_test_count, gauntlet_memory_test_count,
         gauntlet_comprehensive_test_count,
     };
+    const char *builtin_names[] = {
+        "integer", "control", "bitwise", "comparison", "stress", "memory", "comprehensive"
+    };
     const test_entry_t *external_suites[] = {
         gauntlet_gcc_torture_tests, gauntlet_gcc_dg_tests,
         gauntlet_gcc_compile_tests, gauntlet_fujitsu_tests,
@@ -188,6 +194,11 @@ int main(int argc, char **argv) {
         gauntlet_chibicc_test_count, gauntlet_writing_c_compiler_test_count,
         gauntlet_slimcc_test_count,
     };
+    const char *external_names[] = {
+        "gcc_torture", "gcc_dg", "gcc_compile", "fujitsu", "extern_gcc",
+        "compcert", "c_testsuite", "llvm", "lacc", "tinycc", "chibicc",
+        "writing_c_compiler", "slimcc"
+    };
 
     const test_entry_t **suites;
     const uint32_t *counts;
@@ -199,11 +210,28 @@ int main(int argc, char **argv) {
         /* Concatenate built-in + external into one combined array. */
         static const test_entry_t *all_suites[20];
         static uint32_t all_counts[20];
+        static const char *all_names[20];
         uint32_t bi = sizeof(builtin_suites) / sizeof(builtin_suites[0]);
         uint32_t ei = sizeof(external_suites) / sizeof(external_suites[0]);
-        for (uint32_t i = 0; i < bi; i++) { all_suites[i] = builtin_suites[i]; all_counts[i] = builtin_counts[i]; }
-        for (uint32_t i = 0; i < ei; i++) { all_suites[bi + i] = external_suites[i]; all_counts[bi + i] = external_counts[i]; }
-        suites = all_suites; counts = all_counts; n_suites = bi + ei;
+        for (uint32_t i = 0; i < bi; i++) { all_suites[i] = builtin_suites[i]; all_counts[i] = builtin_counts[i]; all_names[i] = builtin_names[i]; }
+        for (uint32_t i = 0; i < ei; i++) { all_suites[bi + i] = external_suites[i]; all_counts[bi + i] = external_counts[i]; all_names[bi + i] = external_names[i]; }
+        /* --suite filter: keep only matching suites */
+        if (only_suite) {
+            uint32_t j = 0;
+            static const test_entry_t *filtered_suites[20];
+            static uint32_t filtered_counts[20];
+            for (uint32_t i = 0; i < bi + ei; i++) {
+                if (strcmp(all_names[i], only_suite) == 0) {
+                    filtered_suites[j] = all_suites[i];
+                    filtered_counts[j] = all_counts[i];
+                    j++;
+                }
+            }
+            if (j == 0) { fprintf(stderr, "no suite '%s'\n", only_suite); return 1; }
+            suites = filtered_suites; counts = filtered_counts; n_suites = j;
+        } else {
+            suites = all_suites; counts = all_counts; n_suites = bi + ei;
+        }
     }
 
     g.n_tests = 0;
@@ -272,6 +300,7 @@ int main(int argc, char **argv) {
                 signal(SIGABRT, SIG_DFL);
                 signal(SIGPIPE, SIG_IGN);
                 uint32_t p = 0, f = 0, e = 0;
+                uint32_t tests_run = 0;
                 const wubu_isa_driver_t *drv = wubu_isa_find(target_names[k]);
                 char fn[320];
                 snprintf(fn, sizeof(fn), "%s/t%u", tdir, k);
@@ -289,12 +318,17 @@ int main(int argc, char **argv) {
                         buf[0] = (uint8_t)TEST_ERROR;
                         int64_t val = 0;
                         wubu_mir_prog_t prog;
-                        if (hd_build_mir(test->source, &prog) == 0) {
+                        int build_result = hd_build_mir(test->source, &prog);
+                        if (build_result == 0) {
                             val = drv ? hd_run_prog(&prog, drv)
                                       : wubu_mir_interp(&prog);
                             buf[0] = (uint8_t)((val == test->expected)
                                               ? TEST_PASS : TEST_FAIL);
                             wubu_mir_free(&prog);
+                        } else {
+                            /* parse failed — mark as ERROR */
+                            buf[0] = (uint8_t)TEST_ERROR;
+                            val = -999;
                         }
                         memcpy(buf + 1, &val, sizeof(val));
                         ssize_t w = write(pfd[1], buf, sizeof(buf));
@@ -348,11 +382,16 @@ int main(int argc, char **argv) {
                                    (long long)test->expected, (long long)val);
                     } else {
                         e++;
+                        if (e <= 100)
+                            printf("  EROR %-14s %-10s (crash/timeout/parse)\n",
+                                   test->name, target_names[k]);
                     }
 
                     FILE *of2 = fopen(fn, "w");
                     if (of2) { setvbuf(of2, NULL, _IONBF, 0); fprintf(of2, "%u %u %u\n", p + tp_acc, f + tf_acc, e + te_acc); fclose(of2); }
-                    malloc_trim(0);
+                    tests_run++;
+                    /* Release free memory periodically to prevent OOM on large suites. */
+                    if (total_tests > 1000 && (tests_run & 255) == 0) malloc_trim(0);
                 }
                 _exit(0);
             }
