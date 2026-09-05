@@ -262,7 +262,7 @@ int main(int argc, char **argv) {
         /* Child processes run in batches of MAX_TESTS_PER_CHILD to prevent
          * malloc arena bloat from OOM under the 4GB cgroup limit. The parent
          * forks a new child when the previous one fills its batch. */
-        #define MAX_TESTS_PER_CHILD 19088
+        #define MAX_TESTS_PER_CHILD 10
         uint32_t batch_start = 0; /* test offset within the flat test array */
         /* Build a flat array of all test pointers for batching. */
         uint32_t total_tests = g.n_tests;
@@ -390,8 +390,9 @@ int main(int argc, char **argv) {
                     FILE *of2 = fopen(fn, "w");
                     if (of2) { setvbuf(of2, NULL, _IONBF, 0); fprintf(of2, "%u %u %u\n", p + tp_acc, f + tf_acc, e + te_acc); fclose(of2); }
                     tests_run++;
-                    /* Release free memory periodically to prevent OOM on large suites. */
-                    if (total_tests > 1000 && (tests_run & 255) == 0) malloc_trim(0);
+                    /* Release free memory after EVERY test to prevent OOM.
+                     * malloc_trim returns unused sbrk memory to the OS. */
+                    if (total_tests > 100) malloc_trim(0);
                 }
                 _exit(0);
             }
