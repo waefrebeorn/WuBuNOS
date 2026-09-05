@@ -221,19 +221,25 @@ static void strip_attributes(char *line)
     *out = '\0';
 }
 
-/* Strip __asm__("...") or __asm volatile("...") inline assembly. */
+/* Strip asm("..."), __asm("..."), __asm__("..."), asm volatile("..."), etc.
+ * Handles all forms: asm, __asm, __asm__, with optional volatile/inline/goto. */
 static void strip_inline_asm(char *line)
 {
     char *p = line;
-    while ((p = strstr(p, "__asm")) != NULL) {
-        /* Check it's a whole word */
+    while ((p = strstr(p, "asm")) != NULL) {
+        /* Check it's a whole word (not part of another identifier) */
         if (p > line && pp_is_ident_char(p[-1])) { p++; continue; }
         char *start = p;
-        p += 5; /* __asm */
+        p += 2; /* "asm" */
+        /* Skip optional trailing underscores: __asm, __asm__ */
+        while (*p == '_') p++;
         /* Skip optional __volatile__ or volatile */
         while (*p == ' ' || *p == '\t') p++;
         if (strncmp(p, "__volatile__", 12) == 0) { p += 12; }
         else if (strncmp(p, "volatile", 8) == 0) { p += 8; }
+        else if (strncmp(p, "__inline__", 10) == 0) { p += 10; }
+        else if (strncmp(p, "inline", 6) == 0) { p += 6; }
+        else if (strncmp(p, "goto", 4) == 0) { p += 4; }
         while (*p == ' ' || *p == '\t') p++;
         /* Skip ((...)) with nested paren/string handling */
         if (*p == '(') {
