@@ -1330,10 +1330,31 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
     /* CALL target fixups (MUST run before peephole — it shifts offsets) */
     for (size_t fi2 = 0; fi2 < ncallp; fi2++) {
         size_t t = (size_t)-1;
+        uint32_t fid = callps[fi2].func_id;
+        /* External function marker (0xFFFF) — replace with xor eax,eax */
+        if (fid == 0xFFFF) {
+            size_t pos = callps[fi2].pos - 1;  /* pos points to rel32, go back 1 for call opcode */
+            e.code[pos]     = 0x31;  /* xor eax, eax */
+            e.code[pos + 1] = 0xC0;
+            e.code[pos + 2] = 0x90;  /* nop */
+            e.code[pos + 3] = 0x90;  /* nop */
+            e.code[pos + 4] = 0x90;  /* nop */
+            continue;
+        }
         for (int f = 0; f < prog->n_funcs; f++)
-            if ((uint32_t)f == callps[fi2].func_id && func_off[f] != (size_t)-1) { t = func_off[f]; break; }
-        if (t == (size_t)-1) continue;
+            if ((uint32_t)f == fid && func_off[f] != (size_t)-1) { t = func_off[f]; break; }
         size_t pos = callps[fi2].pos;
+        if (t == (size_t)-1) {
+            /* Unknown function: replace call rel32 with xor eax,eax + nops.
+             * pos points to rel32, go back 1 for the call opcode. */
+            pos = callps[fi2].pos - 1;
+            e.code[pos]     = 0x31;  /* xor eax, eax */
+            e.code[pos + 1] = 0xC0;
+            e.code[pos + 2] = 0x90;  /* nop */
+            e.code[pos + 3] = 0x90;  /* nop */
+            e.code[pos + 4] = 0x90;  /* nop */
+            continue;
+        }
         int32_t rel = (int32_t)(t - (pos + 4));
         e.code[pos]   = (uint8_t)(rel & 0xFF);
         e.code[pos+1] = (uint8_t)((rel >> 8) & 0xFF);
