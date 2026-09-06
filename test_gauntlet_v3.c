@@ -25,7 +25,7 @@ typedef struct {
     int64_t expected;
 } test_info_t;
 
-#define MAX_TESTS 16000
+#define MAX_TESTS 20000
 #define MAX_JOBS 12
 
 static test_info_t all_tests[MAX_TESTS];

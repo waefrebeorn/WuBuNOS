@@ -29,6 +29,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <dlfcn.h>
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -1171,43 +1172,82 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             break;
         }
         case MIR_CALL: {
-            /* Check for special host functions: exit, abort.
-             * These need special handling because they don't return. */
+            /* Check for special host functions: exit, abort, and libc builtins. */
             if (in->func_id == 0xFFFF && in->func_name[0]) {
                 if (strcmp(in->func_name, "exit") == 0) {
-                    /* exit(n): store argument to global, set flag, return.
-                     * v1 holds the argument. */
+                    /* exit(n): store argument to global, set flag, return. */
                     int v1_enc = VR_ENC_SAFE(1);
-                    /* movabs rax, &wubu_jit_exit_code */
                     e8(&e, 0x48); e8(&e, 0xB8);
                     uint64_t addr = (uint64_t)&wubu_jit_exit_code;
                     for (int b = 0; b < 8; b++) e8(&e, (uint8_t)((addr >> (b*8)) & 0xFF));
-                    /* mov [rax], v1 */
                     if (v1_enc >= 0) {
-                        uint8_t rex = 0x48; /* REX.W */
-                        if (v1_enc >= 8) rex |= 0x04; /* REX.R */
-                        e8(&e, rex);
-                        e8(&e, 0x89);
-                        e8(&e, (uint8_t)(((v1_enc & 7) << 3) | 0)); /* mod=00, rm=rax */
+                        uint8_t rex = 0x48;
+                        if (v1_enc >= 8) rex |= 0x04;
+                        e8(&e, rex); e8(&e, 0x89);
+                        e8(&e, (uint8_t)(((v1_enc & 7) << 3) | 0));
                     } else {
-                        /* v1 is spilled — load it into rax first, then store */
-                        /* For now, just store 0 */
                         e8(&e, 0x48); e8(&e, 0xC7); e8(&e, 0x00); e32(&e, 0);
                     }
-                    /* movabs rax, &wubu_jit_exit_called */
                     e8(&e, 0x48); e8(&e, 0xB8);
                     addr = (uint64_t)&wubu_jit_exit_called;
                     for (int b = 0; b < 8; b++) e8(&e, (uint8_t)((addr >> (b*8)) & 0xFF));
-                    /* mov byte [rax], 1 */
                     e8(&e, 0xC6); e8(&e, 0x00); e8(&e, 1);
-                    /* ret */
                     e8(&e, 0xC3);
                     break;
                 }
                 if (strcmp(in->func_name, "abort") == 0) {
-                    /* abort(): ud2 triggers SIGABRT */
                     e8(&e, 0x0F); e8(&e, 0x0B);
                     break;
+                }
+                /* Try to resolve as libc function via dlsym.
+                 * Emit proper x86-64 SysV calling convention:
+                 *   rdi = arg1 (VR1), rsi = arg2 (VR2), rdx = arg3 (VR3)
+                 *   call rax (where rax = dlsym result)
+                 *   mov vr0, rax (return value) */
+                {
+                    void *sym = dlsym(RTLD_DEFAULT, in->func_name);
+                    if (!sym) sym = dlsym(RTLD_NEXT, in->func_name);
+                    if (sym) {
+                        /* Read argument register encodings BEFORE saving registers */
+                        int vr1 = VR_ENC_SAFE(1);
+                        int vr2 = VR_ENC_SAFE(2);
+                        int vr3 = VR_ENC_SAFE(3);
+                        /* Save caller-sysv registers (except rax which holds return) */
+                        /* Save: r11, r12, r13, r14, r15, r8, r9, rdx */
+                        static const int save_regs[] = {11,12,13,14,15,8,9,2};
+                        for (int s = 0; s < 8; s++) {
+                            int r = save_regs[s];
+                            if (r >= 8) { e8(&e,0x41); e8(&e,0x50+(r&7)); }
+                            else { e8(&e,0x50+r); }
+                        }
+                        /* rdi (x86 enc 7) = VR1 (first arg) */
+                        if (vr1 >= 0) emit_mov_reg(&e, 7, vr1);
+                        else emit_load_rbp(&e, 7, spill_off(assign, assign_count, &e, 1));
+                        /* rsi (x86 enc 6) = VR2 (second arg) */
+                        if (vr2 >= 0) emit_mov_reg(&e, 6, vr2);
+                        else emit_load_rbp(&e, 6, spill_off(assign, assign_count, &e, 2));
+                        /* rdx (x86 enc 2) = VR3 (third arg) */
+                        if (vr3 >= 0) emit_mov_reg(&e, 2, vr3);
+                        else emit_load_rbp(&e, 2, spill_off(assign, assign_count, &e, 3));
+                        /* movabs rax, <sym> */
+                        e8(&e, 0x48); e8(&e, 0xB8);
+                        uint64_t addr = (uint64_t)sym;
+                        for (int b = 0; b < 8; b++) e8(&e, (uint8_t)((addr >> (b*8)) & 0xFF));
+                        /* Get VR0's home register (where return value should go) */
+                        int vr0_enc = VR_ENC_SAFE(0);
+                        /* call rax */
+                        e8(&e, 0xFF); e8(&e, 0xD0);
+                        /* mov VR0_home, rax (save return value) */
+                        if (vr0_enc >= 0) emit_mov_reg(&e, vr0_enc, 0);
+                        /* If VR0 is spilled, store rax to its stack slot */
+                        /* Restore registers */
+                        for (int s = 7; s >= 0; s--) {
+                            int r = save_regs[s];
+                            if (r >= 8) { e8(&e,0x41); e8(&e,0x58+(r&7)); }
+                            else { e8(&e,0x58+r); }
+                        }
+                        break;
+                    }
                 }
             }
 
@@ -1388,7 +1428,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
     for (size_t fi2 = 0; fi2 < ncallp; fi2++) {
         size_t t = (size_t)-1;
         uint32_t fid = callps[fi2].func_id;
-        /* External function marker (0xFFFF) — replace with xor eax,eax */
+        /* External function marker (0xFFFF) — fallback: xor eax,eax */
         if (fid == 0xFFFF) {
             size_t pos = callps[fi2].pos - 1;  /* pos points to rel32, go back 1 for call opcode */
             e.code[pos]     = 0x31;  /* xor eax, eax */
