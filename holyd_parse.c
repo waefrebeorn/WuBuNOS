@@ -110,6 +110,24 @@ static HDType *parse_type(HDParser *p) {
             break;
         }
         case HD_KW_U0:   t->kind = HD_TYPE_VOID; advance(p); break;
+        case HD_KW_ATOMIC: {
+            /* _Atomic type qualifier (C11): _Atomic(T) or _Atomic T */
+            advance(p); /* consume _Atomic */
+            if (peek(p) == HD_TOK_LPAREN) {
+                advance(p); /* consume ( */
+                HDType *inner = parse_type(p);
+                expect(p, HD_TOK_RPAREN);
+                /* For now, _Atomic(T) lowers to T (atomic semantics no-op) */
+                free(t);
+                t = inner;
+            } else {
+                /* _Atomic T — parse the following type */
+                HDType *inner = parse_type(p);
+                free(t);
+                t = inner;
+            }
+            break;
+        }
         case HD_KW_I8:   t->kind = HD_TYPE_I8;   advance(p); break;
         case HD_KW_I16:  t->kind = HD_TYPE_I16;  advance(p); break;
         case HD_KW_I32:  t->kind = HD_TYPE_I32;  advance(p); break;
@@ -1207,7 +1225,7 @@ static HDASTNode *parse_stmt(HDParser *p) {
     /* Variable declaration (type followed by ident) */
     {
         HDTokenType _t = peek(p);
-        if (_t >= HD_KW_I0 && _t <= HD_KW_VOLATILE) {
+        if ((_t >= HD_KW_I0 && _t <= HD_KW_VOLATILE) || _t == HD_KW_ATOMIC) {
             return hd_parse_decl(p);
         }
     }
@@ -1273,9 +1291,9 @@ HDASTNode *hd_parse_decl(HDParser *p) {
         return hd_parse_decl(p);
     }
 
-    /* Handle `const`/`volatile` qualifiers: strip and parse as normal decl.
+    /* Handle `const`/`volatile`/`_Atomic` qualifiers: strip and parse as normal decl.
      * These affect type checking which the JIT doesn't enforce. */
-    if (match(p, HD_KW_CONST) || match(p, HD_KW_VOLATILE)) {
+    if (match(p, HD_KW_CONST) || match(p, HD_KW_VOLATILE) || match(p, HD_KW_ATOMIC)) {
         return hd_parse_decl(p);
     }
 

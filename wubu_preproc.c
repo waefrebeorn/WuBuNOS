@@ -320,9 +320,6 @@ static void strip_compiler_keywords(char *line)
         "__declspec", "__asm__", "__asm", "__volatile__",
         "__restrict__", "__restrict", "__signed__",
         "__builtin_va_list", "__builtin_offsetof",
-        "__alignof__", "__typeof__", "__auto_type",
-        "_Atomic", "_Complex", "_Imaginary",
-        "_Decimal32", "_Decimal64", "_Decimal128",
         "inline", "_inline", "register", "auto", "restrict", "_restrict",
         "signed", "_signed", "const", "_const", "volatile", "_volatile",
         NULL

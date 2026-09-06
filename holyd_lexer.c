@@ -80,6 +80,7 @@ static const HDKeyword hd_keywords[] = {
     {"public",   HD_KW_PUBLIC},
     {"const",    HD_KW_CONST},
     {"volatile", HD_KW_VOLATILE},
+    {"_Atomic",  HD_KW_ATOMIC},
     {"inline",   HD_KW_INLINE},
     {"sizeof",   HD_KW_SIZEOF},
 };

@@ -100,8 +100,12 @@ test_single: test_single.c $(FRONT) $(MIR) wubu_tgemm_avx512.o $(filter-out wubu
 	$(CC) $(CFLAGS) -I. -Itest_gauntlet $^ $(LDFLAGS) -o $@
 
 # Fork+timeout gauntlet v2 (per-test fork with timeout)
-gauntlet_v2: test_gauntlet_v2.c $(FRONT) $(MIR) wubu_tgemm_avx512.o $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) $(JIT_SRC) jit_stubs_arm64.c $(OS_ROOT)/runtime/wubu_spawn.c test_gauntlet/suites/gauntlet_gcc_torture.c test_gauntlet/suites/gauntlet_extern_gcc.c test_gauntlet/suites/gauntlet_c_testsuite.c test_gauntlet/suites/gauntlet_llvm.c test_gauntlet/suites/gauntlet_lacc.c test_gauntlet/suites/gauntlet_fujitsu.c
+gauntlet_v2: test_gauntlet_v2.c $(FRONT) $(MIR) wubu_tgemm_avx512.o $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) $(JIT_SRC) jit_stubs_arm64.c $(OS_ROOT)/runtime/wubu_spawn.c
 	$(CC) $(CFLAGS) -I. -Itest_gauntlet $^ $(LDFLAGS) -o $@
+
+# Multi-threaded gauntlet v3 (parallel fork+timeout)
+gauntlet_v3: test_gauntlet_v3.c $(FRONT) $(MIR) wubu_tgemm_avx512.o $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) $(JIT_SRC) jit_stubs_arm64.c $(OS_ROOT)/runtime/wubu_spawn.c $(wildcard test_gauntlet/suites/gauntlet_gcc_*.c) $(wildcard test_gauntlet/suites/gauntlet_fujitsu.c) $(wildcard test_gauntlet/suites/gauntlet_extern_*.c) $(wildcard test_gauntlet/suites/gauntlet_c_testsuite.c) $(wildcard test_gauntlet/suites/gauntlet_llvm.c) $(wildcard test_gauntlet/suites/gauntlet_lacc.c)
+	$(CC) $(CFLAGS) -I. -Itest_gauntlet $^ $(LDFLAGS) -pthread -o $@
 
 # ---- Run targets ----
 
