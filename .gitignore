@@ -27,3 +27,5 @@ test_gauntlet_output
 .DS_Store
 *~
 test_gauntlet/depot/writing-c-compiler/upstream/
+test_gauntlet/depot/incremental/upstream/
+test_gauntlet/depot/8cc/upstream/

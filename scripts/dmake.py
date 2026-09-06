@@ -52,6 +52,13 @@ UPSTREAM_SOURCES = {
         "tests_dir": "tests",
         "test_format": "chapter_based",  # organized by chapter, valid/invalid
     },
+    "incremental": {
+        "url": "https://github.com/AMLeng/incremental_c_compiler_tests.git",
+        "type": "git",
+        "description": "Incremental C Compiler Tests (12 stages)",
+        "tests_dir": ".",
+        "test_format": "incremental",  # stage_N/valid/*.c, each file is a standalone program
+    },
 }
 
 # Gauntlet suites that we generate from upstream + our own
@@ -124,6 +131,9 @@ def generate():
     
     # Generate writing-c-compiler valid tests
     generate_writing_c_compiler()
+    
+    # Generate incremental C compiler tests
+    generate_incremental()
 
 def generate_fujitsu_single():
     """Generate gauntlet for Fujitsu single-source tests."""
@@ -234,6 +244,69 @@ def generate_writing_c_compiler():
     
     write_gauntlet_file("gauntlet_writing_c_compiler_depot", tests, "return_value")
     print(f"  Generated gauntlet_writing_c_compiler_depot: {len(tests)} tests")
+
+def generate_incremental():
+    """Generate gauntlet for incremental C compiler tests (valid programs only)."""
+    inc_dir = DEPOT_DIR / "incremental" / "upstream"
+    if not inc_dir.exists():
+        print("  incremental not cloned, skipping")
+        return
+    
+    tests = []
+    # Each stage_N/valid/*.c is a standalone program
+    for stage_dir in sorted(inc_dir.glob("stage_*/valid")):
+        if not stage_dir.is_dir():
+            continue
+        for test_file in sorted(stage_dir.rglob("*.c")):
+            source = test_file.read_text()
+            if len(source) > 65536:
+                continue
+            
+            # Compute expected return value by compiling with host gcc
+            # For now, we use gcc to get the expected result
+            import subprocess
+            import tempfile
+            import os
+            
+            with tempfile.NamedTemporaryFile(suffix=".c", delete=False) as tmp:
+                tmp.write(source.encode())
+                tmp_path = tmp.name
+            
+            try:
+                # Compile with gcc
+                result = subprocess.run(
+                    ["gcc", "-w", "-o", tmp_path + ".out", tmp_path],
+                    capture_output=True, timeout=10
+                )
+                if result.returncode != 0:
+                    continue  # Skip tests that gcc can't compile
+                
+                # Run to get expected return value
+                result = subprocess.run(
+                    [tmp_path + ".out"],
+                    capture_output=True, timeout=5
+                )
+                expected_return = result.returncode
+                
+                # Use relative path as name
+                rel = test_file.relative_to(inc_dir)
+                name = f"inc_{str(rel).replace('/', '_').replace('.c', '')}"
+                
+                tests.append({
+                    "name": name,
+                    "source": source,
+                    "expected_return": expected_return,
+                })
+            except Exception:
+                continue
+            finally:
+                # Cleanup
+                for p in [tmp_path, tmp_path + ".out"]:
+                    if os.path.exists(p):
+                        os.unlink(p)
+    
+    write_gauntlet_file("gauntlet_incremental", tests, "return_value")
+    print(f"  Generated gauntlet_incremental: {len(tests)} tests")
 
 def write_gauntlet_file(name, tests, format_type):
     """Write a gauntlet suite C file."""
