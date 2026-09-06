@@ -320,6 +320,7 @@ static void strip_compiler_keywords(char *line)
         "__declspec", "__asm__", "__asm", "__volatile__",
         "__restrict__", "__restrict", "__signed__",
         "__builtin_va_list", "__builtin_offsetof",
+        "__alignof__", "__typeof__", "__auto_type",
         "inline", "_inline", "register", "auto", "restrict", "_restrict",
         "signed", "_signed", "const", "_const", "volatile", "_volatile",
         NULL
@@ -411,6 +412,14 @@ char *wubu_preprocess(const char *src)
         {"__WCHAR_TYPE__", "int"},
         {"__INTPTR_TYPE__", "long"},
         {"__UINTPTR_TYPE__", "unsigned long"},
+        {"__INT8_TYPE__", "signed char"},
+        {"__INT16_TYPE__", "short"},
+        {"__INT32_TYPE__", "int"},
+        {"__INT64_TYPE__", "long"},
+        {"__UINT8_TYPE__", "unsigned char"},
+        {"__UINT16_TYPE__", "unsigned short"},
+        {"__UINT32_TYPE__", "unsigned int"},
+        {"__UINT64_TYPE__", "unsigned long"},
         {"unix", "1"},
         {"linux", "1"},
         /* Common C standard macros */
