@@ -1810,9 +1810,24 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         /* Store initializer elements */
         if (n->type && (n->type->kind == HD_TYPE_STRUCT || n->type->kind == HD_TYPE_UNION)) {
             /* Struct: store elements at member offsets */
-            for (int i = 0; i < elem_count && i < n->type->n_members && i < 64; i++) {
+            for (int i = 0; i < elem_count && i < 64; i++) {
                 wubu_vr_t elem_val = mir_gen_expr(g, n->args[i]);
-                int moffset = n->type->members[i].offset;
+                int moffset = -1;
+                /* Check if this element has a designated field name */
+                if (n->args[i] && n->args[i]->ident[0]) {
+                    /* Look up the member offset by field name */
+                    for (int m = 0; m < n->type->n_members; m++) {
+                        if (strcmp(n->type->members[m].name, n->args[i]->ident) == 0) {
+                            moffset = n->type->members[m].offset;
+                            break;
+                        }
+                    }
+                }
+                if (moffset < 0) {
+                    /* No designated initializer — use sequential index */
+                    if (i < n->type->n_members) moffset = n->type->members[i].offset;
+                    else continue;
+                }
                 wubu_vr_t elem_addr = wubu_mir_binop(g->prog, MIR_ADD, addr,
                                                       wubu_mir_const(g->prog, (int64_t)moffset));
                 wubu_mir_store(g->prog, elem_addr, elem_val);

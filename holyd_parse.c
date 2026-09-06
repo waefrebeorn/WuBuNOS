@@ -838,12 +838,21 @@ static HDASTNode *parse_cast(HDParser *p) {
                 int elem_count = 0;
                 int args_cap = 8;
                 HDASTNode **elems = (HDASTNode **)calloc(sizeof(HDASTNode *), args_cap);
+                char elem_field_names[64][HD_MAX_IDENT_LEN]; /* designated initializer field names */
+                int elem_field_set[64]; /* 1 if this element has a designated field name */
+
+                memset(elem_field_names, 0, sizeof(elem_field_names));
+                memset(elem_field_set, 0, sizeof(elem_field_set));
 
                 while (peek(p) != HD_TOK_RBRACE && elem_count < 64) {
                     /* Handle designated initializers: .field = expr */
                     if (peek(p) == HD_TOK_DOT) {
                         advance(p); /* consume . */
-                        if (peek(p) == HD_TOK_IDENT) advance(p); /* skip field name */
+                        if (peek(p) == HD_TOK_IDENT) {
+                            strncpy(elem_field_names[elem_count], p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
+                            elem_field_set[elem_count] = 1;
+                            advance(p);
+                        }
                         if (peek(p) == HD_TOK_ASSIGN) advance(p); /* skip = */
                     }
                     HDASTNode *elem = parse_expr(p);
@@ -862,6 +871,13 @@ static HDASTNode *parse_cast(HDParser *p) {
                 cl->args = elems;
                 cl->n_args = elem_count;
                 cl->args_cap = args_cap;
+                /* Store designated initializer field names in cl->str_val area */
+                /* We use a different approach: store in the ident area of child nodes */
+                for (int i = 0; i < elem_count; i++) {
+                    if (elem_field_set[i] && elems[i]) {
+                        strncpy(elems[i]->ident, elem_field_names[i], HD_MAX_IDENT_LEN - 1);
+                    }
+                }
                 return cl;
             }
 
