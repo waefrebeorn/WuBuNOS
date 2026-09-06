@@ -1354,6 +1354,18 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             rex(&e,1,0,0,0); e8(&e, 0x89); e8(&e, 0x3E);   /* mov [rsi], rdi */
             break;
         }
+        case MIR_TO_PTR: {
+            /* dst = mem_base + a * 8 (convert offset to pointer) */
+            int sa = VR_ENC_SAFE(in->a);
+            if (sa >= 0) emit_mov_rax_from_vr(&e, sa);     /* rax = offset */
+            else emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
+            rex(&e,1,0,0,0); e8(&e, 0xC1); e8(&e, 0xE0); e8(&e, 0x03); /* shl rax,3 (offset * 8) */
+            rex(&e,1,0,0,0); e8(&e, 0x01); e8(&e, 0xD8);   /* add rax, rbx (add mem base) */
+            int sd = VR_ENC_SAFE(in->dst);
+            if (sd >= 0) emit_mov_vr_from_rax(&e, sd);     /* dst = rax */
+            else emit_store_rbp(&e, spill_off(assign, assign_count, &e, in->dst), 0);
+            break;
+        }
         case MIR_T_SOFTMAX:
         case MIR_T_TANH:
         case MIR_T_SIGMOID:

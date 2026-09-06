@@ -68,6 +68,7 @@ typedef enum {
     MIR_LOAD,          /* dst = mem[a] */
     MIR_STORE,         /* mem[a] = b */
     MIR_CALL,          /* call function func_id (args already in v1..vN) */
+    MIR_TO_PTR,        /* dst = mem_base + a (convert offset to pointer for external calls) */
     /* Soft-float ops: f32 values travel as IEEE-754 bit patterns inside the
      * int64 register file (upper 32 bits zero). Executed via wubu_softfloat. */
     MIR_FADD,          /* dst = f32(a) + f32(b) */
@@ -299,6 +300,8 @@ void wubu_mir_tclamp(wubu_mir_prog_t *p, wubu_vr_t a, wubu_vr_t b, wubu_vr_t dst
  * resolve the actual libc function. */
 void wubu_mir_call_ext(wubu_mir_prog_t *p, uint32_t func_id, const char *name);
 void wubu_mir_call(wubu_mir_prog_t *p, uint32_t func_id);
+/* Emit MIR_TO_PTR: dst = mem_base + a (convert offset to pointer for external calls) */
+void wubu_mir_to_ptr(wubu_mir_prog_t *p, wubu_vr_t a, wubu_vr_t dst);
 
 /* Set the number of function arguments (v1..n_args get pre-assigned to arg regs) */
 void wubu_mir_set_n_args(wubu_mir_prog_t *p, uint32_t n_args);

@@ -875,7 +875,7 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
         for (int i = g->n_vars - 1; i >= 0; i--)
             if (strcmp(g->vars[i].name, n->ident) == 0) {
                 g->vars[i].addr = addr;
-                g->vars[i].is_array = (arr_size > 0 && !is_struct_var);
+                g->vars[i].is_array = (n->type && n->type->kind == HD_TYPE_ARRAY);
                 g->vars[i].array_size = arr_size;
                 /* For multi-dimensional arrays, compute the stride (inner dimension).
                  * For int w[M][N], stride = N. For int w[N], stride = 1. */
@@ -2034,21 +2034,38 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         /* Place arguments in v1..vN (calling convention).
          * For struct-by-value arguments, the argument is an address pointing
          * to the struct data; we store that address directly so the callee
-         * can copy from it. For scalar arguments, we store the value. */
+         * can copy from it. For scalar arguments, we store the value.
+         * For external calls (fid < 0), address arguments (string literals,
+         * arrays) need MIR_TO_PTR to convert offsets to actual pointers. */
         for (uint32_t a = 0; a < n->n_args && a < MIR_MAX_CALL_ARGS; a++) {
             int arg_is_struct = 0;
+            int arg_is_addr = 0;
             if (n->args[a]) {
                 if (n->args[a]->type && n->args[a]->type->kind == HD_TYPE_STRUCT)
                     arg_is_struct = 1;
                 else if (n->args[a]->kind == HD_AST_IDENT && n->args[a]->ident[0] &&
                          mir_var_is_struct(g, n->args[a]->ident))
                     arg_is_struct = 1;
+                /* String literals and arrays are addresses (offsets into prog.mem) */
+                if (n->args[a]->kind == HD_AST_STRING_LIT)
+                    arg_is_addr = 1;
+                if (n->args[a]->type && (n->args[a]->type->kind == HD_TYPE_ARRAY || n->args[a]->type->kind == HD_TYPE_PTR))
+                    arg_is_addr = 1;
+                /* Also check if the identifier is an array variable */
+                if (n->args[a]->kind == HD_AST_IDENT && mir_var_is_array(g, n->args[a]->ident))
+                    arg_is_addr = 1;
             }
             wubu_vr_t av;
             if (arg_is_struct) {
                 av = mir_address_of(g, n->args[a]);
             } else {
                 av = mir_gen_expr(g, n->args[a]);
+            }
+            /* For external calls, convert address offsets to actual pointers */
+            if (fid < 0 && arg_is_addr && av != 0) {
+                wubu_vr_t ptr_vr = mir_new_vr(g);
+                wubu_mir_to_ptr(g->prog, av, ptr_vr);
+                av = ptr_vr;
             }
             if (av != (wubu_vr_t)(a + 1)) {
                 wubu_mir_mov_to(g->prog, a + 1, av);

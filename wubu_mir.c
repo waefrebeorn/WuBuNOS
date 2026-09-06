@@ -262,6 +262,15 @@ void wubu_mir_call_ext(wubu_mir_prog_t *p, uint32_t func_id, const char *name)
     }
 }
 
+void wubu_mir_to_ptr(wubu_mir_prog_t *p, wubu_vr_t a, wubu_vr_t dst)
+{
+    wubu_mir_instr_t *i = emit(p);
+    if (!i) return;
+    i->op = MIR_TO_PTR;
+    i->a = a;
+    i->dst = dst;
+}
+
 static const char *op_name(wubu_mir_op_t op)
 {
     switch (op) {
