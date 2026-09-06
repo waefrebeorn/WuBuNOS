@@ -29,3 +29,5 @@ test_gauntlet_output
 test_gauntlet/depot/writing-c-compiler/upstream/
 test_gauntlet/depot/incremental/upstream/
 test_gauntlet/depot/8cc/upstream/
+test_gauntlet/depot/compcert/upstream/
+test_gauntlet/depot/csmith/upstream/

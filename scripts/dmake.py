@@ -59,6 +59,13 @@ UPSTREAM_SOURCES = {
         "tests_dir": ".",
         "test_format": "incremental",  # stage_N/valid/*.c, each file is a standalone program
     },
+    "compcert": {
+        "url": "https://github.com/AbsInt/CompCert-small-tests.git",
+        "type": "git",
+        "description": "CompCert small test suite (regression tests)",
+        "tests_dir": "regression",
+        "test_format": "compcert_regression",  # single-file with Results/ reference output
+    },
 }
 
 # Gauntlet suites that we generate from upstream + our own
@@ -134,6 +141,44 @@ def generate():
     
     # Generate incremental C compiler tests
     generate_incremental()
+    
+    # Generate CompCert regression tests
+    generate_compcert()
+
+def generate_compcert():
+    """Generate gauntlet for CompCert regression tests."""
+    cc_dir = DEPOT_DIR / "compcert" / "upstream" / "regression"
+    if not cc_dir.exists():
+        print("  compcert not cloned, skipping")
+        return
+    
+    tests = []
+    results_dir = cc_dir / "Results"
+    
+    for test_file in sorted(cc_dir.glob("*.c")):
+        # Skip conditional test files
+        if test_file.with_suffix(".cond").exists():
+            continue
+        
+        # Find reference output
+        ref_file = results_dir / test_file.stem
+        if not ref_file.exists():
+            continue
+        
+        source = test_file.read_text()
+        expected_output = ref_file.read_text().strip()
+        
+        if len(source) > 65536 or len(expected_output) > 16384:
+            continue
+        
+        tests.append({
+            "name": f"compcert_{test_file.stem}",
+            "source": source,
+            "expected_output": expected_output,
+        })
+    
+    write_gauntlet_file("gauntlet_compcert_regression", tests, "output_comparison")
+    print(f"  Generated gauntlet_compcert_regression: {len(tests)} tests")
 
 def generate_fujitsu_single():
     """Generate gauntlet for Fujitsu single-source tests."""
