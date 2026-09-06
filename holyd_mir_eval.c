@@ -2412,6 +2412,33 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
                 }
             }
         }
+        /* For variadic functions, copy v1..vN to wubu_va_args[0..N-1]
+         * so va_arg(ap, type) can read them. */
+        if (fn->is_variadic) {
+            /* Allocate wubu_va_args if not already done */
+            int va_args_idx = -1;
+            for (int i = 0; i < g.n_vars; i++) {
+                if (strcmp(g.vars[i].name, "wubu_va_args") == 0) { va_args_idx = i; break; }
+            }
+            if (va_args_idx < 0 && g.n_vars < MIRGEN_MAX_VARS) {
+                va_args_idx = g.n_vars++;
+                strncpy(g.vars[va_args_idx].name, "wubu_va_args", HD_MAX_IDENT_LEN - 1);
+                int64_t mem_addr = (int64_t)(prog->total_mem + 1);
+                prog->total_mem = mem_addr + 31; /* 32 elements */
+                g.vars[va_args_idx].addr = wubu_mir_const(prog, mem_addr);
+            }
+            if (va_args_idx >= 0) {
+                /* Copy v1..vN to wubu_va_args[0..N-1] */
+                int n_fixed = fn->n_params; /* number of fixed params (0 if variadic with no fixed) */
+                /* Total args = max(n_fixed, actual). For now, copy up to 8 args. */
+                for (int a = 0; a < 8; a++) {
+                    wubu_vr_t elem_addr = wubu_mir_binop(prog, MIR_ADD, g.vars[va_args_idx].addr,
+                                                          wubu_mir_const(prog, (int64_t)(a * 8)));
+                    wubu_vr_t arg_val = (wubu_vr_t)(a + 1); /* v1..v8 */
+                    wubu_mir_store(prog, elem_addr, arg_val);
+                }
+            }
+        }
         /* Set up early-return: RETURN emits `result_vr = expr; jmp ret_label`,
          * and the epilogue (placed after the body) moves result_vr into vr0
          * and returns. This makes `if(c) return x; return y;` correct. */
