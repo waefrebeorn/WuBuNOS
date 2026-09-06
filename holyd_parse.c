@@ -830,6 +830,41 @@ static HDASTNode *parse_cast(HDParser *p) {
                 cast_type = ptr;
             }
             expect(p, HD_TOK_RPAREN);
+
+            /* Check for compound literal: (type){ initializer } */
+            if (peek(p) == HD_TOK_LBRACE) {
+                advance(p); /* consume { */
+                /* Parse initializer list: expr1, expr2, ... or .field=val, ... */
+                int elem_count = 0;
+                int args_cap = 8;
+                HDASTNode **elems = (HDASTNode **)calloc(sizeof(HDASTNode *), args_cap);
+
+                while (peek(p) != HD_TOK_RBRACE && elem_count < 64) {
+                    /* Handle designated initializers: .field = expr */
+                    if (peek(p) == HD_TOK_DOT) {
+                        advance(p); /* consume . */
+                        if (peek(p) == HD_TOK_IDENT) advance(p); /* skip field name */
+                        if (peek(p) == HD_TOK_ASSIGN) advance(p); /* skip = */
+                    }
+                    HDASTNode *elem = parse_expr(p);
+                    if (elem_count >= args_cap) {
+                        args_cap *= 2;
+                        elems = (HDASTNode **)realloc(elems, sizeof(HDASTNode *) * args_cap);
+                    }
+                    elems[elem_count++] = elem;
+                    if (peek(p) == HD_TOK_COMMA) advance(p);
+                }
+                expect(p, HD_TOK_RBRACE);
+
+                HDASTNode *cl = hd_ast_new(HD_AST_COMPOUND_LITERAL);
+                cl->type = cast_type;
+                cl->int_val = elem_count;
+                cl->args = elems;
+                cl->n_args = elem_count;
+                cl->args_cap = args_cap;
+                return cl;
+            }
+
             HDASTNode *expr = parse_cast(p);  /* right-associative for nested casts */
             HDASTNode *n = hd_ast_new(HD_AST_CAST);
             n->child = expr;

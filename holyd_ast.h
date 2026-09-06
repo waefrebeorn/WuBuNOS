@@ -40,7 +40,7 @@ struct HDASTNode {
     HDType *extern_param_types[HD_MAX_PARAMS];
     int extern_n_params;
 
-    /* For call */
+    /* For call and compound literal */
     HDASTNode **args;
     int n_args;
 

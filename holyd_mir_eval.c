@@ -85,6 +85,8 @@ typedef struct {
     char enum_const_names[64][HD_MAX_IDENT_LEN];
     int64_t enum_const_vals[64];
     int n_enum_consts;
+    int cl_counter;          /* compound literal temp var counter */
+    int local_stack_offset;  /* next local stack offset for compound literals */
 } HDMirGen;
 
 static wubu_vr_t mir_new_vr(HDMirGen *g) {
@@ -1790,6 +1792,57 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         /* Same-width integer cast: no-op */
         return val;
     }
+    case HD_AST_COMPOUND_LITERAL: {
+        /* (type){initializer} — C99 compound literal.
+         * Allocate memory, store initializer elements, return address. */
+        int elem_count = n->int_val;
+        int type_size = 8; /* default: one int64 cell */
+        if (n->type) {
+            type_size = hd_type_size(n->type);
+            if (type_size <= 0) type_size = 8;
+        }
+        int n_cells = (type_size + 7) / 8;
+        if (n_cells < 1) n_cells = 1;
+
+        /* Allocate memory for the compound literal */
+        wubu_vr_t addr = wubu_mir_alloc(g->prog, n_cells);
+
+        /* Store initializer elements */
+        if (n->type && (n->type->kind == HD_TYPE_STRUCT || n->type->kind == HD_TYPE_UNION)) {
+            /* Struct: store elements at member offsets */
+            for (int i = 0; i < elem_count && i < n->type->n_members && i < 64; i++) {
+                wubu_vr_t elem_val = mir_gen_expr(g, n->args[i]);
+                int moffset = n->type->members[i].offset;
+                wubu_vr_t elem_addr = wubu_mir_binop(g->prog, MIR_ADD, addr,
+                                                      wubu_mir_const(g->prog, (int64_t)moffset));
+                wubu_mir_store(g->prog, elem_addr, elem_val);
+            }
+        } else if (n->type && n->type->kind == HD_TYPE_ARRAY) {
+            /* Array: store elements at index * 8 offsets */
+            for (int i = 0; i < elem_count && i < 64; i++) {
+                wubu_vr_t elem_val = mir_gen_expr(g, n->args[i]);
+                wubu_vr_t elem_addr = wubu_mir_binop(g->prog, MIR_ADD, addr,
+                                                      wubu_mir_const(g->prog, (int64_t)(i * 8)));
+                wubu_mir_store(g->prog, elem_addr, elem_val);
+            }
+        } else {
+            /* Scalar: just store the first element */
+            if (elem_count > 0) {
+                wubu_vr_t elem_val = mir_gen_expr(g, n->args[0]);
+                wubu_mir_store(g->prog, addr, elem_val);
+            }
+        }
+
+        /* For struct/array compound literals, return the address.
+         * For scalar compound literals, return the value. */
+        if (n->type && (n->type->kind == HD_TYPE_STRUCT || n->type->kind == HD_TYPE_UNION)) {
+            return addr;
+        } else if (n->type && n->type->kind == HD_TYPE_ARRAY) {
+            return addr;
+        } else {
+            return wubu_mir_load(g->prog, addr);
+        }
+    }
     case HD_AST_SIZEOF: {
         /* sizeof(type) or sizeof(expr) — emit the type size in BYTES as a constant.
          * n->type->size for structs is in int64 cells; multiply by 8 for bytes.
@@ -1981,6 +2034,17 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 wubu_mir_mov_to(g->prog, a + 1, av);
             }
         }
+        /* Handle builtin functions that the preprocessor stripped __builtin_ prefix from. */
+        if (fid < 0 && n->callee && n->callee->kind == HD_AST_IDENT && n->callee->ident[0]) {
+            const char *fname = n->callee->ident;
+            if (strcmp(fname, "strlen") == 0 && n->n_args >= 1) {
+                /* strlen(string_literal) = compile-time constant */
+                if (n->args[0] && n->args[0]->kind == HD_AST_STRING_LIT) {
+                    return wubu_mir_const(g->prog, (int64_t)strlen(n->args[0]->str_val));
+                }
+            }
+        }
+
         /* For unknown functions (fid < 0), use func_id 0xFFFF that the JIT
          * recognizes as "external" and handles by returning 0 instead of crashing.
          * Without this, unknown func calls resolve to main (func_id 0),

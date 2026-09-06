@@ -214,6 +214,7 @@ typedef enum {
     HD_AST_GE,
     HD_AST_UNARY,
     HD_AST_CAST,
+    HD_AST_COMPOUND_LITERAL, /* (type){initializer} — C99 compound literal */
     HD_AST_SIZEOF,   /* sizeof(type) / sizeof expr — emits the type size as a literal */
     HD_AST_CALL,
     HD_AST_FUNC_CALL,
