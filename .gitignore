@@ -1,21 +1,29 @@
+# WuBuNOS Test Gauntlet — .gitignore
+
+# Ignore upstream repo clones (huge, tracked by their own git)
+test_gauntlet/depot/fujitsu/upstream/
+test_gauntlet/depot/c-testsuite/upstream/
+test_gauntlet/depot/writing-c-compiler/upstream/
+
+# Ignore build artifacts
 *.o
-*.d
-holyc
+*.a
+*.so
 gauntlet_runner
-holyc_test
-selfhost_battery
-mir_driver_test
-test_isa_driver
-cleveland_browns_album_test
-hedge_verify
-*.o
-*.d
-/test_isa_driver
-/test_mir_opt
-/gauntlet_runner
-/test_softfloat
-/test_peephole
-/test_elf_cubin
-/test_fuzz_diff
-/peephole_superopt_bin
-.gitignore
+gauntlet_v2
+gauntlet_v3
+gauntlet_direct
+gauntlet_output
+test_single
+test_gauntlet_output
+
+# Ignore logs
+*.log
+/tmp/gv*.log
+/tmp/gv3_*
+/tmp/gauntlet_*
+
+# Ignore OS files
+.DS_Store
+*~
+test_gauntlet/depot/writing-c-compiler/upstream/
