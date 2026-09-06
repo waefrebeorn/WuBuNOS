@@ -265,6 +265,7 @@ typedef enum {
     HD_AST_DIV_ASSIGN,
     HD_AST_BRACE_INIT,
     HD_AST_DESIG_INIT,     /* designated initializer: .field = val or [index] = val */
+    HD_AST_STMT_EXPR,      /* GCC statement expression: ({ ... }) */
 } HDASTKind;
 
 /* -- Forward declarations for opaque structs ---------------------------------- */

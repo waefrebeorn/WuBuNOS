@@ -81,6 +81,7 @@ static HDASTNode *parse_comma(HDParser *p);
 static HDASTNode *parse_assign(HDParser *p);
 static HDASTNode *parse_stmt(HDParser *p);
 static HDASTNode *parse_decl(HDParser *p);
+static HDASTNode *parse_block(HDParser *p);  /* forward-declared for ({ ... }) statement expr */
 
 /* -- Parse Type --------------------------------------------------- */
 
@@ -550,6 +551,18 @@ static HDASTNode *parse_primary(HDParser *p) {
         }
         case HD_TOK_LPAREN: {
             advance(p); /* ( */
+            /* GCC statement expression: ({ stmt1; stmt2; ...; expr; }) */
+            if (peek(p) == HD_TOK_LBRACE) {
+                /* Parse the block of statements */
+                HDASTNode *block = parse_block(p);
+                expect(p, HD_TOK_RPAREN);
+                /* The value is the last expression statement in the block.
+                 * Wrap in a STMT_EXPR node so codegen evaluates the block
+                 * and returns the last expression's value. */
+                HDASTNode *n = hd_ast_new(HD_AST_STMT_EXPR);
+                n->child = block;
+                return n;
+            }
             HDASTNode *expr = parse_expr(p);
             expect(p, HD_TOK_RPAREN);
             return expr;

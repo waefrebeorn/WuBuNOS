@@ -1858,6 +1858,11 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             return wubu_mir_load(g->prog, addr);
         }
     }
+    case HD_AST_STMT_EXPR: {
+        /* GCC statement expression: ({ stmt1; stmt2; ...; expr; })
+         * Execute the block, return the value of the last expression. */
+        return mir_gen_stmt(g, n->child);
+    }
     case HD_AST_SIZEOF: {
         /* sizeof(type) or sizeof(expr) — emit the type size in BYTES as a constant.
          * n->type->size for structs is in int64 cells; multiply by 8 for bytes.
