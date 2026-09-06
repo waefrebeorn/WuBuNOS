@@ -245,6 +245,7 @@ int main(int argc, char **argv) {
      * thousands of fork/wait cycles. MALLOC_MMAP_THRESHOLD=0 forces ALL
      * allocations through mmap (not just large ones). */
     mallopt(M_MMAP_THRESHOLD, 0);
+    mallopt(M_TRIM_THRESHOLD, 65536);
 
     /* Parallel differential battery: fork ONE child per target. Each child
      * parses every test's HolyD into canonical MIR and runs it through its own
@@ -269,7 +270,7 @@ int main(int argc, char **argv) {
         /* Child processes run in batches of MAX_TESTS_PER_CHILD to prevent
          * malloc arena bloat from OOM under the 4GB cgroup limit. The parent
          * forks a new child when the previous one fills its batch. */
-        #define MAX_TESTS_PER_CHILD 1000
+        #define MAX_TESTS_PER_CHILD 1
         uint32_t batch_start = 0; /* test offset within the flat test array */
         /* Build a flat array of all test pointers for batching. */
         uint32_t total_tests = g.n_tests;

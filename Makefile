@@ -91,6 +91,18 @@ test_mir_opt: $(MIR) wubu_tgemm_avx512.o $(ISA) wubu_isa_vulkan.c wubu_isa_spirv
 gauntlet: $(FRONT) $(MIR) wubu_tgemm_avx512.o $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) $(JIT_SRC) $(GAUN) jit_stubs_arm64.c $(OS_ROOT)/runtime/wubu_spawn.c
 	$(CC) $(CFLAGS) -I. -Itest_gauntlet $^ $(LDFLAGS) -o gauntlet_runner
 
+# Direct gauntlet (no forking, runs tests in parent process)
+gauntlet_direct: test_gauntlet_direct.c $(FRONT) $(MIR) wubu_tgemm_avx512.o $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) $(JIT_SRC) jit_stubs_arm64.c $(OS_ROOT)/runtime/wubu_spawn.c $(wildcard test_gauntlet/suites/gauntlet_gcc_*.c) $(wildcard test_gauntlet/suites/gauntlet_fujitsu.c) $(wildcard test_gauntlet/suites/gauntlet_extern_*.c) $(wildcard test_gauntlet/suites/gauntlet_c_testsuite.c) $(wildcard test_gauntlet/suites/gauntlet_llvm.c) $(wildcard test_gauntlet/suites/gauntlet_lacc.c)
+	$(CC) $(CFLAGS) -I. -Itest_gauntlet $^ $(LDFLAGS) -o $@
+
+# Single test runner (fork+exec model)
+test_single: test_single.c $(FRONT) $(MIR) wubu_tgemm_avx512.o $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) $(JIT_SRC) jit_stubs_arm64.c $(OS_ROOT)/runtime/wubu_spawn.c
+	$(CC) $(CFLAGS) -I. -Itest_gauntlet $^ $(LDFLAGS) -o $@
+
+# Fork+timeout gauntlet v2 (per-test fork with timeout)
+gauntlet_v2: test_gauntlet_v2.c $(FRONT) $(MIR) wubu_tgemm_avx512.o $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) $(JIT_SRC) jit_stubs_arm64.c $(OS_ROOT)/runtime/wubu_spawn.c test_gauntlet/suites/gauntlet_gcc_torture.c test_gauntlet/suites/gauntlet_extern_gcc.c test_gauntlet/suites/gauntlet_c_testsuite.c test_gauntlet/suites/gauntlet_llvm.c test_gauntlet/suites/gauntlet_lacc.c test_gauntlet/suites/gauntlet_fujitsu.c
+	$(CC) $(CFLAGS) -I. -Itest_gauntlet $^ $(LDFLAGS) -o $@
+
 # ---- Run targets ----
 
 test: test_isa_driver test_softfloat test_peephole test_elf_cubin test_mir_float test_fuzz_diff test_tgemm test_gap_audit test_selfhost_battery
