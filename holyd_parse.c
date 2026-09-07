@@ -508,6 +508,13 @@ static HDASTNode *parse_primary(HDParser *p) {
             advance(p);
             return n;
         }
+        case HD_TOK_CHAR: {
+            HDASTNode *n = hd_ast_new(HD_AST_CHAR_LIT);
+            n->str_val[0] = p->lex->tok.str_val[0];
+            n->int_val = (int64_t)(uint8_t)p->lex->tok.str_val[0];
+            advance(p);
+            return n;
+        }
         case HD_TOK_FLOAT: {
             HDASTNode *n = hd_ast_new(HD_AST_FLOAT_LIT);
             n->float_val = p->lex->tok.float_val;
@@ -523,17 +530,6 @@ static HDASTNode *parse_primary(HDParser *p) {
              * NOT text (which is the raw source span and can be empty
              * after a previous token's trailing-quote advance). */
             strncpy(n->str_val, p->lex->tok.str_val, HD_MAX_STRING_LEN - 1);
-            advance(p);
-            return n;
-        }
-        case HD_TOK_CHAR: {
-            HDASTNode *n = hd_ast_new(HD_AST_CHAR_LIT);
-            /* the lexer puts the decoded char in str_val[0]; int_val
-             * is only set for HD_TOK_INT (the scanner path doesn't
-             * touch int_val for chars). Codegen reads str_val[0], so
-             * populate both for safety. */
-            n->str_val[0] = p->lex->tok.str_val[0];
-            n->int_val = (int64_t)(uint8_t)p->lex->tok.str_val[0];
             advance(p);
             return n;
         }

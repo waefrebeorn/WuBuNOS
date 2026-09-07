@@ -327,7 +327,12 @@ static HDTokenType hd_scan_string(HDLexer *lex) {
                 case '"': lex->tok.str_val[i++] = '"'; break;
                 case '\'': lex->tok.str_val[i++] = '\''; break;
                 case '0': lex->tok.str_val[i++] = '\0'; break;
-                default: lex->tok.str_val[i++] = esc; break;
+                case 'a': lex->tok.str_val[i++] = '\a'; break;  /* BEL (7) */
+                case 'b': lex->tok.str_val[i++] = '\b'; break;  /* BS (8) */
+                case 'f': lex->tok.str_val[i++] = '\f'; break;  /* FF (12) */
+                case 'v': lex->tok.str_val[i++] = '\v'; break;  /* VT (11) */
+                case '?': lex->tok.str_val[i++] = '?'; break;  /* \? = ? */
+                default: lex->tok.str_val[i++] = esc; break;    /* unknown: raw char */
             }
             hd_advance(lex);
         } else {
@@ -335,7 +340,7 @@ static HDTokenType hd_scan_string(HDLexer *lex) {
         }
     }
     lex->tok.str_val[i] = '\0';
-    return hd_make_token(lex, quote == '"' ? HD_TOK_STRING : HD_TOK_CHAR);
+    return hd_make_token(lex, quote == '\"' ? HD_TOK_STRING : HD_TOK_CHAR);
 }
 
 static HDTokenType hd_scan_identifier(HDLexer *lex) {

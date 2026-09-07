@@ -1091,6 +1091,20 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             else emit_store_rbp(&e, spill_off(assign, assign_count, &e, in->dst), 0);
             break;
         }
+        case MIR_ZEXT32: {
+            /* Zero-extend 32-bit value to 64 bits.
+             * x86-64: mov r32, r/m32 zero-extends to 64 bits.
+             * We already loaded the value into rax, so just mask it. */
+            int sa = VR_ENC_SAFE(in->a);
+            if (sa >= 0) emit_mov_rax_from_vr(&e, sa);
+            else emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
+            /* and rax, 0xFFFFFFFF — encoded as and eax, 0xFFFFFFFF (shorter) */
+            e8(&e, 0x25); e32(&e, 0xFFFFFFFF);  /* and eax, 0xFFFFFFFF */
+            int sd = VR_ENC_SAFE(in->dst);
+            if (sd >= 0) emit_mov_vr_from_rax(&e, sd);
+            else emit_store_rbp(&e, spill_off(assign, assign_count, &e, in->dst), 0);
+            break;
+        }
         case MIR_JMP:
             e8(&e, 0xE9);
             PATCH_PUSH(e.n, in->label);
