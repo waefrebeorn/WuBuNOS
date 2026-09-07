@@ -111,6 +111,17 @@ static HDType *parse_type(HDParser *p) {
             break;
         }
         case HD_KW_U0:   t->kind = HD_TYPE_VOID; advance(p); break;
+        case HD_KW_COMPLEX: {
+            /* _Complex type (C99): _Complex float, _Complex double, etc.
+             * Treat as the base type (F64) — imaginary part is zero. */
+            advance(p); /* consume _Complex */
+            /* Parse the optional base type (float, double, etc.) */
+            if (peek(p) == HD_KW_F64 || peek(p) == HD_KW_I32) {
+                advance(p);
+            }
+            t->kind = HD_TYPE_F64;
+            break;
+        }
         case HD_KW_ATOMIC: {
             /* _Atomic type qualifier (C11): _Atomic(T) or _Atomic T */
             advance(p); /* consume _Atomic */
@@ -757,6 +768,23 @@ static HDASTNode *parse_unary(HDParser *p) {
         n->child = parse_unary(p);
         return n;
     }
+    /* __real__ and __imag__ — GCC extensions for complex number parts.
+     * __real__ x returns the real part, __imag__ x returns the imaginary part.
+     * Since we treat _Complex as just double, __real__ x = x, __imag__ x = 0. */
+    if (peek(p) == HD_KW_REAL || peek(p) == HD_KW_IMAG) {
+        HDTokenType op = peek(p);
+        advance(p);
+        HDASTNode *operand = parse_unary(p);
+        if (op == HD_KW_REAL) {
+            return operand; /* __real__ x → x */
+        } else {
+            /* __imag__ x → 0 (imaginary part is always 0 in our simplified model) */
+            HDASTNode *zero = hd_ast_new(HD_AST_INT_LIT);
+            zero->int_val = 0;
+            (void)operand;
+            return zero;
+        }
+    }
     return parse_postfix(p);
 }
 
@@ -831,7 +859,8 @@ static HDASTNode *parse_cast(HDParser *p) {
             tok == HD_KW_I64 || tok == HD_KW_U0 || tok == HD_KW_U8 || tok == HD_KW_U16 ||
             tok == HD_KW_U32 || tok == HD_KW_U64 || tok == HD_KW_F64 ||
             tok == HD_KW_BOOL || tok == HD_KW_STRUCT || tok == HD_KW_UNION ||
-            tok == HD_KW_ENUM || tok == HD_KW_TYPEDEF) {
+            tok == HD_KW_ENUM || tok == HD_KW_TYPEDEF || tok == HD_KW_COMPLEX ||
+            tok == HD_KW_ATOMIC) {
             is_type = true;
         }
         /* An IDENT after `(` is only a cast if it's a typedef name or an enum

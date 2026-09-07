@@ -65,6 +65,9 @@ typedef enum {
     HD_KW_CONST,
     HD_KW_VOLATILE,
     HD_KW_ATOMIC,     /* _Atomic type qualifier (C11) */
+    HD_KW_COMPLEX,    /* _Complex type (C99) */
+    HD_KW_REAL,       /* __real__ operator (GCC extension) */
+    HD_KW_IMAG,       /* __imag__ operator (GCC extension) */
     HD_KW_INLINE,
     HD_KW_SIZEOF,  /* dummy to keep enum open (was HD_KW_UNUSED) */
 

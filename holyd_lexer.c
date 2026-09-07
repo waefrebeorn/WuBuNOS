@@ -15,6 +15,7 @@
 /* Forward declarations */
 HDTokenType hd_lex_next(HDLexer *lex);
 static void hd_skip_whitespace(HDLexer *lex);
+static void hd_skip_comment(HDLexer *lex);
 
 /* -- Keyword Table ------------------------------------------------ */
 
@@ -81,6 +82,9 @@ static const HDKeyword hd_keywords[] = {
     {"const",    HD_KW_CONST},
     {"volatile", HD_KW_VOLATILE},
     {"_Atomic",  HD_KW_ATOMIC},
+    {"_Complex", HD_KW_COMPLEX},
+    {"__real__", HD_KW_REAL},
+    {"__imag__", HD_KW_IMAG},
     {"inline",   HD_KW_INLINE},
     {"sizeof",   HD_KW_SIZEOF},
 };
@@ -160,6 +164,45 @@ static void hd_skip_whitespace(HDLexer *lex) {
     }
 }
 
+/* Skip a comment starting at the character AFTER the initial '/'.
+ * Handles both line comments and block comments.
+ * C does not allow nested block comments, but we handle the common
+ * case of comment-like text inside a block comment gracefully.
+ * Does NOT skip comments inside string literals — the string scanner
+ * runs first and consumes the whole literal. */
+static void hd_skip_comment(HDLexer *lex) {
+    if (hd_is_at_end(lex)) return;
+
+    if (hd_peek(lex) == '/') {
+        /* Line comment: skip to end of line */
+        hd_advance(lex); /* consume second '/' */
+        while (!hd_is_at_end(lex) && hd_peek(lex) != '\n') {
+            hd_advance(lex);
+        }
+        /* Do NOT consume '\n' — it terminates the comment and will be
+         * consumed by hd_skip_whitespace on the next iteration. */
+        return;
+    }
+
+    if (hd_peek(lex) == '*') {
+        /* Block comment: skip to closing '*' '/' */
+        hd_advance(lex); /* consume '*' */
+        while (!hd_is_at_end(lex)) {
+            if (hd_advance(lex) == '*') {
+                if (!hd_is_at_end(lex) && hd_peek(lex) == '/') {
+                    hd_advance(lex); /* consume '/' */
+                    return;
+                }
+            }
+            /* If we hit EOF inside a block comment, just stop.
+             * A real compiler would warn about unterminated comment. */
+        }
+        return;
+    }
+
+    /* Not a comment — '/' was a division operator. Don't consume. */
+}
+
 static HDTokenType hd_scan_number(HDLexer *lex) {
     char buf[HD_MAX_TOKEN_LEN];
     int i = 0;
@@ -203,6 +246,30 @@ static HDTokenType hd_scan_number(HDLexer *lex) {
     buf[i] = '\0';
 
     if (is_float) {
+        /* Skip optional exponent: e.g. 1.5e10, 2.0E-3 */
+        if (!hd_is_at_end(lex)) {
+            char c = hd_peek(lex);
+            if (c == 'e' || c == 'E') {
+                buf[i++] = hd_advance(lex);
+                if (!hd_is_at_end(lex) && (hd_peek(lex) == '+' || hd_peek(lex) == '-')) {
+                    buf[i++] = hd_advance(lex);
+                }
+                while (!hd_is_at_end(lex) && i < HD_MAX_TOKEN_LEN - 1
+                       && isdigit((unsigned char)hd_peek(lex))) {
+                    buf[i++] = hd_advance(lex);
+                }
+                buf[i] = '\0';
+            }
+        }
+        /* Skip float suffixes: f, F, l, L (e.g. 1.5f, 2.0L) */
+        while (!hd_is_at_end(lex)) {
+            char c = hd_peek(lex);
+            if (c == 'f' || c == 'F' || c == 'l' || c == 'L') {
+                hd_advance(lex);
+            } else {
+                break;
+            }
+        }
         lex->tok.float_val = strtod(buf, NULL);
         return hd_make_token(lex, HD_TOK_FLOAT);
     } else if (is_hex) {
@@ -324,23 +391,8 @@ HDTokenType hd_lex_next(HDLexer *lex) {
             if (hd_peek(lex) == '=') { hd_advance(lex); return hd_make_token(lex, HD_TOK_STAR_ASSIGN); }
             return hd_make_token(lex, HD_TOK_STAR);
         case '/':
-            if (hd_peek(lex) == '/') {
-                /* Skip line comment */
-                while (!hd_is_at_end(lex) && hd_peek(lex) != '\n') hd_advance(lex);
-                return hd_lex_next(lex);
-            }
-            if (hd_peek(lex) == '*') {
-                /* Skip block comment */
-                hd_advance(lex);
-                int depth = 1;
-                while (!hd_is_at_end(lex) && depth > 0) {
-                    if (hd_advance(lex) == '*' && hd_peek(lex) == '/') {
-                        hd_advance(lex);
-                        depth--;
-                    } else if (hd_peek(lex) == '*' && hd_peek(lex) == '/') {
-                        /* nested */
-                    }
-                }
+            if (hd_peek(lex) == '/' || hd_peek(lex) == '*') {
+                hd_skip_comment(lex);
                 return hd_lex_next(lex);
             }
             if (hd_peek(lex) == '=') { hd_advance(lex); return hd_make_token(lex, HD_TOK_SLASH_ASSIGN); }
