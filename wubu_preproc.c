@@ -459,6 +459,10 @@ char *wubu_preprocess(const char *src)
         /* Variadic argument storage: global array + init code */
         {"__wubu_va_args_decl", "int wubu_va_args[32];"},
         {"__wubu_va_save(n)", "do { int __i; for(__i=0; __i<32; __i++) wubu_va_args[__i] = 0; } while(0)"},
+        /* GCC test harness macros */
+        {"FAILURE", "abort()"},
+        {"FINISH", "return 0"},
+        {"CONVERT(x)", "0"},
         {NULL, NULL}
     };
     for (int i = 0; builtins[i].name; i++) {

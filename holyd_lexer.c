@@ -83,6 +83,9 @@ static const HDKeyword hd_keywords[] = {
     {"volatile", HD_KW_VOLATILE},
     {"_Atomic",  HD_KW_ATOMIC},
     {"_Complex", HD_KW_COMPLEX},
+    {"_Decimal32", HD_KW_DECIMAL32},
+    {"_Decimal64", HD_KW_DECIMAL64},
+    {"_Decimal128", HD_KW_DECIMAL128},
     {"__real__", HD_KW_REAL},
     {"__imag__", HD_KW_IMAG},
     {"inline",   HD_KW_INLINE},
@@ -261,11 +264,22 @@ static HDTokenType hd_scan_number(HDLexer *lex) {
                 buf[i] = '\0';
             }
         }
-        /* Skip float suffixes: f, F, l, L (e.g. 1.5f, 2.0L) */
+        /* Skip float suffixes: f, F, l, L (e.g. 1.5f, 2.0L)
+         * Also skip decimal float suffixes: df, dd, dl, DF, DD, DL
+         * (e.g., 0.0dl, 4.2dd, 1.5df) */
         while (!hd_is_at_end(lex)) {
             char c = hd_peek(lex);
             if (c == 'f' || c == 'F' || c == 'l' || c == 'L') {
                 hd_advance(lex);
+            } else if (c == 'd' || c == 'D') {
+                /* Check for df/dd/dl suffix */
+                char next = lex->src[lex->pos + 1];
+                if (next == 'f' || next == 'F' || next == 'd' || next == 'D' || next == 'l' || next == 'L') {
+                    hd_advance(lex); /* d */
+                    hd_advance(lex); /* f/d/l */
+                } else {
+                    break;
+                }
             } else {
                 break;
             }

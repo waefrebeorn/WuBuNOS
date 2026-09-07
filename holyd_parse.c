@@ -112,13 +112,20 @@ static HDType *parse_type(HDParser *p) {
         }
         case HD_KW_U0:   t->kind = HD_TYPE_VOID; advance(p); break;
         case HD_KW_COMPLEX: {
-            /* _Complex type (C99): _Complex float, _Complex double, etc.
-             * Treat as the base type (F64) — imaginary part is zero. */
-            advance(p); /* consume _Complex */
-            /* Parse the optional base type (float, double, etc.) */
+            /* _Complex type (C99) */
+            advance(p);
             if (peek(p) == HD_KW_F64 || peek(p) == HD_KW_I32) {
                 advance(p);
             }
+            t->kind = HD_TYPE_F64;
+            break;
+        }
+        case HD_KW_DECIMAL32:
+        case HD_KW_DECIMAL64:
+        case HD_KW_DECIMAL128: {
+            /* Decimal floating-point types (GCC extension).
+             * Treat as F64 (double) for our simplified implementation. */
+            advance(p);
             t->kind = HD_TYPE_F64;
             break;
         }
@@ -860,6 +867,7 @@ static HDASTNode *parse_cast(HDParser *p) {
             tok == HD_KW_U32 || tok == HD_KW_U64 || tok == HD_KW_F64 ||
             tok == HD_KW_BOOL || tok == HD_KW_STRUCT || tok == HD_KW_UNION ||
             tok == HD_KW_ENUM || tok == HD_KW_TYPEDEF || tok == HD_KW_COMPLEX ||
+            tok == HD_KW_DECIMAL32 || tok == HD_KW_DECIMAL64 || tok == HD_KW_DECIMAL128 ||
             tok == HD_KW_ATOMIC) {
             is_type = true;
         }

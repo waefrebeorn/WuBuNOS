@@ -66,6 +66,9 @@ typedef enum {
     HD_KW_VOLATILE,
     HD_KW_ATOMIC,     /* _Atomic type qualifier (C11) */
     HD_KW_COMPLEX,    /* _Complex type (C99) */
+    HD_KW_DECIMAL32,  /* _Decimal32 (GCC extension) */
+    HD_KW_DECIMAL64,  /* _Decimal64 (GCC extension) */
+    HD_KW_DECIMAL128, /* _Decimal128 (GCC extension) */
     HD_KW_REAL,       /* __real__ operator (GCC extension) */
     HD_KW_IMAG,       /* __imag__ operator (GCC extension) */
     HD_KW_INLINE,
