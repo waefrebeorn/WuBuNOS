@@ -244,6 +244,22 @@ static void strip_builtin_prefix(char *line)
         memmove(q, q + 8, strlen(q + 8) + 1);
     }
 }
+static void strip_decimal_float_suffixes(char *line)
+{
+    /* Strip GCC decimal floating-point literal suffixes: dl, dd, df
+     * e.g., 0.0dl → 0.0, 4.2dd → 4.2, 1.5df → 1.5 */
+    char *p = line;
+    while (*p) {
+        if (*p == 'd' && (p[1] == 'l' || p[1] == 'd' || p[1] == 'f')
+            && p > line && (isdigit((unsigned char)p[-1]) || p[-1] == '.')) {
+            if (p[2] == '\0' || (!isalnum((unsigned char)p[2]) && p[2] != '_')) {
+                memmove(p, p + 2, strlen(p + 2) + 1);
+                continue;
+            }
+        }
+        p++;
+    }
+}
 static void strip_bitfields(char *line)
 {
     char *p = line;
@@ -314,8 +330,23 @@ static void strip_inline_asm(char *line)
 /* Strip __extension__, __inline, __inline__, __forceinline, __cdecl, etc. */
 static void strip_compiler_keywords(char *line)
 {
+    /* Replace decimal float types with double */
+    static const char *decimal_types[] = {"_Decimal32", "_Decimal64", "_Decimal128", "_Fract", "_Accum", "_Sat", NULL};
+    for (int i = 0; decimal_types[i]; i++) {
+        char *p = line;
+        size_t tlen = strlen(decimal_types[i]);
+        while ((p = strstr(p, decimal_types[i])) != NULL) {
+            if ((p == line || !pp_is_ident_char(p[-1])) && !pp_is_ident_char(p[tlen])) {
+                /* Replace with "double" */
+                memmove(p + 6, p + tlen, strlen(p + tlen) + 1);
+                memcpy(p, "double", 6);
+            } else {
+                p += tlen;
+            }
+        }
+    }
     static const char *kw[] = {
-        "__extension__", "__inline", "__inline__", "__forceinline",
+        "__extension__", "__inline__", "__inline__", "__forceinline",
         "__cdecl", "__stdcall", "__fastcall", "__thiscall",
         "__declspec", "__asm__", "__asm", "__volatile__",
         "__restrict__", "__restrict", "__signed__",
@@ -558,6 +589,7 @@ char *wubu_preprocess(const char *src)
             strip_inline_asm(exp);
             strip_bitfields(exp);
             strip_builtin_prefix(exp);
+            strip_decimal_float_suffixes(exp);
             /* expand macros in this line */
             char exp2[8192];
             pp_expand_line(exp, exp2, sizeof(exp2));

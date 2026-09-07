@@ -143,7 +143,7 @@ int main(int argc, char **argv) {
         gauntlet_writing_c_compiler_test_count,
     };
     const char *names[] = {
-        "gcc_torture", "extern_gcc", "c_testsuite", "llvm", "lacc", "fujitsu",
+        "gcc_torture", "extern_gcc", "c_testsuite", "llvm", "lacc", "fujitsu_proper",
         "chibicc", "compcert", "comprehensive", "gcc_compile", "gcc_dg",
         "slimcc", "tinycc", "writing_c_compiler",
     };
@@ -203,6 +203,10 @@ int main(int argc, char **argv) {
     char line[1024];
 
     for (int w = 0; w < n_jobs; w++) {
+        /* Wait for worker to FINISH first, then read its result file */
+        int status;
+        waitpid(worker_pids[w], &status, 0);
+
         FILE *f = fopen(result_files[w], "r");
         if (!f) {
             fprintf(stderr, "  worker %d: no result file\n", w);
@@ -226,9 +230,6 @@ int main(int argc, char **argv) {
         fclose(f);
         unlink(result_files[w]);
 
-        /* Wait for worker */
-        int status;
-        waitpid(worker_pids[w], &status, 0);
         fprintf(stderr, "  worker %d done: pass=%d fail=%d err=%d\n",
                 w, worker_pass, worker_fail, worker_err);
     }
