@@ -36,6 +36,7 @@ typedef struct {
     int is_vla_ptr;        /* 1 if this variable is a VLA (heap-allocated pointer) */
     char struct_name[HD_MAX_IDENT_LEN]; /* struct type name */
     int fn_ptr_func_id;    /* func_id this pointer var points to, or -1 */
+    HDType *type;          /* variable's declared type */
 } mir_var_t;
 
 /* struct member offset table */
@@ -295,6 +296,7 @@ static wubu_vr_t mir_decl_var_unsigned(HDMirGen *g, const char *name, int is_uns
         g->vars[g->n_vars].is_array = 0;
         g->vars[g->n_vars].array_size = 0;
         g->vars[g->n_vars].fn_ptr_func_id = -1;
+        g->vars[g->n_vars].type = NULL;
         g->n_vars++;
     }
     return vr;
@@ -313,6 +315,7 @@ static wubu_vr_t mir_decl_var_float(HDMirGen *g, const char *name) {
         g->vars[g->n_vars].is_array = 0;
         g->vars[g->n_vars].array_size = 0;
         g->vars[g->n_vars].fn_ptr_func_id = -1;
+        g->vars[g->n_vars].type = NULL;
         g->n_vars++;
     }
     return vr;
@@ -332,6 +335,7 @@ static void mir_bind_var(HDMirGen *g, const char *name, wubu_vr_t vr, wubu_vr_t 
         g->vars[g->n_vars].is_array = 0;
         g->vars[g->n_vars].array_size = 0;
         g->vars[g->n_vars].fn_ptr_func_id = -1;
+        g->vars[g->n_vars].type = NULL;
         g->n_vars++;
     }
 }
@@ -901,6 +905,9 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
             vr = mir_decl_var_float(g, n->ident);
         else
             vr = mir_decl_var_unsigned(g, n->ident, is_uns);
+        /* Store the type for compound assignment type conversion */
+        for (int i = 0; i < g->n_vars; i++)
+            if (strcmp(g->vars[i].name, n->ident) == 0) { g->vars[i].type = n->type; break; }
         /* Allocate memory for the variable (arrays get arr_size cells, scalars 1, structs = total_size).
          * Use a HIGH VR for the address so it never collides with argument registers
          * (v1..vN) or instruction-index VRs. */
@@ -1261,6 +1268,25 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
          * first element — return the array's base address (not a[0]). */
         if (mir_var_is_array(g, n->ident))
             return addr;
+        /* Check type from var table for compound assignment truncation */
+        if (!n->type) {
+            for (int i = 0; i < g->n_vars; i++) {
+                if (strcmp(g->vars[i].name, n->ident) == 0) {
+                    HDType *vt = g->vars[i].type;
+                    if (vt && (vt->kind == HD_TYPE_I8 || vt->kind == HD_TYPE_U8 ||
+                                vt->kind == HD_TYPE_I16 || vt->kind == HD_TYPE_U16 ||
+                                vt->kind == HD_TYPE_I32 || vt->kind == HD_TYPE_U32)) {
+                        return wubu_mir_load(g->prog, addr);
+                    }
+                    break;
+                }
+            }
+        }
+        if (n->type && (n->type->kind == HD_TYPE_I8 || n->type->kind == HD_TYPE_U8 ||
+                        n->type->kind == HD_TYPE_I16 || n->type->kind == HD_TYPE_U16 ||
+                        n->type->kind == HD_TYPE_I32 || n->type->kind == HD_TYPE_U32)) {
+            return wubu_mir_load(g->prog, addr);
+        }
         return wubu_mir_load(g->prog, addr);
     }
     case HD_AST_DOT:
@@ -1612,6 +1638,27 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 default: break;
             }
             wubu_vr_t upd = wubu_mir_binop(g->prog, op, lhs, rhs);
+            /* Implicit type conversion: truncate result to LHS type width
+             * for scalar integer compound assignments. */
+            {
+                /* Look up LHS variable type from var table */
+                HDType *lhs_type = NULL;
+                if (n->left && n->left->ident[0]) {
+                    for (int i = 0; i < g->n_vars; i++) {
+                        if (strcmp(g->vars[i].name, n->left->ident) == 0) {
+                            lhs_type = g->vars[i].type;
+                            break;
+                        }
+                    }
+                }
+                if (!lhs_type && n->left && n->left->type)
+                    lhs_type = n->left->type;
+                if (lhs_type && (lhs_type->kind == HD_TYPE_I8 || lhs_type->kind == HD_TYPE_U8 ||
+                                lhs_type->kind == HD_TYPE_I16 || lhs_type->kind == HD_TYPE_U16 ||
+                                lhs_type->kind == HD_TYPE_I32 || lhs_type->kind == HD_TYPE_U32)) {
+                    upd = mir_truncate_to_type(g, upd, lhs_type);
+                }
+            }
             wubu_mir_store(g->prog, addr, upd);
             return upd;
         }

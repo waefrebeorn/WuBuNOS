@@ -537,6 +537,7 @@ static HDASTNode *parse_primary(HDParser *p) {
         case HD_TOK_IDENT: {
             HDASTNode *n = hd_ast_new(HD_AST_IDENT);
             strncpy(n->ident, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
+            n->type = NULL;  /* Type will be resolved during codegen */
             advance(p);
             return n;
         }
@@ -1039,6 +1040,8 @@ static HDASTNode *parse_assign(HDParser *p) {
     HDASTNode *n = hd_ast_new(assign_kind);
     n->left = left;
     n->right = parse_assign(p);
+    /* Inherit LHS type for compound assignment type conversion */
+    n->type = left->type;
     return n;
 }
 
