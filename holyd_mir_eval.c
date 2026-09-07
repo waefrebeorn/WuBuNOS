@@ -2965,7 +2965,9 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
                     wubu_mir_store(prog, dst_p, wubu_mir_load(prog, src_p));
                 }
             } else {
-                /* Scalar parameter: copy the argument value directly */
+                /* Scalar parameter: copy the argument value directly.
+                 * Truncation to parameter type is done AFTER all args
+                 * are copied, to avoid clobbering argument registers. */
                 wubu_mir_store(prog, addr, (wubu_vr_t)(pi + 1));
             }
             int param_is_unsigned = 0;
@@ -2999,6 +3001,28 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
                     }
                 }
             }
+        }
+        /* Implicit type conversion: truncate parameters to their declared type.
+         * Done AFTER all args are copied to avoid clobbering argument registers
+         * (rcx is both the JIT's second-operand register AND the 4th arg reg). */
+        for (int pi = 0; pi < fn->n_params; pi++) {
+            if (!fn->param_types[pi] || !fn->param_names[pi]) continue;
+            HDTypeKind pk = fn->param_types[pi]->kind;
+            if (pk != HD_TYPE_I8 && pk != HD_TYPE_U8 && pk != HD_TYPE_I16 &&
+                pk != HD_TYPE_U16 && pk != HD_TYPE_I32 && pk != HD_TYPE_U32) continue;
+            /* Find the parameter's variable address */
+            wubu_vr_t addr = 0;
+            for (int i = 0; i < g.n_vars; i++) {
+                if (strcmp(g.vars[i].name, fn->param_names[pi]) == 0) {
+                    addr = g.vars[i].addr;
+                    break;
+                }
+            }
+            if (!addr) continue;
+            /* Load, truncate, store back */
+            wubu_vr_t val = wubu_mir_load(prog, addr);
+            val = mir_truncate_to_type(&g, val, fn->param_types[pi]);
+            wubu_mir_store(prog, addr, val);
         }
         /* For variadic functions, copy v1..vN to wubu_va_args[0..N-1]
          * so va_arg(ap, type) can read them. */
