@@ -501,6 +501,32 @@ static wubu_vr_t mir_decl_var(HDMirGen *g, const char *name) {
 
 static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n);
 
+/* Truncate a 64-bit value to the target type width.
+ * Used for implicit type conversion on assignment/declaration.
+ * Returns the (possibly truncated) VR. */
+static wubu_vr_t mir_truncate_to_type(HDMirGen *g, wubu_vr_t val, const HDType *type) {
+    if (!type) return val;
+    switch (type->kind) {
+    case HD_TYPE_I8:
+        val = wubu_mir_binop(g->prog, MIR_AND, val, wubu_mir_const(g->prog, 0xFF));
+        return wubu_mir_unop(g->prog, MIR_SEXT8, val);
+    case HD_TYPE_U8:
+        return wubu_mir_binop(g->prog, MIR_AND, val, wubu_mir_const(g->prog, 0xFF));
+    case HD_TYPE_I16:
+        val = wubu_mir_binop(g->prog, MIR_AND, val, wubu_mir_const(g->prog, 0xFFFF));
+        return wubu_mir_unop(g->prog, MIR_SEXT16, val);
+    case HD_TYPE_U16:
+        return wubu_mir_binop(g->prog, MIR_AND, val, wubu_mir_const(g->prog, 0xFFFF));
+    case HD_TYPE_I32:
+        val = wubu_mir_binop(g->prog, MIR_AND, val, wubu_mir_const(g->prog, 0xFFFFFFFF));
+        return wubu_mir_unop(g->prog, MIR_SEXT32, val);
+    case HD_TYPE_U32:
+        return wubu_mir_binop(g->prog, MIR_AND, val, wubu_mir_const(g->prog, 0xFFFFFFFF));
+    default:
+        return val;
+    }
+}
+
 /* Evaluate the address-of-first-element of an lvalue. Returns a vr holding the
  * memory address (a value), suitable as the index into mem[].
  * - array IDENT  -> base address (a decays to &a[0])
@@ -1009,6 +1035,11 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
                         } else if (src_addr == 0) {
                             /* No source var — just store single value */
                             wubu_vr_t val = mir_gen_expr(g, n->init);
+                            if (n->type && (n->type->kind == HD_TYPE_I8 || n->type->kind == HD_TYPE_U8 ||
+                                n->type->kind == HD_TYPE_I16 || n->type->kind == HD_TYPE_U16 ||
+                                n->type->kind == HD_TYPE_I32 || n->type->kind == HD_TYPE_U32)) {
+                                val = mir_truncate_to_type(g, val, n->type);
+                            }
                             wubu_mir_store(g->prog, addr, val);
                         }
                     } else {
@@ -1020,12 +1051,22 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
                                 wubu_mir_store(g->prog, dst_elem, wubu_mir_load(g->prog, src_elem));
                             }
                         } else {
+                            if (n->type && (n->type->kind == HD_TYPE_I8 || n->type->kind == HD_TYPE_U8 ||
+                                n->type->kind == HD_TYPE_I16 || n->type->kind == HD_TYPE_U16 ||
+                                n->type->kind == HD_TYPE_I32 || n->type->kind == HD_TYPE_U32)) {
+                                val = mir_truncate_to_type(g, val, n->type);
+                            }
                             wubu_mir_store(g->prog, addr, val);
                         }
                     }
                 } else {
                     /* Scalar/array init from expr */
                     wubu_vr_t val = mir_gen_expr(g, n->init);
+                    if (n->type && (n->type->kind == HD_TYPE_I8 || n->type->kind == HD_TYPE_U8 ||
+                        n->type->kind == HD_TYPE_I16 || n->type->kind == HD_TYPE_U16 ||
+                        n->type->kind == HD_TYPE_I32 || n->type->kind == HD_TYPE_U32)) {
+                        val = mir_truncate_to_type(g, val, n->type);
+                    }
                     wubu_mir_store(g->prog, addr, val);
                 }
             }
@@ -1484,6 +1525,15 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                         break;
                     }
                 }
+            }
+        }
+        /* Implicit type conversion: truncate value to LHS type width.
+         * Only for scalar integer types — not for pointers, structs, or arrays. */
+        if (addr && n->left && n->left->type) {
+            HDTypeKind k = n->left->type->kind;
+            if (k == HD_TYPE_I8 || k == HD_TYPE_U8 || k == HD_TYPE_I16 ||
+                k == HD_TYPE_U16 || k == HD_TYPE_I32 || k == HD_TYPE_U32) {
+                val = mir_truncate_to_type(g, val, n->left->type);
             }
         }
         if (addr) { wubu_mir_store(g->prog, addr, val); return val; }
