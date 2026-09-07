@@ -1058,6 +1058,39 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             else emit_store_rbp(&e, spill_off(assign, assign_count, &e, in->dst), 0);
             break;
         }
+        case MIR_SEXT32: {
+            /* Sign-extend 32-bit value to 64 bits: movsxd rax, eax */
+            int sa = VR_ENC_SAFE(in->a);
+            if (sa >= 0) emit_mov_rax_from_vr(&e, sa);
+            else emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
+            e8(&e, 0x48); e8(&e, 0x63); e8(&e, 0xC0);  /* movsxd rax,eax */
+            int sd = VR_ENC_SAFE(in->dst);
+            if (sd >= 0) emit_mov_vr_from_rax(&e, sd);
+            else emit_store_rbp(&e, spill_off(assign, assign_count, &e, in->dst), 0);
+            break;
+        }
+        case MIR_SEXT16: {
+            /* Sign-extend 16-bit value to 64 bits: movsx rax, ax */
+            int sa = VR_ENC_SAFE(in->a);
+            if (sa >= 0) emit_mov_rax_from_vr(&e, sa);
+            else emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
+            e8(&e, 0x48); e8(&e, 0x0F); e8(&e, 0xBF); e8(&e, 0xC0);  /* movsx rax,ax */
+            int sd = VR_ENC_SAFE(in->dst);
+            if (sd >= 0) emit_mov_vr_from_rax(&e, sd);
+            else emit_store_rbp(&e, spill_off(assign, assign_count, &e, in->dst), 0);
+            break;
+        }
+        case MIR_SEXT8: {
+            /* Sign-extend 8-bit value to 64 bits: movsx rax, al */
+            int sa = VR_ENC_SAFE(in->a);
+            if (sa >= 0) emit_mov_rax_from_vr(&e, sa);
+            else emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
+            e8(&e, 0x48); e8(&e, 0x0F); e8(&e, 0xBE); e8(&e, 0xC0);  /* movsx rax,al */
+            int sd = VR_ENC_SAFE(in->dst);
+            if (sd >= 0) emit_mov_vr_from_rax(&e, sd);
+            else emit_store_rbp(&e, spill_off(assign, assign_count, &e, in->dst), 0);
+            break;
+        }
         case MIR_JMP:
             e8(&e, 0xE9);
             PATCH_PUSH(e.n, in->label);

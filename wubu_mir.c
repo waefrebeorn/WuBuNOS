@@ -287,6 +287,10 @@ static const char *op_name(wubu_mir_op_t op)
     case MIR_SHR:   return "shr";
     case MIR_NEG:   return "neg";
     case MIR_NOT:   return "not";
+    case MIR_SEXT32: return "sext32";
+    case MIR_SEXT16: return "sext16";
+    case MIR_SEXT8: return "sext8";
+    case MIR_ZEXT32: return "zext32";
     case MIR_EQ:    return "eq";
     case MIR_NE:    return "ne";
     case MIR_LT:    return "lt";

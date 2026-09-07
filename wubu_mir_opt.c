@@ -95,7 +95,10 @@ static void fold_pass(wubu_mir_prog_t *p)
             continue;
         }
 
-        /* Binary ops: check both operands (wrap to 32-bit MIR semantics) */
+        /* Binary ops: check both operands */
+        /* Never fold unary ops that have side effects on register width */
+        if (in->op == MIR_SEXT32 || in->op == MIR_SEXT16 || in->op == MIR_SEXT8 || in->op == MIR_ZEXT32) continue;
+
         if (in->a < nvr && in->b < nvr &&
             is_const[in->a] && is_const[in->b]) {
             int64_t a = const_val[in->a];
@@ -369,6 +372,9 @@ static void fold_dce_pass(wubu_mir_prog_t *p)
                 }
                 continue;
             }
+
+            /* Never fold unary ops that have side effects on register width */
+            if (in->op == MIR_SEXT32 || in->op == MIR_SEXT16 || in->op == MIR_SEXT8 || in->op == MIR_ZEXT32) continue;
 
             if (in->a < nvr && in->b < nvr &&
                 is_const[in->a] && is_const[in->b] &&

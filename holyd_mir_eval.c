@@ -1794,36 +1794,24 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             case HD_TYPE_I8:
                 /* (char)x: keep low 8 bits, sign-extend from bit 7 */
                 val = wubu_mir_binop(g->prog, MIR_AND, val, wubu_mir_const(g->prog, 0xFF));
-                val = wubu_mir_binop(g->prog, MIR_SHL, val, wubu_mir_const(g->prog, 56)); /* shift left to sign bit */
-                val = wubu_mir_binop(g->prog, MIR_SHR, val, wubu_mir_const(g->prog, 56)); /* arithmetic shift right for sign-extension */
-                return val;
+                return wubu_mir_unop(g->prog, MIR_SEXT8, val);
             case HD_TYPE_U8:
                 /* (unsigned char)x: keep low 8 bits */
                 return wubu_mir_binop(g->prog, MIR_AND, val, wubu_mir_const(g->prog, 0xFF));
             case HD_TYPE_I16:
                 /* (short)x: keep low 16 bits, sign-extend from bit 15 */
                 val = wubu_mir_binop(g->prog, MIR_AND, val, wubu_mir_const(g->prog, 0xFFFF));
-                val = wubu_mir_binop(g->prog, MIR_SHL, val, wubu_mir_const(g->prog, 48));
-                val = wubu_mir_binop(g->prog, MIR_SHR, val, wubu_mir_const(g->prog, 48));
-                return val;
+                return wubu_mir_unop(g->prog, MIR_SEXT16, val);
             case HD_TYPE_U16:
                 /* (unsigned short)x: keep low 16 bits */
                 return wubu_mir_binop(g->prog, MIR_AND, val, wubu_mir_const(g->prog, 0xFFFF));
             case HD_TYPE_I32:
-                /* (int)x: truncate to 32 bits. The JIT emits movsxd rax,eax
-                 * after every AND/OR/XOR/MUL/ADD/SUB, which truncates rax to
-                 * 32 bits and sign-extends. So we just need to ensure the
-                 * lower 32 bits are correct — AND with 0xFFFFFFFF if the
-                 * source might have upper bits set, otherwise just let the
-                 * JIT's automatic truncation handle it. */
-                return wubu_mir_binop(g->prog, MIR_AND, val, wubu_mir_const(g->prog, 0xFFFFFFFF));
+                /* (int)x: keep low 32 bits, sign-extend from bit 31.
+                 * Emit AND + SEXT32 so the optimizer can't fold away the sign extension. */
+                val = wubu_mir_binop(g->prog, MIR_AND, val, wubu_mir_const(g->prog, 0xFFFFFFFF));
+                return wubu_mir_unop(g->prog, MIR_SEXT32, val);
             case HD_TYPE_U32:
-                /* (unsigned int)x: keep low 32 bits.
-                 * The JIT's movsxd after AND will sign-extend, which is wrong
-                 * for unsigned. Instead, we just AND — the upper bits will be
-                 * zero, and when the value is used, it will be correct as unsigned.
-                 * NOTE: This relies on the JIT not sign-extending unsigned values.
-                 * For now, this is a best-effort approach. */
+                /* (unsigned int)x: keep low 32 bits (zero extension is automatic). */
                 return wubu_mir_binop(g->prog, MIR_AND, val, wubu_mir_const(g->prog, 0xFFFFFFFF));
             default:
                 break;

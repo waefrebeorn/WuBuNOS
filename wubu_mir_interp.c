@@ -256,6 +256,18 @@ op_neg:
 op_not:
     vr[in->dst] = ~vr[in->a];
     DISPATCH();
+op_sext32:
+    vr[in->dst] = (int64_t)(int32_t)vr[in->a];
+    DISPATCH();
+op_sext16:
+    vr[in->dst] = (int64_t)(int16_t)vr[in->a];
+    DISPATCH();
+op_sext8:
+    vr[in->dst] = (int64_t)(int8_t)vr[in->a];
+    DISPATCH();
+op_zext32:
+    vr[in->dst] = (uint64_t)(uint32_t)vr[in->a];
+    DISPATCH();
 op_eq:
     vr[in->dst] = (vr[in->a] == vr[in->b]) ? 1 : 0;
     DISPATCH();

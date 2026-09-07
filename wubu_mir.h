@@ -78,6 +78,10 @@ typedef enum {
     MIR_FNEG,          /* dst = -f32(a) */
     MIR_ITOF,          /* dst = (f32)a */
     MIR_FTOI,          /* dst = (int)f32(a) */
+    MIR_SEXT32,        /* dst = (int64_t)(int32_t)a — sign-extend 32→64 */
+    MIR_SEXT16,        /* dst = (int64_t)(int16_t)a — sign-extend 16→64 */
+    MIR_SEXT8,         /* dst = (int64_t)(int8_t)a — sign-extend 8→64 */
+    MIR_ZEXT32,        /* dst = (uint64_t)(uint32_t)a — zero-extend 32→64 */
     MIR_FEQ,           /* dst = (f32(a) == f32(b)) */
     MIR_FNE,           /* dst = (f32(a) != f32(b)) */
     MIR_FLT,           /* dst = (f32(a) <  f32(b)) */
