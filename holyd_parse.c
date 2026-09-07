@@ -166,6 +166,7 @@ static HDType *parse_type(HDParser *p) {
                          /* `unsigned long` == `unsigned long int` == `unsigned long` */
                          if (peek(p) == HD_KW_I64) {
                              advance(p);
+                             t->kind = HD_TYPE_U64;  /* unsigned long is 64-bit */
                              /* `unsigned long long` */
                              if (peek(p) == HD_KW_I64) { advance(p); }
                              else if (peek(p) == HD_KW_I32) { advance(p); }
