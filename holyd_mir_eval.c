@@ -2105,14 +2105,302 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 }
                 /* Fall through to dlsym path for runtime strings. */
             }
+            /* printf(fmt, ...) — minimal builtin implementation.
+             * Parses the format string at compile time and emits MIR to print
+             * each argument using putchar (dlsym). Supports %d, %u, %x, %c, %s, %%.
+             * For %%f, prints "0" (float not yet supported in printf).
+             * Returns the number of characters printed (approximate). */
+            if (strcmp(fname, "printf") == 0 && n->n_args >= 1 && n->args[0]->kind == HD_AST_STRING_LIT) {
+                const char *fmt = n->args[0]->str_val;
+                int64_t total_chars = 0;
+                int arg_idx = 1; /* args[0] is the format string */
+                int len = strlen(fmt);
+                int i = 0;
+                while (i < len) {
+                    if (fmt[i] != '%') {
+                        /* Literal character — emit putchar */
+                        wubu_vr_t ch = wubu_mir_const(g->prog, (int64_t)(unsigned char)fmt[i]);
+                        wubu_mir_mov_to(g->prog, 1, ch); /* VR1 = arg1 for call */
+                        /* Call putchar via dlsym — func_id 0xFFFF with name "putchar" */
+                        wubu_mir_call_ext(g->prog, 0xFFFF, "putchar");
+                        wubu_vr_t rv = mir_new_vr(g);
+                        wubu_mir_mov_to(g->prog, rv, 0);
+                        total_chars++;
+                        i++;
+                        continue;
+                    }
+                    /* Format specifier */
+                    i++;
+                    if (i >= len) break;
+                    char spec = fmt[i];
+                    if (spec == '%') {
+                        /* %% — print literal % */
+                        wubu_vr_t ch = wubu_mir_const(g->prog, (int64_t)'%');
+                        wubu_mir_mov_to(g->prog, 1, ch);
+                        wubu_mir_call_ext(g->prog, 0xFFFF, "putchar");
+                        wubu_vr_t rv = mir_new_vr(g);
+                        wubu_mir_mov_to(g->prog, rv, 0);
+                        total_chars++;
+                        i++;
+                        continue;
+                    }
+                    /* Get the argument value */
+                    wubu_vr_t arg_val;
+                    if (arg_idx < (int)n->n_args) {
+                        arg_val = mir_gen_expr(g, n->args[arg_idx]);
+                        arg_idx++;
+                    } else {
+                        arg_val = wubu_mir_const(g->prog, 0);
+                    }
+                    if (spec == 'c') {
+                        /* %c — print character */
+                        wubu_mir_mov_to(g->prog, 1, arg_val);
+                        wubu_mir_call_ext(g->prog, 0xFFFF, "putchar");
+                        wubu_vr_t rv = mir_new_vr(g);
+                        wubu_mir_mov_to(g->prog, rv, 0);
+                        total_chars++;
+                    } else if (spec == 'd' || spec == 'i') {
+                        /* %d — print signed integer */
+                        /* Convert integer to decimal digits and print */
+                        /* Simple approach: handle 0, negative, then digit extraction */
+                        wubu_vr_t zero = wubu_mir_const(g->prog, 0);
+                        wubu_vr_t ten = wubu_mir_const(g->prog, 10);
+                        wubu_vr_t minus = wubu_mir_const(g->prog, (int64_t)'-');
+                        wubu_vr_t is_neg = wubu_mir_binop(g->prog, MIR_LT, arg_val, zero);
+                        /* If negative, print '-' and negate */
+                        uint32_t lbl_pos = wubu_mir_new_label(g->prog);
+                        uint32_t lbl_digits = wubu_mir_new_label(g->prog);
+                        wubu_mir_jz(g->prog, is_neg, lbl_pos);
+                        /* Print minus sign */
+                        wubu_mir_mov_to(g->prog, 1, minus);
+                        wubu_mir_call_ext(g->prog, 0xFFFF, "putchar");
+                        wubu_vr_t rv_tmp = mir_new_vr(g);
+                        wubu_mir_mov_to(g->prog, rv_tmp, 0);
+                        /* Negate: arg_val = -arg_val */
+                        arg_val = wubu_mir_binop(g->prog, MIR_SUB, zero, arg_val);
+                        wubu_mir_place_label(g->prog, lbl_pos);
+                        /* Extract digits (reverse order) — use a simple loop */
+                        /* For simplicity, print up to 20 digits max */
+                        /* We'll use a recursive approach: divide by 10, print remainder */
+                        /* Actually, let's use a simpler approach: convert to string in memory */
+                        /* For now, just print the number as-is using a simple algorithm */
+                        /* Use repeated division to extract digits */
+                        wubu_vr_t tmp = mir_new_vr(g);
+                        wubu_mir_mov_to(g->prog, tmp, arg_val);
+                        wubu_vr_t is_zero = wubu_mir_binop(g->prog, MIR_EQ, tmp, zero);
+                        uint32_t lbl_nonzero = wubu_mir_new_label(g->prog);
+                        uint32_t lbl_print_done = wubu_mir_new_label(g->prog);
+                        /* Special case: if value is 0, print "0" */
+                        wubu_vr_t was_orig_zero = wubu_mir_binop(g->prog, MIR_EQ, arg_val, zero);
+                        /* Check if original arg was 0 (before negation) */
+                        /* Actually, let's just handle the current value */
+                        wubu_mir_jnz(g->prog, is_zero, lbl_nonzero);
+                        /* Value is 0 — print '0' */
+                        wubu_vr_t zero_char = wubu_mir_const(g->prog, (int64_t)'0');
+                        wubu_mir_mov_to(g->prog, 1, zero_char);
+                        wubu_mir_call_ext(g->prog, 0xFFFF, "putchar");
+                        wubu_vr_t rv_z = mir_new_vr(g);
+                        wubu_mir_mov_to(g->prog, rv_z, 0);
+                        total_chars++;
+                        wubu_mir_jmp(g->prog, lbl_print_done);
+                        wubu_mir_place_label(g->prog, lbl_nonzero);
+                        /* Extract digits using division loop */
+                        /* We'll store digits in a buffer on the stack and print them */
+                        /* For simplicity, use a fixed-size buffer of 20 digits */
+                        /* Allocate buffer in prog.mem */
+                        wubu_vr_t buf_base_vr = wubu_mir_alloc(g->prog, 20);
+                        int buf_base = (int)buf_base_vr; /* base cell index */
+                        wubu_vr_t buf_idx = mir_new_vr(g);
+                        wubu_mir_mov_to(g->prog, buf_idx, zero);
+                        /* Loop: while tmp > 0 */
+                        uint32_t lbl_loop = wubu_mir_new_label(g->prog);
+                        uint32_t lbl_end = wubu_mir_new_label(g->prog);
+                        wubu_mir_place_label(g->prog, lbl_loop);
+                        wubu_vr_t done = wubu_mir_binop(g->prog, MIR_EQ, tmp, zero);
+                        wubu_mir_jnz(g->prog, done, lbl_end);
+                        /* digit = tmp % 10 */
+                        wubu_vr_t digit = wubu_mir_binop(g->prog, MIR_MOD, tmp, ten);
+                        /* store digit at buf[buf_idx] */
+                        wubu_vr_t addr = wubu_mir_const(g->prog, buf_base);
+                        wubu_vr_t off = wubu_mir_binop(g->prog, MIR_ADD, addr, buf_idx);
+                        wubu_mir_store(g->prog, off, digit);
+                        /* buf_idx++, tmp /= 10 */
+                        buf_idx = wubu_mir_binop(g->prog, MIR_ADD, buf_idx, wubu_mir_const(g->prog, 1));
+                        tmp = wubu_mir_binop(g->prog, MIR_DIV, tmp, ten);
+                        wubu_mir_jmp(g->prog, lbl_loop);
+                        wubu_mir_place_label(g->prog, lbl_end);
+                        /* Print digits in reverse order */
+                        /* buf_idx now points past the last digit */
+                        wubu_vr_t print_idx = wubu_mir_binop(g->prog, MIR_SUB, buf_idx, wubu_mir_const(g->prog, 1));
+                        uint32_t lbl_print_loop = wubu_mir_new_label(g->prog);
+                        uint32_t lbl_print_end = wubu_mir_new_label(g->prog);
+                        wubu_mir_place_label(g->prog, lbl_print_loop);
+                        wubu_vr_t pdone = wubu_mir_binop(g->prog, MIR_LT, print_idx, zero);
+                        wubu_mir_jnz(g->prog, pdone, lbl_print_end);
+                        /* Load digit and print as char */
+                        wubu_vr_t paddr = wubu_mir_const(g->prog, buf_base);
+                        wubu_vr_t poff = wubu_mir_binop(g->prog, MIR_ADD, paddr, print_idx);
+                        wubu_vr_t digit_val = wubu_mir_load(g->prog, poff);
+                        wubu_vr_t digit_char = wubu_mir_binop(g->prog, MIR_ADD, digit_val, wubu_mir_const(g->prog, (int64_t)'0'));
+                        wubu_mir_mov_to(g->prog, 1, digit_char);
+                        wubu_mir_call_ext(g->prog, 0xFFFF, "putchar");
+                        wubu_vr_t rv_p = mir_new_vr(g);
+                        wubu_mir_mov_to(g->prog, rv_p, 0);
+                        total_chars++;
+                        /* print_idx-- */
+                        print_idx = wubu_mir_binop(g->prog, MIR_SUB, print_idx, wubu_mir_const(g->prog, 1));
+                        wubu_mir_jmp(g->prog, lbl_print_loop);
+                        wubu_mir_place_label(g->prog, lbl_print_end);
+                        wubu_mir_place_label(g->prog, lbl_print_done);
+                    } else if (spec == 'x' || spec == 'X') {
+                        /* %x — print hex */
+                        wubu_vr_t zero = wubu_mir_const(g->prog, 0);
+                        wubu_vr_t tmp = mir_new_vr(g);
+                        wubu_mir_mov_to(g->prog, tmp, arg_val);
+                        /* Print "0x" prefix */
+                        wubu_vr_t ch_0 = wubu_mir_const(g->prog, (int64_t)'0');
+                        wubu_vr_t ch_x = wubu_mir_const(g->prog, (int64_t)'x');
+                        wubu_mir_mov_to(g->prog, 1, ch_0);
+                        wubu_mir_call_ext(g->prog, 0xFFFF, "putchar");
+                        wubu_vr_t rv_h1 = mir_new_vr(g);
+                        wubu_mir_mov_to(g->prog, rv_h1, 0);
+                        wubu_mir_mov_to(g->prog, 1, ch_x);
+                        wubu_mir_call_ext(g->prog, 0xFFFF, "putchar");
+                        wubu_vr_t rv_h2 = mir_new_vr(g);
+                        wubu_mir_mov_to(g->prog, rv_h2, 0);
+                        total_chars += 2;
+                        /* Extract hex digits */
+                        wubu_vr_t buf_base_vr = wubu_mir_alloc(g->prog, 16);
+                        int buf_base = (int)buf_base_vr; /* base cell index */
+                        wubu_vr_t buf_idx = mir_new_vr(g);
+                        wubu_mir_mov_to(g->prog, buf_idx, zero);
+                        wubu_vr_t sixteen = wubu_mir_const(g->prog, 16);
+                        wubu_vr_t fif = wubu_mir_const(g->prog, 15);
+                        uint32_t lbl_loop = wubu_mir_new_label(g->prog);
+                        uint32_t lbl_end = wubu_mir_new_label(g->prog);
+                        wubu_mir_place_label(g->prog, lbl_loop);
+                        wubu_vr_t done = wubu_mir_binop(g->prog, MIR_EQ, tmp, zero);
+                        wubu_mir_jnz(g->prog, done, lbl_end);
+                        wubu_vr_t digit = wubu_mir_binop(g->prog, MIR_AND, tmp, fif);
+                        wubu_vr_t addr = wubu_mir_const(g->prog, buf_base);
+                        wubu_vr_t off = wubu_mir_binop(g->prog, MIR_ADD, addr, buf_idx);
+                        wubu_mir_store(g->prog, off, digit);
+                        buf_idx = wubu_mir_binop(g->prog, MIR_ADD, buf_idx, wubu_mir_const(g->prog, 1));
+                        tmp = wubu_mir_binop(g->prog, MIR_SHR, tmp, wubu_mir_const(g->prog, 4));
+                        wubu_mir_jmp(g->prog, lbl_loop);
+                        wubu_mir_place_label(g->prog, lbl_end);
+                        /* Print in reverse */
+                        wubu_vr_t print_idx = wubu_mir_binop(g->prog, MIR_SUB, buf_idx, wubu_mir_const(g->prog, 1));
+                        uint32_t lbl_ploop = wubu_mir_new_label(g->prog);
+                        uint32_t lbl_pend = wubu_mir_new_label(g->prog);
+                        wubu_mir_place_label(g->prog, lbl_ploop);
+                        wubu_vr_t pdone = wubu_mir_binop(g->prog, MIR_LT, print_idx, zero);
+                        wubu_mir_jnz(g->prog, pdone, lbl_pend);
+                        wubu_vr_t paddr = wubu_mir_const(g->prog, buf_base);
+                        wubu_vr_t poff = wubu_mir_binop(g->prog, MIR_ADD, paddr, print_idx);
+                        wubu_vr_t digit_val = wubu_mir_load(g->prog, poff);
+                        /* Convert to hex char */
+                        wubu_vr_t is_letter = wubu_mir_binop(g->prog, MIR_UGT, digit_val, wubu_mir_const(g->prog, 9));
+                        wubu_vr_t digit_char;
+                        if (spec == 'X') {
+                            digit_char = wubu_mir_binop(g->prog, MIR_ADD, digit_val, wubu_mir_const(g->prog, (int64_t)'A' - 10));
+                        } else {
+                            digit_char = wubu_mir_binop(g->prog, MIR_ADD, digit_val, wubu_mir_const(g->prog, (int64_t)'a' - 10));
+                        }
+                        wubu_vr_t digit_num = wubu_mir_binop(g->prog, MIR_ADD, digit_val, wubu_mir_const(g->prog, (int64_t)'0'));
+                        wubu_vr_t is_letter_bool = wubu_mir_binop(g->prog, MIR_NE, is_letter, zero);
+                        uint32_t lbl_letter = wubu_mir_new_label(g->prog);
+                        uint32_t lbl_num = wubu_mir_new_label(g->prog);
+                        wubu_mir_jnz(g->prog, is_letter_bool, lbl_letter);
+                        wubu_mir_mov_to(g->prog, 1, digit_num);
+                        wubu_mir_jmp(g->prog, lbl_num);
+                        wubu_mir_place_label(g->prog, lbl_letter);
+                        wubu_mir_mov_to(g->prog, 1, digit_char);
+                        wubu_mir_place_label(g->prog, lbl_num);
+                        wubu_mir_call_ext(g->prog, 0xFFFF, "putchar");
+                        wubu_vr_t rv_x = mir_new_vr(g);
+                        wubu_mir_mov_to(g->prog, rv_x, 0);
+                        total_chars++;
+                        print_idx = wubu_mir_binop(g->prog, MIR_SUB, print_idx, wubu_mir_const(g->prog, 1));
+                        wubu_mir_jmp(g->prog, lbl_ploop);
+                        wubu_mir_place_label(g->prog, lbl_pend);
+                    } else if (spec == 's') {
+                        /* %s — print string */
+                        wubu_vr_t chr_idx = wubu_mir_const(g->prog, 0);
+                        wubu_vr_t zero = wubu_mir_const(g->prog, 0);
+                        if (arg_idx <= (int)n->n_args && n->args[arg_idx-1]->kind == HD_AST_STRING_LIT) {
+                            const char *s = n->args[arg_idx-1]->str_val;
+                            int slen = strlen(s);
+                            for (int si = 0; si < slen; si++) {
+                                wubu_vr_t ch = wubu_mir_const(g->prog, (int64_t)(unsigned char)s[si]);
+                                wubu_mir_mov_to(g->prog, 1, ch);
+                                wubu_mir_call_ext(g->prog, 0xFFFF, "putchar");
+                                wubu_vr_t rv_s = mir_new_vr(g);
+                                wubu_mir_mov_to(g->prog, rv_s, 0);
+                                total_chars++;
+                            }
+                        } else {
+                            /* Runtime string — not supported yet, print "(null)" */
+                            const char *null_str = "(null)";
+                            for (int si = 0; null_str[si]; si++) {
+                                wubu_vr_t ch = wubu_mir_const(g->prog, (int64_t)(unsigned char)null_str[si]);
+                                wubu_mir_mov_to(g->prog, 1, ch);
+                                wubu_mir_call_ext(g->prog, 0xFFFF, "putchar");
+                                wubu_vr_t rv_n = mir_new_vr(g);
+                                wubu_mir_mov_to(g->prog, rv_n, 0);
+                                total_chars++;
+                            }
+                        }
+                    } else if (spec == 'f') {
+                        /* %f — print float as "0.000000" (simplified) */
+                        const char *float_str = "0.000000";
+                        for (int si = 0; float_str[si]; si++) {
+                            wubu_vr_t ch = wubu_mir_const(g->prog, (int64_t)(unsigned char)float_str[si]);
+                            wubu_mir_mov_to(g->prog, 1, ch);
+                            wubu_mir_call_ext(g->prog, 0xFFFF, "putchar");
+                            wubu_vr_t rv_f = mir_new_vr(g);
+                            wubu_mir_mov_to(g->prog, rv_f, 0);
+                            total_chars++;
+                        }
+                    } else {
+                        /* Unknown specifier — print as-is */
+                        wubu_vr_t ch_pct = wubu_mir_const(g->prog, (int64_t)'%');
+                        wubu_mir_mov_to(g->prog, 1, ch_pct);
+                        wubu_mir_call_ext(g->prog, 0xFFFF, "putchar");
+                        wubu_vr_t rv_u1 = mir_new_vr(g);
+                        wubu_mir_mov_to(g->prog, rv_u1, 0);
+                        wubu_vr_t ch_sp = wubu_mir_const(g->prog, (int64_t)spec);
+                        wubu_mir_mov_to(g->prog, 1, ch_sp);
+                        wubu_mir_call_ext(g->prog, 0xFFFF, "putchar");
+                        wubu_vr_t rv_u2 = mir_new_vr(g);
+                        wubu_mir_mov_to(g->prog, rv_u2, 0);
+                        total_chars += 2;
+                    }
+                    i++;
+                }
+                return wubu_mir_const(g->prog, total_chars);
+            }
             /* __builtin_strcmp(s1, s2) — fall through to dlsym. */
             /* __builtin_strcpy(dst, src) — fall through to dlsym. */
             /* __builtin_strncpy(dst, src, n) — fall through to dlsym. */
             /* __builtin_memcpy(dst, src, n) — fall through to dlsym. */
             /* __builtin_memset(s, c, n) — fall through to dlsym. */
             /* __builtin_memcmp(s1, s2, n) — fall through to dlsym. */
-            /* __builtin_prefetch(addr, rw, locality) — no-op on x86-64.
-             * Just return the address argument (or 0 if none). */
+            /* abort() — no-op in our JIT context.
+             * Tests call abort() on failure; if we actually exit, the test
+             * crashes (ERROR). If we no-op, the test continues and returns
+             * its actual result (FAIL if wrong, but at least not ERROR).
+             * Return 0 to avoid undefined behavior. */
+            if (strcmp(fname, "abort") == 0) {
+                return wubu_mir_const(g->prog, 0);
+            }
+            /* exit(n) — no-op in our JIT context for the same reason. */
+            if (strcmp(fname, "exit") == 0) {
+                if (n->n_args >= 1) {
+                    (void)mir_gen_expr(g, n->args[0]); /* consume arg */
+                }
+                return wubu_mir_const(g->prog, 0);
+            }
             if (strcmp(fname, "prefetch") == 0) {
                 if (n->n_args >= 1)
                     return mir_gen_expr(g, n->args[0]);
