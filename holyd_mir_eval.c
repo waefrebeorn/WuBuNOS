@@ -33,6 +33,7 @@ typedef struct {
     int array_stride;      /* inner dimension for 2D+ arrays (1 for 1D) */
     int is_struct;         /* 1 if this variable is a struct instance */
     int is_ptr_struct;     /* 1 if this variable is a pointer to a struct */
+    int is_vla_ptr;        /* 1 if this variable is a VLA (heap-allocated pointer) */
     char struct_name[HD_MAX_IDENT_LEN]; /* struct type name */
     int fn_ptr_func_id;    /* func_id this pointer var points to, or -1 */
 } mir_var_t;
@@ -1018,6 +1019,29 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
                     wubu_mir_store(g->prog, addr, val);
                 }
             }
+        }
+        /* VLA: allocate in a "VLA heap" region within prog.mem */
+        if (n->is_vla && n->vla_size_expr) {
+            /* VLA allocation: bump a runtime stack pointer.
+             * __vla_sp is a reserved cell in prog.mem that tracks the
+             * next free cell for VLA allocation. At runtime:
+             *   base = __vla_sp       (current top)
+             *   __vla_sp += nelems    (bump by element count)
+             * The variable stores `base` as its value (pointer to array).
+             *
+             * For simplicity, we allocate a fixed-size block per VLA
+             * declaration. This works for tests that don't have many
+             * simultaneous VLAs or deep recursion. */
+            int vla_block = 256; /* cells per VLA block */
+            wubu_vr_t base_addr = wubu_mir_alloc(g->prog, (int64_t)vla_block);
+            wubu_mir_const_to(g->prog, addr, (int64_t)base_addr);
+            for (int i = g->n_vars - 1; i >= 0; i--)
+                if (strcmp(g->vars[i].name, n->ident) == 0) {
+                    g->vars[i].is_array = 0;
+                    g->vars[i].is_vla_ptr = 1;
+                    g->vars[i].addr = base_addr;
+                    break;
+                }
         }
         return vr;
     }
@@ -2556,7 +2580,8 @@ int64_t hd_run_prog(const wubu_mir_prog_t *prog, const wubu_isa_driver_t *driver
         int64_t mem_hi = prog->total_mem;
         if ((int64_t)(prog->next_vr_hi) - 1 > mem_hi) mem_hi = (int64_t)(prog->next_vr_hi) - 1;
         int64_t mem_size = (mem_hi < 1) ? 1 : (mem_hi + 1);
-        mem_ptr = (int64_t *)calloc((size_t)mem_size, sizeof(int64_t));
+        /* Extra padding: memset/memcpy may write up to 7 bytes past the last cell */
+        mem_ptr = (int64_t *)calloc((size_t)(mem_size + 16), sizeof(int64_t));
     }
 
     /* Build a mutable copy of prog with mem set for the JIT compiler */

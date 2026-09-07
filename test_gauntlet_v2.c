@@ -42,17 +42,30 @@ static int run_single_test(const char *source, int64_t expected) {
     /* Returns: 0=PASS, 1=FAIL, 2=ERROR/TIMEOUT/CRASH */
     wubu_mir_prog_t prog;
     memset(&prog, 0, sizeof(prog));
-    
+
+    /* Detect expression/statement tests (no main function) and wrap them */
+    int is_expr = 0;
+    if (!strstr(source, "main(") && !strstr(source, "main (") &&
+        !strstr(source, "void ") && !strstr(source, "return")) {
+        is_expr = 1;
+    }
+
+    char wrapped[8192];
+    if (is_expr) {
+        snprintf(wrapped, sizeof(wrapped), "int main() { return (%s); }", source);
+        source = wrapped;
+    }
+
     int build_result = hd_build_mir(source, &prog);
     if (build_result != 0) {
         return 2; /* ERROR */
     }
-    
+
     const wubu_isa_driver_t *drv = wubu_isa_find("x86-64");
     int64_t result = drv ? hd_run_prog(&prog, drv) : wubu_mir_interp(&prog);
-    
+
     wubu_mir_free(&prog);
-    
+
     return (result == expected) ? 0 : 1;
 }
 
@@ -67,7 +80,15 @@ int main(int argc, char **argv) {
         gauntlet_c_testsuite_tests,
         gauntlet_llvm_tests,
         gauntlet_lacc_tests,
-        gauntlet_fujitsu_tests,
+        gauntlet_fujitsu_proper_tests,
+        gauntlet_chibicc_tests,
+        gauntlet_compcert_tests,
+        gauntlet_comprehensive_tests,
+        gauntlet_gcc_compile_tests,
+        gauntlet_gcc_dg_tests,
+        gauntlet_slimcc_tests,
+        gauntlet_tinycc_tests,
+        gauntlet_writing_c_compiler_tests,
     };
     const uint32_t counts[] = {
         gauntlet_gcc_torture_test_count,
@@ -75,12 +96,22 @@ int main(int argc, char **argv) {
         gauntlet_c_testsuite_test_count,
         gauntlet_llvm_test_count,
         gauntlet_lacc_test_count,
-        gauntlet_fujitsu_test_count,
+        gauntlet_fujitsu_proper_test_count,
+        gauntlet_chibicc_test_count,
+        gauntlet_compcert_test_count,
+        gauntlet_comprehensive_test_count,
+        gauntlet_gcc_compile_test_count,
+        gauntlet_gcc_dg_test_count,
+        gauntlet_slimcc_test_count,
+        gauntlet_tinycc_test_count,
+        gauntlet_writing_c_compiler_test_count,
     };
     const char *names[] = {
         "gcc_torture", "extern_gcc", "c_testsuite", "llvm", "lacc", "fujitsu",
+        "chibicc", "compcert", "comprehensive", "gcc_compile", "gcc_dg",
+        "slimcc", "tinycc", "writing_c_compiler",
     };
-    int n_suites = 6;
+    int n_suites = sizeof(suites) / sizeof(suites[0]);
 
     /* Filter by --suite */
     const char *only_suite = NULL;

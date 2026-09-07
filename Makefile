@@ -64,7 +64,7 @@ JIT_SRC = $(wildcard $(OS_ROOT)/jit/jit.c $(OS_ROOT)/jit/jit_encode.c \
 GAUN    = test_gauntlet/wubu_test_gauntlet.c test_gauntlet_runner.c \
           test_gauntlet/suites/gauntlet_comprehensive.c \
           $(wildcard test_gauntlet/suites/gauntlet_gcc_*.c) \
-          $(wildcard test_gauntlet/suites/gauntlet_fujitsu.c) \
+          $(wildcard test_gauntlet/suites/gauntlet_fujitsu_proper.c) \
           $(wildcard test_gauntlet/suites/gauntlet_extern_*.c) \
           $(wildcard test_gauntlet/suites/gauntlet_compcert.c) \
           $(wildcard test_gauntlet/suites/gauntlet_c_testsuite.c) \
@@ -88,7 +88,7 @@ test_mir_opt: $(MIR) wubu_tgemm_avx512.o $(ISA) wubu_isa_vulkan.c wubu_isa_spirv
 	$(CC) $(CFLAGS) -I. $^ $(LDFLAGS) -o $@
 
 # Universal test gauntlet (needs full JIT runtime — see OS Makefile for canonical build)
-gauntlet_runner: $(FRONT) $(MIR) wubu_tgemm_avx512.o $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) $(JIT_SRC) $(GAUN) jit_stubs_arm64.c $(OS_ROOT)/runtime/wubu_spawn.c $(wildcard test_gauntlet/suites/gauntlet_gcc_*.c) $(wildcard test_gauntlet/suites/gauntlet_fujitsu.c) $(wildcard test_gauntlet/suites/gauntlet_extern_*.c) $(wildcard test_gauntlet/suites/gauntlet_c_testsuite.c) $(wildcard test_gauntlet/suites/gauntlet_llvm.c) $(wildcard test_gauntlet/suites/gauntlet_lacc.c)
+gauntlet_runner: $(FRONT) $(MIR) wubu_tgemm_avx512.o $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) $(JIT_SRC) $(GAUN) jit_stubs_arm64.c $(OS_ROOT)/runtime/wubu_spawn.c
 	$(CC) $(CFLAGS) -I. -Itest_gauntlet $^ $(LDFLAGS) -o gauntlet_runner
 
 # Direct gauntlet (no forking, runs tests in parent process)
@@ -100,11 +100,11 @@ test_single: test_single.c $(FRONT) $(MIR) wubu_tgemm_avx512.o $(filter-out wubu
 	$(CC) $(CFLAGS) -I. -Itest_gauntlet $^ $(LDFLAGS) -o $@
 
 # Fork+timeout gauntlet v2 (per-test fork with timeout)
-gauntlet_v2: test_gauntlet_v2.c $(FRONT) $(MIR) wubu_tgemm_avx512.o $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) $(JIT_SRC) jit_stubs_arm64.c $(OS_ROOT)/runtime/wubu_spawn.c $(wildcard test_gauntlet/suites/gauntlet_gcc_*.c) $(wildcard test_gauntlet/suites/gauntlet_fujitsu.c) $(wildcard test_gauntlet/suites/gauntlet_extern_*.c) $(wildcard test_gauntlet/suites/gauntlet_c_testsuite.c) $(wildcard test_gauntlet/suites/gauntlet_llvm.c) $(wildcard test_gauntlet/suites/gauntlet_lacc.c)
+gauntlet_v2: test_gauntlet_v2.c $(FRONT) $(MIR) wubu_tgemm_avx512.o $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) $(JIT_SRC) jit_stubs_arm64.c $(OS_ROOT)/runtime/wubu_spawn.c $(filter-out test_gauntlet_runner.c,$(GAUN))
 	$(CC) $(CFLAGS) -I. -Itest_gauntlet $^ $(LDFLAGS) -o $@
 
 # Multi-threaded gauntlet v3 (parallel fork+timeout)
-gauntlet_v3: test_gauntlet_v3.c $(FRONT) $(MIR) wubu_tgemm_avx512.o $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) $(JIT_SRC) jit_stubs_arm64.c $(OS_ROOT)/runtime/wubu_spawn.c $(wildcard test_gauntlet/suites/gauntlet_gcc_*.c) $(wildcard test_gauntlet/suites/gauntlet_fujitsu.c) $(wildcard test_gauntlet/suites/gauntlet_extern_*.c) $(wildcard test_gauntlet/suites/gauntlet_c_testsuite.c) $(wildcard test_gauntlet/suites/gauntlet_llvm.c) $(wildcard test_gauntlet/suites/gauntlet_lacc.c)
+gauntlet_v3: test_gauntlet_v3.c $(FRONT) $(MIR) wubu_tgemm_avx512.o $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) $(JIT_SRC) jit_stubs_arm64.c $(OS_ROOT)/runtime/wubu_spawn.c $(filter-out test_gauntlet_runner.c,$(GAUN))
 	$(CC) $(CFLAGS) -I. -Itest_gauntlet $^ $(LDFLAGS) -pthread -o $@
 
 # ---- Run targets ----

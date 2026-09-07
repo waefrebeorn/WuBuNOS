@@ -171,6 +171,10 @@ extern const uint32_t gauntlet_gcc_compile_test_count;
 
 extern const test_entry_t gauntlet_fujitsu_tests[];
 extern const uint32_t gauntlet_fujitsu_test_count;
+extern const test_entry_t gauntlet_fujitsu_proper_tests[];
+extern const uint32_t gauntlet_fujitsu_proper_test_count;
+extern const test_entry_t gauntlet_incremental_tests[];
+extern const uint32_t gauntlet_incremental_test_count;
 
 extern const test_entry_t gauntlet_extern_gcc_tests[];
 extern const uint32_t gauntlet_extern_gcc_test_count;

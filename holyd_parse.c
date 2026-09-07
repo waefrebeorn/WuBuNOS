@@ -1730,14 +1730,24 @@ done_params:
     strncpy(first_var->ident, name, HD_MAX_IDENT_LEN - 1);
     int dbg_decl = 1;
 
-    /* Array declarator: name[N][M]... */
+    /* Array declarator: name[N][M]... or name[expr]... (VLA) */
     int dims[8], n_dims = 0;
+    int vla_dims[8]; /* 1 if this dim is VLA (runtime expr) */
+    HDASTNode *vla_exprs[8]; /* expression nodes for VLA dims */
+    memset(vla_exprs, 0, sizeof(vla_exprs));
     while (peek(p) == HD_TOK_LBRACKET) {
         advance(p); /* [ */
         int arr_size = 0;
         if (peek(p) != HD_TOK_RBRACKET) {
             HDTokenType st = peek(p);
             if (st == HD_TOK_INT) { arr_size = (int)p->lex->tok.int_val; advance(p); }
+            else {
+                /* VLA: runtime expression for array size */
+                HDASTNode *sz_expr = parse_expr(p);
+                vla_dims[n_dims] = 1;
+                vla_exprs[n_dims] = sz_expr;
+                arr_size = 0; /* placeholder; real size is runtime */
+            }
         }
         expect(p, HD_TOK_RBRACKET);
         if (n_dims < 8) dims[n_dims++] = arr_size;
@@ -1756,6 +1766,41 @@ done_params:
         type = base_type;
     }
     first_var->type = type;
+
+    /* VLA: if any dim was a runtime expression, convert to heap allocation */
+    {
+        int has_vla = 0;
+        for (int d = 0; d < n_dims; d++) if (vla_dims[d]) has_vla = 1;
+        if (has_vla) {
+            /* Build total element count expression: dim[0] * dim[1] * ... */
+            HDASTNode *total_expr = NULL;
+            for (int d = 0; d < n_dims; d++) {
+                HDASTNode *dim_node;
+                if (vla_dims[d] && vla_exprs[d]) {
+                    dim_node = vla_exprs[d];
+                } else {
+                    dim_node = hd_ast_new(HD_AST_INT_LIT);
+                    dim_node->int_val = dims[d];
+                }
+                if (total_expr == NULL) {
+                    total_expr = dim_node;
+                } else {
+                    HDASTNode *mul = hd_ast_new(HD_AST_MUL);
+                    mul->left = total_expr;
+                    mul->right = dim_node;
+                    total_expr = mul;
+                }
+            }
+            /* Change type from array to pointer */
+            HDType *ptr_type = (HDType *)calloc(1, sizeof(HDType));
+            ptr_type->kind = HD_TYPE_PTR;
+            ptr_type->base = type->base; /* point to element type */
+            ptr_type->size = 8;
+            first_var->type = ptr_type;
+            first_var->is_vla = 1;
+            first_var->vla_size_expr = total_expr;
+        }
+    }
 
     if (match(p, HD_TOK_ASSIGN)) {
         first_var->init = parse_assign(p);

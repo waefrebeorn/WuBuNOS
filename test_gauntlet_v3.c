@@ -1,7 +1,7 @@
 /*
- * test_gauntlet_v3.c — Multi-threaded gauntlet runner.
- * Uses pthreads to run tests in parallel. Each thread forks children
- * for individual tests (fork provides isolation from crashes).
+ * test_gauntlet_v3.c — Multi-process gauntlet runner.
+ * Forks N worker processes, each runs a subset of tests sequentially.
+ * Results written to temp files, merged at the end.
  *
  * Usage: ./gauntlet_v3 [--suite <name>] [--jobs <N>]
  */
@@ -14,7 +14,6 @@
 #include <sys/wait.h>
 #include <sys/types.h>
 #include <malloc.h>
-#include <pthread.h>
 #include "wubu_test_gauntlet.h"
 #include "wubu_isa_driver.h"
 #include "holyd_mir_eval.h"
@@ -25,108 +24,107 @@ typedef struct {
     int64_t expected;
 } test_info_t;
 
-#define MAX_TESTS 20000
+#define MAX_TESTS 25000
 #define MAX_JOBS 12
 
 static test_info_t all_tests[MAX_TESTS];
 static int n_tests = 0;
 
-/* Results accumulated per-thread, merged at the end */
-typedef struct {
-    uint32_t pass;
-    uint32_t fail;
-    uint32_t err;
-    /* Store failing test names for reporting */
-    char fail_names[100][HD_MAX_IDENT_LEN];
-    int n_fails;
-    char err_names[100][HD_MAX_IDENT_LEN];
-    int n_errs;
-} thread_result_t;
-
-static int run_single_test(const char *source, int64_t expected) {
+static int run_single_test_nofree(const char *source, int64_t expected) {
     wubu_mir_prog_t prog;
     memset(&prog, 0, sizeof(prog));
     int build_result = hd_build_mir(source, &prog);
     if (build_result != 0) return 2;
     const wubu_isa_driver_t *drv = wubu_isa_find("x86-64");
     int64_t result = drv ? hd_run_prog(&prog, drv) : wubu_mir_interp(&prog);
-    wubu_mir_free(&prog);
+    /* Do NOT free — we're in a forked child about to _exit().
+     * Freeing in a forked child corrupts the parent's heap metadata. */
     return (result == expected) ? 0 : 1;
 }
 
-typedef struct {
-    int thread_id;
-    int start_idx, end_idx; /* [start, end) range into all_tests */
-    thread_result_t result;
-} worker_arg_t;
+/* Worker process: run tests [start, end), write results to file */
+static void worker_process(int start, int end, const char *result_file) {
+/* Force all allocations through mmap to avoid lock contention */
+mallopt(M_MMAP_THRESHOLD, 0);
 
-static void *worker_thread(void *arg) {
-    worker_arg_t *w = (worker_arg_t *)arg;
-    w->result.pass = w->result.fail = w->result.err = 0;
-    w->result.n_fails = w->result.n_errs = 0;
+FILE *f = fopen(result_file, "w");
+if (!f) _exit(1);
 
-    for (int i = w->start_idx; i < w->end_idx; i++) {
-        pid_t pid = fork();
-        if (pid == 0) {
-            /* Child: run test and exit */
-            signal(SIGSEGV, SIG_DFL);
-            signal(SIGBUS, SIG_DFL);
-            signal(SIGILL, SIG_DFL);
-            signal(SIGFPE, SIG_DFL);
-            signal(SIGABRT, SIG_DFL);
-            int rc = run_single_test(all_tests[i].source, all_tests[i].expected);
-            _exit(rc);
-        }
-        if (pid < 0) {
-            w->result.err++;
-            continue;
-        }
-        /* Parent: wait with timeout */
-        int status, waited = 0;
-        for (int t = 0; t < 100; t++) { /* 10 seconds, 100ms polling */
-            pid_t wp = waitpid(pid, &status, WNOHANG);
-            if (wp == pid) { waited = 1; break; }
-            if (wp == -1) break;
-            usleep(100000);
-        }
-        if (!waited) {
-            kill(pid, SIGKILL);
-            waitpid(pid, &status, 0);
-            w->result.err++;
-            if (w->result.n_errs < 100)
-                strncpy(w->result.err_names[w->result.n_errs++], all_tests[i].name, HD_MAX_IDENT_LEN - 1);
-        } else if (WIFEXITED(status)) {
-            int rc = WEXITSTATUS(status);
-            if (rc == 0) {
-                w->result.pass++;
-            } else if (rc == 1) {
-                w->result.fail++;
-                if (w->result.n_fails < 100)
-                    strncpy(w->result.fail_names[w->result.n_fails++], all_tests[i].name, HD_MAX_IDENT_LEN - 1);
-            } else {
-                w->result.err++;
-                if (w->result.n_errs < 100)
-                    strncpy(w->result.err_names[w->result.n_errs++], all_tests[i].name, HD_MAX_IDENT_LEN - 1);
-            }
-        } else {
-            w->result.err++;
-            if (w->result.n_errs < 100)
-                strncpy(w->result.err_names[w->result.n_errs++], all_tests[i].name, HD_MAX_IDENT_LEN - 1);
-        }
+for (int i = start; i < end; i++) {
+    /* Run test in a forked child for crash isolation */
+    pid_t pid = fork();
+    if (pid == 0) {
+        /* Child: run test, write result, exit */
+        signal(SIGSEGV, SIG_DFL);
+        signal(SIGBUS, SIG_DFL);
+        signal(SIGILL, SIG_DFL);
+        signal(SIGFPE, SIG_DFL);
+        signal(SIGABRT, SIG_DFL);
+        int rc = run_single_test_nofree(all_tests[i].source, all_tests[i].expected);
+        /* Write result to a per-test file */
+        char tmpfile[256];
+        snprintf(tmpfile, sizeof(tmpfile), "/tmp/gv3_%d_%d.out", getpid(), i);
+        FILE *tf = fopen(tmpfile, "w");
+        if (tf) { fprintf(tf, "%d\n", rc); fclose(tf); }
+        _exit(0);
     }
-    return NULL;
+    if (pid < 0) {
+        fprintf(f, "2 %s\n", all_tests[i].name);
+        fflush(f);
+        continue;
+    }
+    /* Wait with 5s timeout (most tests complete in <100ms) */
+    int status, waited = 0;
+    for (int t = 0; t < 50; t++) {
+        pid_t wp = waitpid(pid, &status, WNOHANG);
+        if (wp == pid) { waited = 1; break; }
+        if (wp == -1) break;
+        usleep(100000);
+    }
+    if (!waited) {
+        kill(pid, SIGKILL);
+        waitpid(pid, &status, 0);
+        fprintf(f, "2 %s\n", all_tests[i].name);
+        fflush(f);
+    } else {
+        /* Read result from per-test file */
+        char tmpfile[256];
+        snprintf(tmpfile, sizeof(tmpfile), "/tmp/gv3_%d_%d.out", pid, i);
+        FILE *tf = fopen(tmpfile, "r");
+        int rc = 2; /* default: error */
+        if (tf) {
+            if (fscanf(tf, "%d", &rc) != 1) rc = 2;
+            fclose(tf);
+            unlink(tmpfile);
+        }
+        fprintf(f, "%d %s\n", rc, all_tests[i].name);
+        fflush(f);
+    }
+    /* Progress every 100 tests */
+    if ((i - start) % 100 == 0) {
+        fprintf(stderr, "  worker [%d,%d): %d/%d\n", start, end, i - start, end - start);
+    }
+}
+fclose(f);
+_exit(0);
 }
 
 int main(int argc, char **argv) {
-    mallopt(M_MMAP_THRESHOLD, 0);
-
     const test_entry_t *suites[] = {
         gauntlet_gcc_torture_tests,
         gauntlet_extern_gcc_tests,
         gauntlet_c_testsuite_tests,
         gauntlet_llvm_tests,
         gauntlet_lacc_tests,
-        gauntlet_fujitsu_tests,
+        gauntlet_fujitsu_proper_tests,
+        gauntlet_chibicc_tests,
+        gauntlet_compcert_tests,
+        gauntlet_comprehensive_tests,
+        gauntlet_gcc_compile_tests,
+        gauntlet_gcc_dg_tests,
+        gauntlet_slimcc_tests,
+        gauntlet_tinycc_tests,
+        gauntlet_writing_c_compiler_tests,
     };
     const uint32_t counts[] = {
         gauntlet_gcc_torture_test_count,
@@ -134,14 +132,24 @@ int main(int argc, char **argv) {
         gauntlet_c_testsuite_test_count,
         gauntlet_llvm_test_count,
         gauntlet_lacc_test_count,
-        gauntlet_fujitsu_test_count,
+        gauntlet_fujitsu_proper_test_count,
+        gauntlet_chibicc_test_count,
+        gauntlet_compcert_test_count,
+        gauntlet_comprehensive_test_count,
+        gauntlet_gcc_compile_test_count,
+        gauntlet_gcc_dg_test_count,
+        gauntlet_slimcc_test_count,
+        gauntlet_tinycc_test_count,
+        gauntlet_writing_c_compiler_test_count,
     };
     const char *names[] = {
         "gcc_torture", "extern_gcc", "c_testsuite", "llvm", "lacc", "fujitsu",
+        "chibicc", "compcert", "comprehensive", "gcc_compile", "gcc_dg",
+        "slimcc", "tinycc", "writing_c_compiler",
     };
 
     const char *only_suite = NULL;
-    int n_jobs = 6; /* default: match physical cores */
+    int n_jobs = 6;
     for (int ai = 1; ai < argc; ai++) {
         if (strcmp(argv[ai], "--suite") == 0 && ai + 1 < argc) only_suite = argv[ai + 1];
         if (strcmp(argv[ai], "--jobs") == 0 && ai + 1 < argc) n_jobs = atoi(argv[ai + 1]);
@@ -149,7 +157,8 @@ int main(int argc, char **argv) {
     if (n_jobs < 1) n_jobs = 1;
     if (n_jobs > MAX_JOBS) n_jobs = MAX_JOBS;
 
-    for (int s = 0; s < 6; s++) {
+    int n_suites = sizeof(suites) / sizeof(suites[0]);
+    for (int s = 0; s < n_suites; s++) {
         if (only_suite && strcmp(names[s], only_suite) != 0) continue;
         for (uint32_t i = 0; i < counts[s] && n_tests < MAX_TESTS; i++) {
             all_tests[n_tests].name = suites[s][i].name;
@@ -159,36 +168,69 @@ int main(int argc, char **argv) {
         }
     }
 
-    fprintf(stderr, "Loaded %d tests, running with %d threads\n", n_tests, n_jobs);
+    fprintf(stderr, "Loaded %d tests, running with %d workers\n", n_tests, n_jobs);
 
-    /* Divide tests among threads */
-    pthread_t threads[MAX_JOBS];
-    worker_arg_t worker_args[MAX_JOBS];
-    int tests_per_thread = n_tests / n_jobs;
+    /* Divide tests among workers */
+    int tests_per_worker = n_tests / n_jobs;
     int remainder = n_tests % n_jobs;
     int start = 0;
 
-    for (int t = 0; t < n_jobs; t++) {
-        int count = tests_per_thread + (t < remainder ? 1 : 0);
-        worker_args[t].thread_id = t;
-        worker_args[t].start_idx = start;
-        worker_args[t].end_idx = start + count;
-        start += count;
-        pthread_create(&threads[t], NULL, worker_thread, &worker_args[t]);
+    pid_t worker_pids[MAX_JOBS];
+    char result_files[MAX_JOBS][64];
+
+    for (int w = 0; w < n_jobs; w++) {
+        int count = tests_per_worker + (w < remainder ? 1 : 0);
+        int end = start + count;
+        snprintf(result_files[w], sizeof(result_files[w]), "/tmp/gv3_results_%d.txt", w);
+
+        pid_t pid = fork();
+        if (pid == 0) {
+            /* Child: run tests, write results to file */
+            worker_process(start, end, result_files[w]);
+            _exit(0); /* should not reach */
+        }
+        if (pid < 0) {
+            perror("fork");
+            exit(1);
+        }
+
+        worker_pids[w] = pid;
+        start = end;
     }
 
-    /* Wait for all threads and merge results */
+    /* Collect results from all workers */
     uint32_t total_pass = 0, total_fail = 0, total_err = 0;
-    for (int t = 0; t < n_jobs; t++) {
-        pthread_join(threads[t], NULL);
-        total_pass += worker_args[t].result.pass;
-        total_fail += worker_args[t].result.fail;
-        total_err += worker_args[t].result.err;
-        /* Print per-thread failures */
-        for (int f = 0; f < worker_args[t].result.n_fails; f++)
-            printf("  FAIL %s\n", worker_args[t].result.fail_names[f]);
-        for (int e = 0; e < worker_args[t].result.n_errs; e++)
-            printf("  EROR %s\n", worker_args[t].result.err_names[e]);
+    char line[1024];
+
+    for (int w = 0; w < n_jobs; w++) {
+        FILE *f = fopen(result_files[w], "r");
+        if (!f) {
+            fprintf(stderr, "  worker %d: no result file\n", w);
+            continue;
+        }
+
+        int worker_pass = 0, worker_fail = 0, worker_err = 0;
+        while (fgets(line, sizeof(line), f)) {
+            int rc;
+            char test_name[256];
+            if (sscanf(line, " %d %255s", &rc, test_name) >= 1) {
+                if (rc == 0) { worker_pass++; total_pass++; }
+                else if (rc == 1) {
+                    worker_fail++; total_fail++;
+                    if (worker_fail <= 50)
+                        printf("  FAIL %s\n", test_name);
+                }
+                else { worker_err++; total_err++; }
+            }
+        }
+        fclose(f);
+        unlink(result_files[w]);
+
+        /* Wait for worker */
+        int status;
+        waitpid(worker_pids[w], &status, 0);
+        fprintf(stderr, "  worker %d done: pass=%d fail=%d err=%d\n",
+                w, worker_pass, worker_fail, worker_err);
     }
 
     printf("\n{\"pass\":%u,\"fail\":%u,\"error\":%u,\"total\":%d}\n",

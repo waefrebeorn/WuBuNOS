@@ -179,7 +179,7 @@ int main(int argc, char **argv) {
     };
     const test_entry_t *external_suites[] = {
         gauntlet_gcc_torture_tests, gauntlet_gcc_dg_tests,
-        gauntlet_gcc_compile_tests, gauntlet_fujitsu_tests,
+        gauntlet_gcc_compile_tests, gauntlet_fujitsu_proper_tests,
         gauntlet_extern_gcc_tests, gauntlet_compcert_tests,
         gauntlet_c_testsuite_tests, gauntlet_llvm_tests,
         gauntlet_lacc_tests, gauntlet_tinycc_tests,
@@ -188,7 +188,7 @@ int main(int argc, char **argv) {
     };
     const uint32_t external_counts[] = {
         gauntlet_gcc_torture_test_count, gauntlet_gcc_dg_test_count,
-        gauntlet_gcc_compile_test_count, gauntlet_fujitsu_test_count,
+        gauntlet_gcc_compile_test_count, gauntlet_fujitsu_proper_test_count,
         gauntlet_extern_gcc_test_count, gauntlet_compcert_test_count,
         gauntlet_c_testsuite_test_count, gauntlet_llvm_test_count,
         gauntlet_lacc_test_count, gauntlet_tinycc_test_count,

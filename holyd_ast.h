@@ -34,6 +34,10 @@ struct HDASTNode {
     int n_params;
     int is_variadic;           /* For func_decl: 1 if ... parameter */
 
+    /* For VLA (variable-length array) declarations */
+    int is_vla;                /* 1 if this var_decl is a VLA */
+    HDASTNode *vla_size_expr;  /* runtime expression for VLA total element count */
+
     /* For extern_decl */
     char extern_c_name[HD_MAX_IDENT_LEN];
     HDType *extern_ret_type;
