@@ -102,14 +102,16 @@ static int mir_find_var_is_float(HDMirGen *g, const char *name) {
 }
 
 static wubu_vr_t mir_find_var(HDMirGen *g, const char *name) {
-    for (int i = 0; i < g->n_vars; i++)
+    /* Search from end to find the most recent declaration (shadowing) */
+    for (int i = g->n_vars - 1; i >= 0; i--)
         if (strcmp(g->vars[i].name, name) == 0) return g->vars[i].vr;
     return (wubu_vr_t)-1;
 }
 
 /* symbol table: find a declared variable's memory base addr, or 0 */
 static wubu_vr_t mir_find_var_addr(HDMirGen *g, const char *name) {
-    for (int i = 0; i < g->n_vars; i++)
+    /* Search from end to find the most recent declaration (shadowing) */
+    for (int i = g->n_vars - 1; i >= 0; i--)
         if (strcmp(g->vars[i].name, name) == 0) return g->vars[i].addr;
     return 0;
 }
@@ -741,10 +743,11 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
     if (!n) return 0;
     switch (n->kind) {
     case HD_AST_BLOCK: {
-        /* Push scope unless we're in a function body (scope already pushed before params)
-         * or the block has no_scope_pop set (e.g. multi-declarator wrapper) */
+        /* Push scope for block-level variable shadowing.
+         * All blocks (including function body) get a scope so that
+         * inner blocks can shadow outer variables correctly. */
         int pushed = 0;
-        if (!g->in_function_body && g->n_scopes < MIRGEN_MAX_VARS && !n->no_scope_pop) {
+        if (g->n_scopes < MIRGEN_MAX_VARS && !n->no_scope_pop) {
             g->scope_var_start[g->n_scopes++] = g->n_vars;
             pushed = 1;
         }
@@ -2976,7 +2979,7 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
         g.in_function_body = 1;
         mir_gen_stmt(&g, fn->body);
         g.in_function_body = 0;
-        /* Pop the function body scope to clean up params/locals */
+        /* Pop the parameter scope (function body scope was pushed/popped by block handler) */
         if (g.n_scopes > 0)
             g.n_vars = g.scope_var_start[--g.n_scopes];
         wubu_mir_place_label(prog, g.fn_ret_label);
