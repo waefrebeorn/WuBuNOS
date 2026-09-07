@@ -37,9 +37,10 @@ static int run_single_test_nofree(const char *source, int64_t expected) {
     if (build_result != 0) return 2;
     const wubu_isa_driver_t *drv = wubu_isa_find("x86-64");
     int64_t result = drv ? hd_run_prog(&prog, drv) : wubu_mir_interp(&prog);
-    /* Do NOT free — we're in a forked child about to _exit().
-     * Freeing in a forked child corrupts the parent's heap metadata. */
-    return (result == expected) ? 0 : 1;
+    /* Linux exit codes are 8-bit (0-255). The expected values from the test
+     * suite are OS-level exit codes, so truncate the JIT result to match. */
+    int64_t exit_code = result & 0xFF;
+    return (exit_code == expected) ? 0 : 1;
 }
 
 /* Worker process: run tests [start, end), write results to file */
