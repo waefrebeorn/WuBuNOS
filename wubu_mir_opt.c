@@ -110,8 +110,8 @@ static void fold_pass(wubu_mir_prog_t *p)
             case MIR_AND: result = WRAP32(a & b); break;
             case MIR_OR:  result = WRAP32(a | b); break;
             case MIR_XOR: result = WRAP32(a ^ b); break;
-            case MIR_SHL: result = WRAP32((int64_t)((uint32_t)a << (b & 31))); break;
-            case MIR_SHR: result = WRAP32((int64_t)((int32_t)a >> (b & 31))); break;
+            case MIR_SHL: result = (uint64_t)a << (b & 63); break;
+            case MIR_SHR: result = (int64_t)a >> (b & 63); break;
             case MIR_EQ:  result = (a == b) ? 1 : 0; break;
             case MIR_NE:  result = (a != b) ? 1 : 0; break;
             case MIR_LT:  result = (a < b) ? 1 : 0; break;
@@ -385,8 +385,8 @@ static void fold_dce_pass(wubu_mir_prog_t *p)
                 case MIR_AND: result = WRAP32(a & b); break;
                 case MIR_OR:  result = WRAP32(a | b); break;
                 case MIR_XOR: result = WRAP32(a ^ b); break;
-                case MIR_SHL: result = WRAP32((int64_t)((uint32_t)a << (b & 31))); break;
-                case MIR_SHR: result = WRAP32((int64_t)((int32_t)a >> (b & 31))); break;
+                case MIR_SHL: result = (uint64_t)a << (b & 63); break;
+                case MIR_SHR: result = (int64_t)a >> (b & 63); break;
                 case MIR_EQ:  result = (a == b) ? 1 : 0; break;
                 case MIR_NE:  result = (a != b) ? 1 : 0; break;
                 case MIR_LT:  result = (a < b) ? 1 : 0; break;
