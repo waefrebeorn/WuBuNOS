@@ -2098,12 +2098,19 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         /* Handle builtin functions that the preprocessor stripped __builtin_ prefix from. */
         if (fid < 0 && n->callee && n->callee->kind == HD_AST_IDENT && n->callee->ident[0]) {
             const char *fname = n->callee->ident;
+            /* __builtin_strlen(s) — compile-time for literals, dlsym for runtime. */
             if (strcmp(fname, "strlen") == 0 && n->n_args >= 1) {
-                /* strlen(string_literal) = compile-time constant */
                 if (n->args[0] && n->args[0]->kind == HD_AST_STRING_LIT) {
                     return wubu_mir_const(g->prog, (int64_t)strlen(n->args[0]->str_val));
                 }
+                /* Fall through to dlsym path for runtime strings. */
             }
+            /* __builtin_strcmp(s1, s2) — fall through to dlsym. */
+            /* __builtin_strcpy(dst, src) — fall through to dlsym. */
+            /* __builtin_strncpy(dst, src, n) — fall through to dlsym. */
+            /* __builtin_memcpy(dst, src, n) — fall through to dlsym. */
+            /* __builtin_memset(s, c, n) — fall through to dlsym. */
+            /* __builtin_memcmp(s1, s2, n) — fall through to dlsym. */
             /* __builtin_prefetch(addr, rw, locality) — no-op on x86-64.
              * Just return the address argument (or 0 if none). */
             if (strcmp(fname, "prefetch") == 0) {
@@ -2128,9 +2135,19 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             if (strcmp(fname, "offsetof") == 0) {
                 return wubu_mir_const(g->prog, 0);
             }
-            /* __builtin_malloc(size) — allocate memory via dlsym. */
-            if (strcmp(fname, "malloc") == 0) {
-                /* Fall through to dlsym path — malloc is resolved by the JIT. */
+            /* __builtin_fabs(x) — absolute value of float/double. */
+            if (strcmp(fname, "fabs") == 0 && n->n_args >= 1) {
+                wubu_vr_t x = mir_gen_expr(g, n->args[0]);
+                /* fabs: clear the sign bit. For f64 bits in int64:
+                 * mask = 0x7FFFFFFFFFFFFFFF */
+                wubu_vr_t mask = wubu_mir_const(g->prog, 0x7FFFFFFFFFFFFFFFLL);
+                return wubu_mir_binop(g->prog, MIR_AND, x, mask);
+            }
+            /* __builtin_fabsf(x) — absolute value of float (32-bit). */
+            if (strcmp(fname, "fabsf") == 0 && n->n_args >= 1) {
+                wubu_vr_t x = mir_gen_expr(g, n->args[0]);
+                wubu_vr_t mask = wubu_mir_const(g->prog, 0x7FFFFFFF);
+                return wubu_mir_binop(g->prog, MIR_AND, x, mask);
             }
             /* __builtin_ffs(x) — find first set bit. */
             if (strcmp(fname, "ffs") == 0 && n->n_args >= 1) {
