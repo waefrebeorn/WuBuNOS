@@ -125,6 +125,7 @@ int main(int argc, char **argv) {
         gauntlet_slimcc_tests,
         gauntlet_tinycc_tests,
         gauntlet_writing_c_compiler_tests,
+        gauntlet_writing_c_compiler_full_tests,
     };
     const uint32_t counts[] = {
         gauntlet_gcc_torture_test_count,
@@ -141,11 +142,12 @@ int main(int argc, char **argv) {
         gauntlet_slimcc_test_count,
         gauntlet_tinycc_test_count,
         gauntlet_writing_c_compiler_test_count,
+        gauntlet_writing_c_compiler_full_test_count,
     };
     const char *names[] = {
         "gcc_torture", "extern_gcc", "c_testsuite", "llvm", "lacc", "fujitsu_proper",
         "chibicc", "compcert", "comprehensive", "gcc_compile", "gcc_dg",
-        "slimcc", "tinycc", "writing_c_compiler",
+        "slimcc", "tinycc", "writing_c_compiler", "writing_c_compiler_full",
     };
 
     const char *only_suite = NULL;
