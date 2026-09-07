@@ -756,7 +756,14 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
             last = mir_gen_stmt(g, n->stmts[i]);
             /* If this top-level statement is a RETURN, subsequent
              * statements are unreachable. Stop generating them. */
-            if (n->stmts[i]->kind == HD_AST_RETURN) break;
+            if (n->stmts[i]->kind == HD_AST_RETURN) {
+                /* Don't stop if there are labels ahead — goto can jump past return */
+                int has_label_ahead = 0;
+                for (uint32_t j = i + 1; j < n->n_stmts; j++) {
+                    if (n->stmts[j]->kind == HD_AST_LABEL) { has_label_ahead = 1; break; }
+                }
+                if (!has_label_ahead) break;
+            }
             /* Note: GOTO should NOT break — the label target may be
                  * defined later in the same block, and we still need to
                  * emit those statements. */
