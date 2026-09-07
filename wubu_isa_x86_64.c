@@ -705,30 +705,30 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             } else {
                 emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
             }
-            /* Load 'b' into rdi (second operand) */
+            /* Load 'b' into rcx (second operand) — NOT rdi, because
+             * the divisor VR might be assigned to rax (which holds the
+             * dividend). Using rcx avoids clobbering rax. */
             int sb = VR_ENC_SAFE(in->b);
-            if (sb == 7) {
-                /* already in rdi (x86 encoding 7) — wait, rdi is encoding 7? No. */
-                /* rdi x86 encoding is 7. But our reg_x86[] maps allocator index -> x86. */
-                /* We need to emit mov rdi, <sb_enc> */
-            }
-            /* Actually, let's use rdi (x86 enc 7) as second-operand scratch */
             if (sb >= 0) {
-                emit_mov_rdi_from_vr(&e, sb);  /* mov rdi, b_reg */
+                /* mov rcx, b_reg */
+                rex(&e,1,reg_needs_rex(sb),0,0); e8(&e, 0x89); e8(&e, (uint8_t)(0xC0 | ((sb & 7) << 3) | 1));
             } else {
-                emit_load_rbp(&e, 7, spill_off(assign, assign_count, &e, in->b));
+                /* mov rcx, [rbp+off] */
+                int32_t off = spill_off(assign, assign_count, &e, in->b);
+                if (off >= -128 && off <= 127) { rex(&e,1,0,0,0); e8(&e, 0x8B); e8(&e, 0x4D); e8(&e, (uint8_t)off); }
+                else { rex(&e,1,0,0,0); e8(&e, 0x8B); e8(&e, 0x8D); e32(&e, (uint32_t)off); }
             }
             switch (in->op) {
-            case MIR_ADD: rex(&e,1,0,0,0); e8(&e, 0x01); e8(&e, 0xF8); break; /* add rax,rdi */
-            case MIR_SUB: rex(&e,1,0,0,0); e8(&e, 0x29); e8(&e, 0xF8); break; /* sub rax,rdi */
-            case MIR_MUL: rex(&e,1,0,0,0); e8(&e, 0x0F); e8(&e, 0xAF); e8(&e, 0xC7); break; /* imul rax,rdi */
+            case MIR_ADD: rex(&e,1,0,0,0); e8(&e, 0x01); e8(&e, 0xC8); break; /* add rax,rcx */
+            case MIR_SUB: rex(&e,1,0,0,0); e8(&e, 0x29); e8(&e, 0xC8); break; /* sub rax,rcx */
+            case MIR_MUL: rex(&e,1,0,0,0); e8(&e, 0x0F); e8(&e, 0xAF); e8(&e, 0xC1); break; /* imul rax,rcx */
             case MIR_DIV: case MIR_MOD: {
                 /* cqo/idiv clobber RDX — save/restore RDX around the division
                  * to protect any live vr assigned to physical reg index 8 (rdx). */
                 /* push rdx */
                 e8(&e, 0x52);
                 rex(&e,1,0,0,0); e8(&e, 0x99);   /* cqo */
-                rex(&e,1,0,0,0); e8(&e, 0xF7); e8(&e, 0xFF);  /* idiv rdi */
+                rex(&e,1,0,0,0); e8(&e, 0xF7); e8(&e, 0xF9);  /* idiv rcx */
                 if (in->op == MIR_MOD) {
                     rex(&e,1,0,0,0); e8(&e, 0x89); e8(&e, 0xD0);  /* mov rax, rdx */
                 }
@@ -736,9 +736,9 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
                 e8(&e, 0x5A);
                 break;
             }
-            case MIR_AND: rex(&e,1,0,0,0); e8(&e, 0x21); e8(&e, 0xF8); break;
-            case MIR_OR:  rex(&e,1,0,0,0); e8(&e, 0x09); e8(&e, 0xF8); break;
-            case MIR_XOR: rex(&e,1,0,0,0); e8(&e, 0x31); e8(&e, 0xF8); break;
+            case MIR_AND: rex(&e,1,0,0,0); e8(&e, 0x21); e8(&e, 0xC8); break; /* and rax,rcx */
+            case MIR_OR:  rex(&e,1,0,0,0); e8(&e, 0x09); e8(&e, 0xC8); break; /* or rax,rcx */
+            case MIR_XOR: rex(&e,1,0,0,0); e8(&e, 0x31); e8(&e, 0xC8); break; /* xor rax,rcx */
 
             /* ---- SSE single-precision float ops (values are f32 bits) ---- */
             case MIR_DADD: case MIR_DSUB: case MIR_DMUL: case MIR_DDIV: {
@@ -958,21 +958,11 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
                 free(assign);
                 return -1;
             }
-            /* Truncate integer arithmetic results to 32-bit C int semantics.
-             * movsxd rax, eax (48 63 C0): sign-extend lower 32 bits → 64 bits.
-             * This makes INT_MAX+1 wrap to INT_MIN (negative), matching C.
-             * Only applies to the integer arithmetic/bitwise group, not float/cmp.
-             * NOTE: SHL/SHR are NOT truncated — shifts commonly overflow 32 bits
-             * (e.g., long long x = 9LL << 55), and the interpreter does 64-bit shifts. */
-            switch (in->op) {
-            case MIR_ADD: case MIR_SUB: case MIR_MUL: case MIR_DIV: case MIR_MOD:
-            case MIR_AND: case MIR_OR: case MIR_XOR:
-            case MIR_NEG: case MIR_NOT:
-                e8(&e, 0x48); e8(&e, 0x63); e8(&e, 0xC0);
-                break;
-            default:
-                break;
-            }
+            /* NOTE: No movsxd truncation for any operation.
+             * The interpreter uses full 64-bit arithmetic (no truncation),
+             * so the JIT must match. Signed integer overflow is UB in C,
+             * so truncation is not required for correctness.
+             * The optimizer's WRAP32 was also removed for the same reason. */
             /* Store result — skip if next instr is RET consuming this dst */
             int sd = VR_ENC_SAFE(in->dst);
             if (sd >= 0) {

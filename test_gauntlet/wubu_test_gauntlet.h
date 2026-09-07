@@ -197,9 +197,6 @@ extern const uint32_t gauntlet_tinycc_test_count;
 extern const test_entry_t gauntlet_chibicc_tests[];
 extern const uint32_t gauntlet_chibicc_test_count;
 
-extern const test_entry_t gauntlet_writing_c_compiler_tests[];
-extern const uint32_t gauntlet_writing_c_compiler_test_count;
-
 extern const test_entry_t gauntlet_writing_c_compiler_full_tests[];
 extern const uint32_t gauntlet_writing_c_compiler_full_test_count;
 

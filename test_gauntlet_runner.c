@@ -183,7 +183,7 @@ int main(int argc, char **argv) {
         gauntlet_extern_gcc_tests, gauntlet_compcert_tests,
         gauntlet_c_testsuite_tests, gauntlet_llvm_tests,
         gauntlet_lacc_tests, gauntlet_tinycc_tests,
-        gauntlet_chibicc_tests, gauntlet_writing_c_compiler_tests,
+        gauntlet_chibicc_tests, gauntlet_writing_c_compiler_full_tests,
         gauntlet_slimcc_tests,
     };
     const uint32_t external_counts[] = {
@@ -192,13 +192,13 @@ int main(int argc, char **argv) {
         gauntlet_extern_gcc_test_count, gauntlet_compcert_test_count,
         gauntlet_c_testsuite_test_count, gauntlet_llvm_test_count,
         gauntlet_lacc_test_count, gauntlet_tinycc_test_count,
-        gauntlet_chibicc_test_count, gauntlet_writing_c_compiler_test_count,
+        gauntlet_chibicc_test_count, gauntlet_writing_c_compiler_full_test_count,
         gauntlet_slimcc_test_count,
     };
     const char *external_names[] = {
         "gcc_torture", "gcc_dg", "gcc_compile", "fujitsu", "extern_gcc",
         "compcert", "c_testsuite", "llvm", "lacc", "tinycc", "chibicc",
-        "writing_c_compiler", "slimcc"
+        "chibicc", "writing_c_compiler_full", "slimcc",
     };
 
     const test_entry_t **suites;

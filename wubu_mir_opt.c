@@ -102,14 +102,14 @@ static void fold_pass(wubu_mir_prog_t *p)
             int64_t b = const_val[in->b];
             int64_t result = 0;
             switch (in->op) {
-            case MIR_ADD: result = WRAP32(a + b); break;
-            case MIR_SUB: result = WRAP32(a - b); break;
-            case MIR_MUL: result = WRAP32(a * b); break;
-            case MIR_DIV: result = b != 0 ? WRAP32(a / b) : 0; break;
-            case MIR_MOD: result = b != 0 ? WRAP32(a % b) : 0; break;
-            case MIR_AND: result = WRAP32(a & b); break;
-            case MIR_OR:  result = WRAP32(a | b); break;
-            case MIR_XOR: result = WRAP32(a ^ b); break;
+            case MIR_ADD: result = a + b; break;
+            case MIR_SUB: result = a - b; break;
+            case MIR_MUL: result = a * b; break;
+            case MIR_DIV: result = b != 0 ? a / b : 0; break;
+            case MIR_MOD: result = b != 0 ? a % b : 0; break;
+            case MIR_AND: result = a & b; break;
+            case MIR_OR:  result = a | b; break;
+            case MIR_XOR: result = a ^ b; break;
             case MIR_SHL: result = (uint64_t)a << (b & 63); break;
             case MIR_SHR: result = (int64_t)a >> (b & 63); break;
             case MIR_EQ:  result = (a == b) ? 1 : 0; break;
@@ -377,14 +377,14 @@ static void fold_dce_pass(wubu_mir_prog_t *p)
                 int64_t b = const_val[in->b];
                 int64_t result = 0;
                 switch (in->op) {
-                case MIR_ADD: result = WRAP32(a + b); break;
-                case MIR_SUB: result = WRAP32(a - b); break;
-                case MIR_MUL: result = WRAP32(a * b); break;
-                case MIR_DIV: result = b != 0 ? WRAP32(a / b) : 0; break;
-                case MIR_MOD: result = b != 0 ? WRAP32(a % b) : 0; break;
-                case MIR_AND: result = WRAP32(a & b); break;
-                case MIR_OR:  result = WRAP32(a | b); break;
-                case MIR_XOR: result = WRAP32(a ^ b); break;
+                case MIR_ADD: result = a + b; break;
+                case MIR_SUB: result = a - b; break;
+                case MIR_MUL: result = a * b; break;
+                case MIR_DIV: result = b != 0 ? a / b : 0; break;
+                case MIR_MOD: result = b != 0 ? a % b : 0; break;
+                case MIR_AND: result = a & b; break;
+                case MIR_OR:  result = a | b; break;
+                case MIR_XOR: result = a ^ b; break;
                 case MIR_SHL: result = (uint64_t)a << (b & 63); break;
                 case MIR_SHR: result = (int64_t)a >> (b & 63); break;
                 case MIR_EQ:  result = (a == b) ? 1 : 0; break;
