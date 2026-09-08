@@ -1240,6 +1240,25 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
             }
         }
         wubu_vr_t val = n->child ? mir_gen_expr(g, n->child) : wubu_mir_const(g->prog, 0);
+        /* If return type is integer but value is float, convert f64 -> int first */
+        if (g->fn_ret_type && (g->fn_ret_type->kind == HD_TYPE_I8 ||
+            g->fn_ret_type->kind == HD_TYPE_U8 || g->fn_ret_type->kind == HD_TYPE_I16 ||
+            g->fn_ret_type->kind == HD_TYPE_U16 || g->fn_ret_type->kind == HD_TYPE_I32 ||
+            g->fn_ret_type->kind == HD_TYPE_U32) && n->child) {
+            bool child_is_float = mir_is_float_node(g, n->child);
+            /* Also check if child is a function call returning f64 */
+            if (!child_is_float && n->child->kind == HD_AST_FUNC_CALL &&
+                n->child->callee && n->child->callee->kind == HD_AST_IDENT) {
+                for (int i = 0; i < g->n_funcs; i++) {
+                    if (g->func_ast[i] && strcmp(g->func_ast[i]->ident, n->child->callee->ident) == 0) {
+                        HDASTNode *fn = (HDASTNode *)g->func_ast[i];
+                        if (fn->type && fn->type->kind == HD_TYPE_F64) child_is_float = true;
+                        break;
+                    }
+                }
+            }
+            if (child_is_float) val = wubu_mir_unop(g->prog, MIR_DTOI, val);
+        }
         /* Truncate return value to function return type width */
         if (g->fn_ret_type && (g->fn_ret_type->kind == HD_TYPE_I8 ||
             g->fn_ret_type->kind == HD_TYPE_U8 || g->fn_ret_type->kind == HD_TYPE_I16 ||
@@ -2045,9 +2064,6 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                             ? MIR_UGT : MIR_GT;
         op = mir_cmp_op(g, op, n->left, n->right);
         HDType *ct = mir_binop_result_type(g, n->left, n->right);
-        fprintf(stderr, "[DBG] GT: lt=%p rt=%p ct=%p ct->kind=%d\n", 
-                (void*)(n->left->type), (void*)(n->right->type),
-                (void*)ct, ct ? ct->kind : -1);
         if (ct && (ct->kind == HD_TYPE_I32 || ct->kind == HD_TYPE_U32)) {
             a = mir_truncate_to_type(g, a, ct);
             b = mir_truncate_to_type(g, b, ct);
