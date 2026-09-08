@@ -1170,6 +1170,17 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
                         if (!init_type && n->init && n->init->kind == HD_AST_IDENT) {
                             init_type = mir_find_var_type(g, n->init->ident);
                         }
+                        if (!init_type && n->init && (n->init->kind == HD_AST_FUNC_CALL || n->init->kind == HD_AST_CALL)
+                            && n->init->callee && n->init->callee->kind == HD_AST_IDENT) {
+                            /* Function call: look up the function's return type */
+                            for (int fi = 0; fi < g->n_funcs; fi++) {
+                                if (g->func_ast[fi] && strcmp(g->func_ast[fi]->ident, n->init->callee->ident) == 0) {
+                                    HDASTNode *fn = (HDASTNode *)g->func_ast[fi];
+                                    if (fn->type) { init_type = fn->type; }
+                                    break;
+                                }
+                            }
+                        }
                         HDTypeKind init_k = init_type ? init_type->kind : HD_TYPE_I32;
                         if ((var_k == HD_TYPE_I8 || var_k == HD_TYPE_U8 || var_k == HD_TYPE_I16 ||
                              var_k == HD_TYPE_U16 || var_k == HD_TYPE_I32 || var_k == HD_TYPE_U32) &&
