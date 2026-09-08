@@ -3218,6 +3218,8 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
                 for (int i = 0; i < g.n_vars; i++) {
                     if (strcmp(g.vars[i].name, fn->param_names[pi]) == 0) {
                         g.vars[i].type = fn->param_types[pi];
+                        if (fn->param_types[pi]->kind == HD_TYPE_F64)
+                            g.vars[i].is_float = 1;
                         break;
                     }
                 }
