@@ -835,8 +835,8 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
                 if (sc >= 0) emit_mov_rax_from_vr(&e, sc);
                 else emit_load_rbp(&e, 0, VR_SPILL(in->a));
                 if (in->op == MIR_DITOF) {
-                    /* cvtsi2sd xmm0, eax : F2 0F 2A C0 */
-                    e8(&e, 0xF2); e8(&e, 0x0F); e8(&e, 0x2A); e8(&e, 0xC0);
+                    /* cvtsi2sd xmm0, rax : F2 48 0F 2A C0 (REX.W for 64-bit source) */
+                    e8(&e, 0xF2); e8(&e, 0x48); e8(&e, 0x0F); e8(&e, 0x2A); e8(&e, 0xC0);
                     /* movq rax, xmm0 */
                     e8(&e, 0x66); e8(&e, 0x48); e8(&e, 0x0F); e8(&e, 0x7E); e8(&e, 0xC0);
                 } else {
