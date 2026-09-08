@@ -75,6 +75,7 @@ typedef struct {
      * trailing statements (MIR is single-exit). 0 when not in a function body. */
     wubu_vr_t fn_ret_vr;
     uint32_t fn_ret_label;
+    HDType *fn_ret_type;
     /* label tracking for goto */
     char label_names[64][HD_MAX_IDENT_LEN];
     uint32_t label_ids[64];
@@ -1195,6 +1196,13 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
             }
         }
         wubu_vr_t val = n->child ? mir_gen_expr(g, n->child) : wubu_mir_const(g->prog, 0);
+        /* Truncate return value to function return type width */
+        if (g->fn_ret_type && (g->fn_ret_type->kind == HD_TYPE_I8 ||
+            g->fn_ret_type->kind == HD_TYPE_U8 || g->fn_ret_type->kind == HD_TYPE_I16 ||
+            g->fn_ret_type->kind == HD_TYPE_U16 || g->fn_ret_type->kind == HD_TYPE_I32 ||
+            g->fn_ret_type->kind == HD_TYPE_U32)) {
+            val = mir_truncate_to_type(g, val, g->fn_ret_type);
+        }
         /* Always emit a direct RET. This ensures that code after a return
          * (e.g. in a block) doesn't overwrite the return value. */
         wubu_mir_mov_to(g->prog, 0, val);
@@ -3184,6 +3192,7 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
         g.fn_ret_vr = mir_new_vr(&g);
         wubu_mir_const_to(prog, g.fn_ret_vr, 0);  /* default return = 0 */
         g.fn_ret_label = wubu_mir_new_label(prog);
+        g.fn_ret_type = fn->type;
         g.in_function_body = 1;
         mir_gen_stmt(&g, fn->body);
         g.in_function_body = 0;
