@@ -70,6 +70,25 @@ static void fold_pass(wubu_mir_prog_t *p)
             in->op == MIR_CONST)
             continue;
 
+        /* Fold int-to-double conversions on constants */
+        if (in->op == MIR_DITOF || in->op == MIR_DITOF_U) {
+            if (in->a < nvr && is_const[in->a]) {
+                union { double d; int64_t i; } r;
+                if (in->op == MIR_DITOF_U)
+                    r.d = (double)(uint64_t)const_val[in->a];
+                else
+                    r.d = (double)const_val[in->a];
+                in->op = MIR_CONST;
+                in->imm = r.i;
+                in->a = 0; in->b = 0;
+                if (in->dst < nvr) {
+                    const_val[in->dst] = r.i;
+                    is_const[in->dst] = 1;
+                }
+            }
+            continue;
+        }
+
         /* Unary ops: check operand 'a' */
         /* NOTE: MIR_NEG is NOT folded here because it may be applied to
          * float/double bits (f64 stored as int64_t raw bits). Integer

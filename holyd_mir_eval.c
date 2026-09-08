@@ -2099,8 +2099,25 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         }
         bool to_f64 = (n->type->kind == HD_TYPE_F64);
         if (to_f64 && !from_f64) {
-            /* int → f64 */
-            return wubu_mir_unop(g->prog, MIR_DITOF, val);
+            /* int → f64; use unsigned conversion if source is unsigned */
+            bool src_unsigned = (n->child && n->child->type &&
+                (n->child->type->kind == HD_TYPE_U32 ||
+                 n->child->type->kind == HD_TYPE_U64 ||
+                 n->child->type->kind == HD_TYPE_U8 ||
+                 n->child->type->kind == HD_TYPE_U16));
+            if (!src_unsigned && n->child && n->child->kind == HD_AST_IDENT) {
+                for (int i = 0; i < g->n_vars; i++) {
+                    if (strcmp(g->vars[i].name, n->child->ident) == 0) {
+                        HDType *vt = g->vars[i].type;
+                        if (vt && (vt->kind == HD_TYPE_U32 || vt->kind == HD_TYPE_U64 ||
+                                   vt->kind == HD_TYPE_U8 || vt->kind == HD_TYPE_U16)) {
+                            src_unsigned = true;
+                        }
+                        break;
+                    }
+                }
+            }
+            return wubu_mir_unop(g->prog, src_unsigned ? MIR_DITOF_U : MIR_DITOF, val);
         } else if (!to_f64 && from_f64) {
             /* f64 → int */
             return wubu_mir_unop(g->prog, MIR_DTOI, val);

@@ -692,7 +692,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
         case MIR_FADD: case MIR_FSUB: case MIR_FMUL: case MIR_FDIV:
         case MIR_ITOF: case MIR_FTOI:
         case MIR_BF16_TO_F32: case MIR_F32_TO_BF16:
-        case MIR_DITOF: case MIR_DTOI:
+        case MIR_DITOF: case MIR_DITOF_U: case MIR_DTOI:
         case MIR_F32_TO_F64: case MIR_F64_TO_F32:
         case MIR_DADD: case MIR_DSUB: case MIR_DMUL: case MIR_DDIV: case MIR_DNEG:
         case MIR_FNEG: {
@@ -845,6 +845,45 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
                     /* cvttsd2si rax, xmm0 : F2 48 0F 2C C0 */
                     e8(&e, 0xF2); e8(&e, 0x48); e8(&e, 0x0F); e8(&e, 0x2C); e8(&e, 0xC0);
                 }
+                break;
+            }
+
+            case MIR_DITOF_U: {
+                /* unsigned int64 to double: if sign bit set, split into (val>>1)*2 + (val&1) */
+                int sc = VR_ENC_SAFE(in->a);
+                if (sc >= 0) emit_mov_rax_from_vr(&e, sc);
+                else emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
+                /* test rax, rax; jns .positive */
+                e8(&e, 0x48); e8(&e, 0x85); e8(&e, 0xC0);
+                e8(&e, 0x0F); e8(&e, 0x89);
+                int jns_rel_idx = e.n;
+                e32(&e, 0); /* placeholder */
+                /* Negative path: mov rcx, rax; shr rcx, 1; cvtsi2sd xmm0, rcx */
+                e8(&e, 0x48); e8(&e, 0x89); e8(&e, 0xC1);
+                e8(&e, 0x48); e8(&e, 0xD1); e8(&e, 0xE9);
+                e8(&e, 0xF2); e8(&e, 0x48); e8(&e, 0x0F); e8(&e, 0x2A); e8(&e, 0xC1); /* cvtsi2sd xmm0, rcx */
+                /* Load 2.0 into xmm2: mov rcx, 0x4000000000000000; movq xmm2, rcx */
+                e8(&e, 0x48); e8(&e, 0xB9);
+                e64(&e, 0x4000000000000000ULL); /* 2.0 */
+                e8(&e, 0x66); e8(&e, 0x48); e8(&e, 0x0F); e8(&e, 0x6E); e8(&e, 0xD1); /* movq xmm2, rcx */
+                /* mulsd xmm0, xmm2 */
+                e8(&e, 0x66); e8(&e, 0x0F); e8(&e, 0x59); e8(&e, 0xC2);
+                /* and rax, 1; cvtsi2sd xmm1, rax; addsd xmm0, xmm1 */
+                e8(&e, 0x48); e8(&e, 0x83); e8(&e, 0xE0); e8(&e, 0x01);
+                e8(&e, 0xF2); e8(&e, 0x48); e8(&e, 0x0F); e8(&e, 0x2A); e8(&e, 0xC8);
+                e8(&e, 0x66); e8(&e, 0x0F); e8(&e, 0x5C); e8(&e, 0xC1);
+                /* jmp .done */
+                e8(&e, 0xE9);
+                int jmp2_idx = e.n;
+                e32(&e, 0); /* placeholder */
+                /* .positive: cvtsi2sd xmm0, rax */
+                int pos_off = e.n;
+                *(int32_t*)(&e.code[jns_rel_idx]) = (int32_t)(pos_off - (jns_rel_idx + 4));
+                e8(&e, 0xF2); e8(&e, 0x48); e8(&e, 0x0F); e8(&e, 0x2A); e8(&e, 0xC0);
+                /* .done: movq rax, xmm0 */
+                int done_off = e.n;
+                *(int32_t*)(&e.code[jmp2_idx]) = (int32_t)(done_off - (jmp2_idx + 4));
+                e8(&e, 0x66); e8(&e, 0x48); e8(&e, 0x0F); e8(&e, 0x7E); e8(&e, 0xC0);
                 break;
             }
 

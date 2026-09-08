@@ -210,6 +210,7 @@ typedef enum {
      * Same encoding as T_GEMM but operates on float32 data.
      * Dispatches to wubu_tgemm_f32() for optimized AVX2+FMA execution. */
     MIR_T_GEMM_F32,
+    MIR_DITOF_U,       /* dst = (f64)(uint64)a — unsigned int to double */
 } wubu_mir_op_t;
 
 #define MIR_MAX_FUNCTIONS 256

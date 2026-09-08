@@ -206,7 +206,8 @@ int64_t wubu_mir_interp(const wubu_mir_prog_t *p)
           &&op_default,                    /* 92 MIR_T_GEMM_BIAS */
           &&op_default,                    /* 93 MIR_FUSED_AFFINE */
           &&op_default,                    /* 94 MIR_T_LAYERNORM_APPLY */
-          &&op_t_gemm_f32 };               /* 95 MIR_T_GEMM_F32 */
+          &&op_t_gemm_f32,                /* 95 MIR_T_GEMM_F32 */
+          &&op_ditof_u };                  /* 96 MIR_DITOF_U */
 
 #define DISPATCH() do { \
         pc++; \
@@ -453,6 +454,13 @@ op_dne: {
 op_ditof:
     vr[in->dst] = (int64_t)wubu_sf_i64_to_f64(vr[in->a]);
     DISPATCH();
+op_ditof_u: {
+    /* unsigned 64-bit to double: reinterpret bits as uint64, convert to f64 */
+    union { double d; int64_t i; } result;
+    result.d = (double)(uint64_t)vr[in->a];
+    vr[in->dst] = result.i;
+    DISPATCH();
+}
 op_dtoi:
     vr[in->dst] = wubu_sf_f64_to_i64((uint64_t)vr[in->a]);
     DISPATCH();
