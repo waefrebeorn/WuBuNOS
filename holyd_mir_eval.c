@@ -105,6 +105,12 @@ static int mir_find_var_is_float(HDMirGen *g, const char *name) {
     return 0;
 }
 
+static HDType *mir_find_var_type(HDMirGen *g, const char *name) {
+    for (int i = g->n_vars - 1; i >= 0; i--)
+        if (strcmp(g->vars[i].name, name) == 0) return g->vars[i].type;
+    return NULL;
+}
+
 static wubu_vr_t mir_find_var(HDMirGen *g, const char *name) {
     /* Search from end to find the most recent declaration (shadowing) */
     for (int i = g->n_vars - 1; i >= 0; i--)
@@ -1689,11 +1695,36 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         }
         /* Implicit type conversion: truncate value to LHS type width.
          * Only for scalar integer types — not for pointers, structs, or arrays. */
-        if (addr && n->left && n->left->type) {
-            HDTypeKind k = n->left->type->kind;
+        if (addr && n->left) {
+            /* Determine LHS type — check AST node type first, then var table */
+            HDType *lhs_type = n->left->type;
+            if (!lhs_type && n->left->kind == HD_AST_IDENT) {
+                lhs_type = mir_find_var_type(g, n->left->ident);
+            }
+            if (lhs_type) {
+            HDTypeKind k = lhs_type->kind;
+            /* Determine RHS type — check AST node type first, then var table */
+            HDType *rhs_type = n->right ? n->right->type : NULL;
+            if (!rhs_type && n->right && n->right->kind == HD_AST_IDENT) {
+                rhs_type = mir_find_var_type(g, n->right->ident);
+            }
             if (k == HD_TYPE_I8 || k == HD_TYPE_U8 || k == HD_TYPE_I16 ||
                 k == HD_TYPE_U16 || k == HD_TYPE_I32 || k == HD_TYPE_U32) {
-                val = mir_truncate_to_type(g, val, n->left->type);
+                /* If RHS is a float, convert to int first */
+                if (rhs_type && rhs_type->kind == HD_TYPE_F64) {
+                    val = wubu_mir_unop(g->prog, MIR_DTOI, val);
+                }
+                val = mir_truncate_to_type(g, val, lhs_type);
+            } else if (k == HD_TYPE_F64) {
+                /* If RHS is an integer, convert to double */
+                if (rhs_type &&
+                    (rhs_type->kind == HD_TYPE_I32 || rhs_type->kind == HD_TYPE_I64 ||
+                     rhs_type->kind == HD_TYPE_U32 || rhs_type->kind == HD_TYPE_U64 ||
+                     rhs_type->kind == HD_TYPE_I16 || rhs_type->kind == HD_TYPE_U16 ||
+                     rhs_type->kind == HD_TYPE_I8 || rhs_type->kind == HD_TYPE_U8)) {
+                    val = wubu_mir_unop(g->prog, MIR_DITOF, val);
+                }
+            }
             }
         }
         if (addr) { wubu_mir_store(g->prog, addr, val); return val; }
@@ -2472,6 +2503,34 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             }
             if (av != (wubu_vr_t)(a + 1)) {
                 wubu_mir_mov_to(g->prog, a + 1, av);
+            }
+            /* Implicit type conversion: convert argument to parameter type */
+            if (fid >= 0 && (int)a < g->prog->n_funcs) {
+                /* Find the function's parameter types */
+                for (int fi = 0; fi < g->prog->n_funcs; fi++) {
+                    if (fi == fid && g->func_ast[fi] && (int)a < g->func_ast[fi]->n_params) {
+                        HDType *pt = g->func_ast[fi]->param_types[a];
+                        if (pt && n->args[a] && n->args[a]->type) {
+                            HDTypeKind param_k = pt->kind;
+                            HDTypeKind arg_k = n->args[a]->type->kind;
+                            /* double -> int/long: convert */
+                            if (arg_k == HD_TYPE_F64 && (param_k == HD_TYPE_I32 || param_k == HD_TYPE_I64 ||
+                                param_k == HD_TYPE_U32 || param_k == HD_TYPE_U64 || param_k == HD_TYPE_I16 ||
+                                param_k == HD_TYPE_U16 || param_k == HD_TYPE_I8 || param_k == HD_TYPE_U8)) {
+                                wubu_vr_t cv = wubu_mir_unop(g->prog, MIR_DTOI, (wubu_vr_t)(a + 1));
+                                wubu_mir_mov_to(g->prog, a + 1, cv);
+                            }
+                            /* int -> double: convert */
+                            if ((arg_k == HD_TYPE_I32 || arg_k == HD_TYPE_I64 || arg_k == HD_TYPE_U32 ||
+                                arg_k == HD_TYPE_U64 || arg_k == HD_TYPE_I16 || arg_k == HD_TYPE_U16 ||
+                                arg_k == HD_TYPE_I8 || arg_k == HD_TYPE_U8) && param_k == HD_TYPE_F64) {
+                                wubu_vr_t cv = wubu_mir_unop(g->prog, MIR_DITOF, (wubu_vr_t)(a + 1));
+                                wubu_mir_mov_to(g->prog, a + 1, cv);
+                            }
+                        }
+                        break;
+                    }
+                }
             }
         }
         /* Handle builtin functions that the preprocessor stripped __builtin_ prefix from. */
@@ -3345,9 +3404,10 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
                 }
             }
         }
-        /* Implicit type conversion: truncate parameters to their declared type.
+        /* Implicit type conversion: truncate integer parameters to their declared type.
          * Done AFTER all args are copied to avoid clobbering argument registers
-         * (rcx is both the JIT's second-operand register AND the 4th arg reg). */
+         * (rcx is both the JIT's second-operand register AND the 4th arg reg).
+         * Float-to-int and int-to-float conversions are done at the call site. */
         for (int pi = 0; pi < fn->n_params; pi++) {
             if (!fn->param_types[pi] || !fn->param_names[pi]) continue;
             HDTypeKind pk = fn->param_types[pi]->kind;
