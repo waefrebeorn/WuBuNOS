@@ -2316,7 +2316,10 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         /* Resolve callee name -> func_id via the collected func table. */
         int fid = -1;
         if (n->callee && n->callee->kind == HD_AST_IDENT) {
-            for (int i = 0; i < g->prog->n_funcs; i++)
+            /* Search from end to find the most recent definition (not forward decl).
+             * Forward declarations have no body and are collected first;
+             * the actual definition comes later and has a body. */
+            for (int i = g->prog->n_funcs - 1; i >= 0; i--)
                 if (strcmp(g->prog->funcs[i].name, n->callee->ident) == 0) { fid = i; break; }
         }
         /* Function pointer member call: s.fn(args) where callee is a DOT/MEMBER expr.
