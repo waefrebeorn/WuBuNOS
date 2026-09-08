@@ -287,32 +287,32 @@ static HDTokenType hd_scan_number(HDLexer *lex) {
         lex->tok.float_val = strtod(buf, NULL);
         return hd_make_token(lex, HD_TOK_FLOAT);
     } else if (is_hex) {
-        /* Scan suffix first to detect unsigned */
-        int is_unsigned = 0;
+        /* Scan suffix to detect unsigned and long */
+        int is_unsigned = 0, is_long = 0;
         while (!hd_is_at_end(lex)) {
             char c = hd_peek(lex);
-            if (c == 'L' || c == 'l' || c == 'U' || c == 'u') {
-                if (c == 'U' || c == 'u') is_unsigned = 1;
-                hd_advance(lex);
-            } else {
-                break;
-            }
+            if (c == 'L' || c == 'l') { is_long = 1; hd_advance(lex); }
+            else if (c == 'U' || c == 'u') { is_unsigned = 1; hd_advance(lex); }
+            else break;
         }
+        lex->tok.is_unsigned = is_unsigned;
+        lex->tok.is_long = is_long;
         lex->tok.int_val = is_unsigned ? (int64_t)strtoull(buf, NULL, 16) : strtoll(buf, NULL, 16);
     } else if (is_bin) {
+        lex->tok.is_unsigned = 0;
+        lex->tok.is_long = 0;
         lex->tok.int_val = strtoll(buf, NULL, 2);
     } else {
-        /* Scan suffix first to detect unsigned */
-        int is_unsigned = 0;
+        /* Scan suffix to detect unsigned and long */
+        int is_unsigned = 0, is_long = 0;
         while (!hd_is_at_end(lex)) {
             char c = hd_peek(lex);
-            if (c == 'L' || c == 'l' || c == 'U' || c == 'u') {
-                if (c == 'U' || c == 'u') is_unsigned = 1;
-                hd_advance(lex);
-            } else {
-                break;
-            }
+            if (c == 'L' || c == 'l') { is_long = 1; hd_advance(lex); }
+            else if (c == 'U' || c == 'u') { is_unsigned = 1; hd_advance(lex); }
+            else break;
         }
+        lex->tok.is_unsigned = is_unsigned;
+        lex->tok.is_long = is_long;
         lex->tok.int_val = is_unsigned ? (int64_t)strtoull(buf, NULL, 10) : strtoll(buf, NULL, 10);
     }
     return hd_make_token(lex, HD_TOK_INT);

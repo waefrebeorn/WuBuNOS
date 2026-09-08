@@ -506,6 +506,22 @@ static HDASTNode *parse_primary(HDParser *p) {
         case HD_TOK_INT: {
             HDASTNode *n = hd_ast_new(HD_AST_INT_LIT);
             n->int_val = p->lex->tok.int_val;
+            /* Determine constant type from suffix and value */
+            if (p->lex->tok.is_unsigned || p->lex->tok.is_long) {
+                /* unsigned and/or long → 64-bit */
+                HDType *t = (HDType *)calloc(1, sizeof(HDType));
+                if (p->lex->tok.is_unsigned && p->lex->tok.is_long) {
+                    t->kind = HD_TYPE_U64;
+                } else if (p->lex->tok.is_unsigned) {
+                    /* Check if value fits in 32 bits */
+                    if (n->int_val <= 0xFFFFFFFFULL) t->kind = HD_TYPE_U32;
+                    else t->kind = HD_TYPE_U64;
+                } else {
+                    t->kind = HD_TYPE_I64;
+                }
+                t->size = 8;
+                n->type = t;
+            }
             advance(p);
             return n;
         }
