@@ -38,6 +38,9 @@ struct HDASTNode {
     int is_vla;                /* 1 if this var_decl is a VLA */
     HDASTNode *vla_size_expr;  /* runtime expression for VLA total element count */
 
+    /* For static storage class */
+    int is_static;             /* 1 if this var_decl has static storage class */
+
     /* For extern_decl */
     char extern_c_name[HD_MAX_IDENT_LEN];
     HDType *extern_ret_type;

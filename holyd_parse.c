@@ -1383,10 +1383,14 @@ HDASTNode *hd_parse_decl(HDParser *p) {
         return n;
     }
 
-    /* Handle `static` storage class: strip it and parse the rest as a normal
-     * declaration (static only matters for linking, which this JIT doesn't). */
+    /* Handle `static` storage class: mark the declaration as static so the
+     * MIR generator can allocate it in global memory with a guard variable
+     * for one-time initialization. */
     if (match(p, HD_KW_STATIC)) {
-        return hd_parse_decl(p);
+        HDASTNode *decl = hd_parse_decl(p);
+        if (decl && decl->kind == HD_AST_VAR_DECL)
+            decl->is_static = 1;
+        return decl;
     }
 
     /* Handle `const`/`volatile`/`_Atomic` qualifiers: strip and parse as normal decl.

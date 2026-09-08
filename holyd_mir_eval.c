@@ -37,6 +37,8 @@ typedef struct {
     char struct_name[HD_MAX_IDENT_LEN]; /* struct type name */
     int fn_ptr_func_id;    /* func_id this pointer var points to, or -1 */
     HDType *type;          /* variable's declared type */
+    int is_static;         /* 1 if this is a static local (global memory) */
+    wubu_vr_t guard_addr;  /* guard variable address for static init-once */
 } mir_var_t;
 
 /* struct member offset table */
@@ -1010,7 +1012,39 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
             }
         }
         if (n->init) {
-            if (n->init->kind == HD_AST_BRACE_INIT) {
+            if (n->is_static && g->in_function_body) {
+                /* Static local: emit guard check + conditional init.
+                 * Allocate a guard variable in global memory.
+                 * Emit: if (guard == 0) { *addr = init_val; guard = 1; } */
+                wubu_vr_t guard_addr = mir_new_vr(g);
+                int64_t guard_mem = (int64_t)(g->prog->total_mem + 1);
+                g->prog->total_mem = guard_mem;
+                wubu_mir_const_to(g->prog, guard_addr, guard_mem);
+                /* Mark var as static with guard */
+                for (int i = g->n_vars - 1; i >= 0; i--)
+                    if (strcmp(g->vars[i].name, n->ident) == 0) {
+                        g->vars[i].is_static = 1;
+                        g->vars[i].guard_addr = guard_addr;
+                        break;
+                    }
+                /* Evaluate init expression */
+                wubu_vr_t init_val = mir_gen_expr(g, n->init);
+                if (n->type && (n->type->kind == HD_TYPE_I8 || n->type->kind == HD_TYPE_U8 ||
+                    n->type->kind == HD_TYPE_I16 || n->type->kind == HD_TYPE_U16 ||
+                    n->type->kind == HD_TYPE_I32 || n->type->kind == HD_TYPE_U32)) {
+                    init_val = mir_truncate_to_type(g, init_val, n->type);
+                }
+                /* Emit: if (guard == 0) { *addr = init_val; guard = 1; } */
+                wubu_vr_t guard_val = wubu_mir_load(g->prog, guard_addr);
+                wubu_vr_t zero = wubu_mir_const(g->prog, 0);
+                wubu_vr_t eq = wubu_mir_binop(g->prog, MIR_EQ, guard_val, zero);
+                uint32_t skip_label = wubu_mir_new_label(g->prog);
+                wubu_mir_jz(g->prog, eq, skip_label);  /* if guard != 0, skip */
+                wubu_mir_store(g->prog, addr, init_val);  /* *addr = init_val */
+                wubu_vr_t one = wubu_mir_const(g->prog, 1);
+                wubu_mir_store(g->prog, guard_addr, one);  /* guard = 1 */
+                wubu_mir_place_label(g->prog, skip_label);
+            } else if (n->init->kind == HD_AST_BRACE_INIT) {
                 /* array/struct initializer list: store each element.
                  * Designated initializers (HD_AST_DESIG_INIT) store at a specific offset. */
                 int n_elems = (int)n->init->n_args;
