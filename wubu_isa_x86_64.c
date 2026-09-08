@@ -1048,7 +1048,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             } else {
                 emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
             }
-            rex(&e,1,0,0,0); e8(&e, 0x66); e8(&e, 0x0F); e8(&e, 0x6E); e8(&e, 0xC0); /* REX.W 66 0F 6E C0 = movq xmm0, rax */
+            e8(&e, 0x66); e8(&e, 0x48); e8(&e, 0x0F); e8(&e, 0x6E); e8(&e, 0xC0); /* 66 48 0F 6E C0 = movq xmm0, rax */
             /* Load b into xmm1 */
             // sb already computed above
             if (sb >= 0) {
@@ -1056,7 +1056,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             } else {
                 emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->b));
             }
-            rex(&e,1,0,0,1); e8(&e, 0x66); e8(&e, 0x0F); e8(&e, 0x6E); e8(&e, 0xC8); /* REX.W+B 66 0F 6E C8 = movq xmm1, rax */
+            e8(&e, 0x66); e8(&e, 0x48); e8(&e, 0x0F); e8(&e, 0x6E); e8(&e, 0xC8); /* 66 48 0F 6E C8 = movq xmm1, rax */
             /* ucomisd xmm0, xmm1 */
             e8(&e, 0x66); e8(&e, 0x0F); e8(&e, 0x2E); e8(&e, 0xC1);
             /* setcc al based on comparison */
