@@ -1259,6 +1259,8 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
     case HD_AST_FOR: {
         /* for (init; cond; update) body
          * continue jumps to the update step (like C), then re-checks cond. */
+        /* Push a scope so the for-init variable is scoped to the loop */
+        int scope_start = g->n_vars;
         if (n->init_expr) mir_gen_stmt(g, n->init_expr);
         uint32_t top = wubu_mir_new_label(g->prog);
         uint32_t cont = wubu_mir_new_label(g->prog);
@@ -1277,6 +1279,8 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
         wubu_mir_jmp(g->prog, top);
         wubu_mir_place_label(g->prog, done);
         g->n_loops--;
+        /* Pop the for-loop scope to restore outer variables */
+        g->n_vars = scope_start;
         return 0;
     }
     case HD_AST_BREAK:
