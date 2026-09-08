@@ -1628,6 +1628,16 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 wubu_vr_t upd = (n->kind == HD_AST_POST_INC)
                     ? wubu_mir_binop(g->prog, MIR_ADD, tmp, one)
                     : wubu_mir_binop(g->prog, MIR_SUB, tmp, one);
+                /* Truncate updated value to variable type width */
+                for (int i = 0; i < g->n_vars; i++) {
+                    if (strcmp(g->vars[i].name, n->child->ident) == 0 && g->vars[i].type &&
+                        (g->vars[i].type->kind == HD_TYPE_I8 || g->vars[i].type->kind == HD_TYPE_U8 ||
+                         g->vars[i].type->kind == HD_TYPE_I16 || g->vars[i].type->kind == HD_TYPE_U16 ||
+                         g->vars[i].type->kind == HD_TYPE_I32 || g->vars[i].type->kind == HD_TYPE_U32)) {
+                        upd = mir_truncate_to_type(g, upd, g->vars[i].type);
+                        break;
+                    }
+                }
                 wubu_mir_store(g->prog, addr, upd);
                 return tmp;
             }
@@ -1645,6 +1655,16 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 wubu_vr_t upd = (n->kind == HD_AST_PRE_INC)
                     ? wubu_mir_binop(g->prog, MIR_ADD, v, one)
                     : wubu_mir_binop(g->prog, MIR_SUB, v, one);
+                /* Truncate updated value to variable type width */
+                for (int i = 0; i < g->n_vars; i++) {
+                    if (strcmp(g->vars[i].name, n->child->ident) == 0 && g->vars[i].type &&
+                        (g->vars[i].type->kind == HD_TYPE_I8 || g->vars[i].type->kind == HD_TYPE_U8 ||
+                         g->vars[i].type->kind == HD_TYPE_I16 || g->vars[i].type->kind == HD_TYPE_U16 ||
+                         g->vars[i].type->kind == HD_TYPE_I32 || g->vars[i].type->kind == HD_TYPE_U32)) {
+                        upd = mir_truncate_to_type(g, upd, g->vars[i].type);
+                        break;
+                    }
+                }
                 wubu_mir_store(g->prog, addr, upd);
                 return upd;
             }
