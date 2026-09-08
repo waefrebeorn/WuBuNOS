@@ -2118,7 +2118,18 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         int size = 8; /* default: pointer */
         /* If n->type is not set (sizeof expr), try to derive from child */
         if (!n->type && n->child) {
-            if (n->child->kind == HD_AST_IDENT) {
+            if (n->child->kind == HD_AST_CHAR_LIT) {
+                /* In C, char literals have type int, so sizeof 'a' == 4 */
+                size = 4;
+            } else if (n->child->kind == HD_AST_INT_LIT) {
+                /* Use the constant's type if available */
+                if (n->child->type) {
+                    size = (int)hd_type_size(n->child->type);
+                    if (size <= 0) size = 8;
+                } else {
+                    size = 4; /* plain int literal */
+                }
+            } else if (n->child->kind == HD_AST_IDENT) {
                 /* Look up the variable's type from the symbol table */
                 for (int i = 0; i < g->n_vars; i++) {
                     if (strcmp(g->vars[i].name, n->child->ident) == 0) {
