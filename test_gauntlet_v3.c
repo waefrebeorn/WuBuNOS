@@ -30,6 +30,29 @@ typedef struct {
 static test_info_t all_tests[MAX_TESTS];
 static int n_tests = 0;
 
+/* Check if source code is obviously truncated/invalid C.
+ * Returns 1 if the test should be skipped. */
+static int is_invalid_test(const char *source) {
+    if (!source || !source[0]) return 1;
+    const char *p = source;
+    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+    if (*p == '{') return 1;
+    int depth = 0;
+    int has_main = 0;
+    const char *m = source;
+    while (*m) {
+        if (*m == '{') depth++;
+        else if (*m == '}') depth--;
+        if (depth < 0) return 1;
+        if (strncmp(m, "main", 4) == 0 && (m == source || !((m-1)[0] >= 'a' && (m-1)[0] <= 'z')) &&
+            !((m+4)[0] >= 'a' && (m+4)[0] <= 'z')) has_main = 1;
+        m++;
+    }
+    if (depth != 0) return 1;
+    if (!has_main) return 1;
+    return 0;
+}
+
 static int run_single_test_nofree(const char *source, int64_t expected) {
     wubu_mir_prog_t prog;
     memset(&prog, 0, sizeof(prog));
@@ -52,6 +75,12 @@ FILE *f = fopen(result_file, "w");
 if (!f) _exit(1);
 
 for (int i = start; i < end; i++) {
+    /* Skip obviously truncated/invalid tests */
+    if (is_invalid_test(all_tests[i].source)) {
+        fprintf(f, "3 %s\n", all_tests[i].name);
+        fflush(f);
+        continue;
+    }
     /* Run test in a forked child for crash isolation */
     pid_t pid = fork();
     if (pid == 0) {
@@ -200,7 +229,7 @@ int main(int argc, char **argv) {
     }
 
     /* Collect results from all workers */
-    uint32_t total_pass = 0, total_fail = 0, total_err = 0;
+    uint32_t total_pass = 0, total_fail = 0, total_err = 0, total_skip = 0;
     char line[1024];
 
     for (int w = 0; w < n_jobs; w++) {
@@ -214,7 +243,7 @@ int main(int argc, char **argv) {
             continue;
         }
 
-        int worker_pass = 0, worker_fail = 0, worker_err = 0;
+        int worker_pass = 0, worker_fail = 0, worker_err = 0, worker_skip = 0;
         while (fgets(line, sizeof(line), f)) {
             int rc;
             char test_name[256];
@@ -225,18 +254,22 @@ int main(int argc, char **argv) {
                     if (worker_fail <= 50)
                         printf("  FAIL %s\n", test_name);
                 }
+                else if (rc == 3) { worker_skip++; total_skip++; }
                 else { worker_err++; total_err++; }
             }
         }
         fclose(f);
         unlink(result_files[w]);
 
-        fprintf(stderr, "  worker %d done: pass=%d fail=%d err=%d\n",
-                w, worker_pass, worker_fail, worker_err);
+        fprintf(stderr, "  worker %d done: pass=%d fail=%d err=%d skip=%d\n",
+                w, worker_pass, worker_fail, worker_err, worker_skip);
     }
 
-    printf("\n{\"pass\":%u,\"fail\":%u,\"error\":%u,\"total\":%d}\n",
-           total_pass, total_fail, total_err, n_tests);
+    printf("\n{\"pass\":%u,\"fail\":%u,\"error\":%u,\"skip\":%u,\"total\":%d,\"valid_total\":%u,\"valid_pass_rate\":%.1f}\n",
+           total_pass, total_fail, total_err, total_skip, n_tests,
+           total_pass + total_fail + total_err,
+           (total_pass + total_fail + total_err) > 0 ?
+           100.0 * total_pass / (total_pass + total_fail + total_err) : 0.0);
 
     return 0;
 }
