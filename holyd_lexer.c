@@ -311,6 +311,37 @@ static HDTokenType hd_scan_number(HDLexer *lex) {
             else if (c == 'U' || c == 'u') { is_unsigned = 1; hd_advance(lex); }
             else break;
         }
+        /* Check for exponent without decimal point: 1E0, 2e+3, 5E-2 */
+        if (!hd_is_at_end(lex)) {
+            char c = hd_peek(lex);
+            if (c == 'e' || c == 'E') {
+                /* Consume exponent */
+                buf[i++] = hd_advance(lex);
+                if (!hd_is_at_end(lex) && (hd_peek(lex) == '+' || hd_peek(lex) == '-')) {
+                    buf[i++] = hd_advance(lex);
+                }
+                while (!hd_is_at_end(lex) && i < HD_MAX_TOKEN_LEN - 1
+                       && isdigit((unsigned char)hd_peek(lex))) {
+                    buf[i++] = hd_advance(lex);
+                }
+                buf[i] = '\0';
+                /* Skip float suffixes */
+                while (!hd_is_at_end(lex)) {
+                    c = hd_peek(lex);
+                    if (c == 'f' || c == 'F' || c == 'l' || c == 'L') {
+                        hd_advance(lex);
+                    } else if (c == 'd' || c == 'D') {
+                        char next = lex->src[lex->pos + 1];
+                        if (next == 'f' || next == 'F' || next == 'd' || next == 'D' || next == 'l' || next == 'L') {
+                            hd_advance(lex);
+                            hd_advance(lex);
+                        } else break;
+                    } else break;
+                }
+                lex->tok.float_val = strtod(buf, NULL);
+                return hd_make_token(lex, HD_TOK_FLOAT);
+            }
+        }
         lex->tok.is_unsigned = is_unsigned;
         lex->tok.is_long = is_long;
         lex->tok.int_val = is_unsigned ? (int64_t)strtoull(buf, NULL, 10) : strtoll(buf, NULL, 10);
@@ -404,6 +435,39 @@ HDTokenType hd_lex_next(HDLexer *lex) {
             if (lex->src[lex->pos] == '.' && lex->src[lex->pos + 1] == '.') {
                 lex->pos += 2;
                 return hd_make_token(lex, HD_TOK_ELLIPSIS);
+            }
+            /* Check for .digit (float literal starting with dot, e.g. .5, .01e2) */
+            if (isdigit((unsigned char)lex->src[lex->pos])) {
+                /* Parse as float: .digits[.digits][e|E[+-]digits] */
+                char buf[HD_MAX_TOKEN_LEN];
+                int i = 0;
+                buf[i++] = '.';  /* the dot was already consumed */
+                /* Consume digits after the dot */
+                while (!hd_is_at_end(lex) && i < HD_MAX_TOKEN_LEN - 1
+                       && isdigit((unsigned char)hd_peek(lex))) {
+                    buf[i++] = hd_advance(lex);
+                }
+                /* Skip optional exponent */
+                if (!hd_is_at_end(lex) && (hd_peek(lex) == 'e' || hd_peek(lex) == 'E')) {
+                    buf[i++] = hd_advance(lex);
+                    if (!hd_is_at_end(lex) && (hd_peek(lex) == '+' || hd_peek(lex) == '-')) {
+                        buf[i++] = hd_advance(lex);
+                    }
+                    while (!hd_is_at_end(lex) && i < HD_MAX_TOKEN_LEN - 1
+                           && isdigit((unsigned char)hd_peek(lex))) {
+                        buf[i++] = hd_advance(lex);
+                    }
+                }
+                /* Skip float suffixes */
+                while (!hd_is_at_end(lex)) {
+                    char c = hd_peek(lex);
+                    if (c == 'f' || c == 'F' || c == 'l' || c == 'L') {
+                        hd_advance(lex);
+                    } else break;
+                }
+                buf[i] = '\0';
+                lex->tok.float_val = strtod(buf, NULL);
+                return hd_make_token(lex, HD_TOK_FLOAT);
             }
             return hd_make_token(lex, HD_TOK_DOT);
         }
