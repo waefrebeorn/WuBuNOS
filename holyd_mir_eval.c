@@ -532,6 +532,11 @@ static wubu_vr_t mir_truncate_to_type(HDMirGen *g, wubu_vr_t val, const HDType *
         return wubu_mir_unop(g->prog, MIR_SEXT32, val);
     case HD_TYPE_U32:
         return wubu_mir_binop(g->prog, MIR_AND, val, wubu_mir_const(g->prog, 0xFFFFFFFF));
+    case HD_TYPE_F64:
+        /* Convert integer to double */
+        return wubu_mir_unop(g->prog, MIR_DITOF, val);
+    case HD_TYPE_I64:
+    case HD_TYPE_U64:
     default:
         return val;
     }
@@ -2190,8 +2195,15 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                             size = g->vars[i].array_size * 4; /* assume int elements = 4B each */
                             if (size <= 0) size = 4;
                         } else {
-                            /* Scalar: int = 4 bytes, pointer = 8 bytes */
-                            size = 4; /* int is 4 bytes */
+                            /* Scalar: use the variable's declared type */
+                            if (g->vars[i].type) {
+                                size = (int)hd_type_size(g->vars[i].type);
+                                if (size <= 0) size = 4;
+                            } else if (g->vars[i].is_float) {
+                                size = 8; /* double is 8 bytes */
+                            } else {
+                                size = 4; /* int is 4 bytes */
+                            }
                         }
                         break;
                     }
