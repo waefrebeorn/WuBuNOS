@@ -163,44 +163,50 @@ int64_t wubu_mir_interp(const wubu_mir_prog_t *p)
           &&op_dsub,                       /* 49 MIR_DSUB   */
           &&op_dmul,                       /* 50 MIR_DMUL   */
           &&op_ddiv,                       /* 51 MIR_DDIV   */
-          &&op_dneg,                       /* 52 MIR_DNEG   */
-          &&op_ditof,                      /* 53 MIR_DITOF  */
-          &&op_dtoi,                       /* 54 MIR_DTOI   */
-          &&op_f32_to_f64,                 /* 55 MIR_F32_TO_F64 */
-          &&op_f64_to_f32,                 /* 56 MIR_F64_TO_F32 */
-          &&op_bf16_to_f32,                /* 57 MIR_BF16_TO_F32 */
-          &&op_f32_to_bf16,                /* 58 MIR_F32_TO_BF16 */
-          &&op_f16_to_f32,                 /* 59 MIR_F16_TO_F32 */
-          &&op_f32_to_f16,                 /* 60 MIR_F32_TO_F16 */
-          &&op_f16_add,                    /* 61 MIR_F16_ADD */
-          &&op_f16_mul,                    /* 62 MIR_F16_MUL */
-          &&op_f16_div,                    /* 63 MIR_F16_DIV */
-          &&op_default,                    /* 64 MIR_QUANTIZE_I8 */
-          &&op_default,                    /* 65 MIR_DEQUANTIZE_I8 */
-          &&op_default,                    /* 66 MIR_T_GEMM_I8 */
-          &&op_t_gemm,                     /* 67 MIR_T_GEMM  */
-          &&op_t_softmax,                  /* 68 MIR_T_SOFTMAX */
-          &&op_t_layernorm,                /* 69 MIR_T_LAYERNORM */
-          &&op_t_attention,                /* 70 MIR_T_ATTENTION */
-          &&op_t_embedding,                /* 71 MIR_T_EMBEDDING */
-          &&op_t_swiglu,                   /* 72 MIR_T_SWIGLU */
-          &&op_t_rms_norm,                 /* 73 MIR_T_RMS_NORM */
-          &&op_t_rope,                     /* 74 MIR_T_ROPE */
-          &&op_t_conv2d,                   /* 75 MIR_T_CONV2D */
-          &&op_t_dropout,                  /* 76 MIR_T_DROPOUT */
-          &&op_t_argmax,                   /* 77 MIR_T_ARGMAX */
-          &&op_t_sum,                      /* 78 MIR_T_SUM */
-          &&op_t_exp,                      /* 79 MIR_T_EXP */
-          &&op_t_sqrt,                     /* 80 MIR_T_SQRT */
-          &&op_t_tanh,                     /* 81 MIR_T_TANH */
-          &&op_t_sigmoid,                  /* 82 MIR_T_SIGMOID */
-          &&op_t_gelu,                     /* 83 MIR_T_GELU */
-          &&op_t_relu,                     /* 84 MIR_T_RELU */
-          &&op_t_clamp,                    /* 85 MIR_T_CLAMP */
-          &&op_default,                    /* 86 MIR_T_GEMM_BIAS */
-          &&op_default,                    /* 87 MIR_FUSED_AFFINE */
-          &&op_default,                    /* 88 MIR_T_LAYERNORM_APPLY */
-          &&op_t_gemm_f32 };               /* 89 MIR_T_GEMM_F32 */
+          &&op_dgt,                        /* 52 MIR_DGT    */
+          &&op_dlt,                        /* 53 MIR_DLT    */
+          &&op_dge,                        /* 54 MIR_DGE    */
+          &&op_dle,                        /* 55 MIR_DLE    */
+          &&op_deq,                        /* 56 MIR_DEQ    */
+          &&op_dne,                        /* 57 MIR_DNE    */
+          &&op_dneg,                       /* 58 MIR_DNEG   */
+          &&op_ditof,                      /* 59 MIR_DITOF  */
+          &&op_dtoi,                       /* 60 MIR_DTOI   */
+          &&op_f32_to_f64,                 /* 61 MIR_F32_TO_F64 */
+          &&op_f64_to_f32,                 /* 62 MIR_F64_TO_F32 */
+          &&op_bf16_to_f32,                /* 63 MIR_BF16_TO_F32 */
+          &&op_f32_to_bf16,                /* 64 MIR_F32_TO_BF16 */
+          &&op_f16_to_f32,                 /* 65 MIR_F16_TO_F32 */
+          &&op_f32_to_f16,                 /* 66 MIR_F32_TO_F16 */
+          &&op_f16_add,                    /* 67 MIR_F16_ADD */
+          &&op_f16_mul,                    /* 68 MIR_F16_MUL */
+          &&op_f16_div,                    /* 69 MIR_F16_DIV */
+          &&op_default,                    /* 70 MIR_QUANTIZE_I8 */
+          &&op_default,                    /* 71 MIR_DEQUANTIZE_I8 */
+          &&op_default,                    /* 72 MIR_T_GEMM_I8 */
+          &&op_t_gemm,                     /* 73 MIR_T_GEMM  */
+          &&op_t_softmax,                  /* 74 MIR_T_SOFTMAX */
+          &&op_t_layernorm,                /* 75 MIR_T_LAYERNORM */
+          &&op_t_attention,                /* 76 MIR_T_ATTENTION */
+          &&op_t_embedding,                /* 77 MIR_T_EMBEDDING */
+          &&op_t_swiglu,                   /* 78 MIR_T_SWIGLU */
+          &&op_t_rms_norm,                 /* 79 MIR_T_RMS_NORM */
+          &&op_t_rope,                     /* 80 MIR_T_ROPE */
+          &&op_t_conv2d,                   /* 81 MIR_T_CONV2D */
+          &&op_t_dropout,                  /* 82 MIR_T_DROPOUT */
+          &&op_t_argmax,                   /* 83 MIR_T_ARGMAX */
+          &&op_t_sum,                      /* 84 MIR_T_SUM */
+          &&op_t_exp,                      /* 85 MIR_T_EXP */
+          &&op_t_sqrt,                     /* 86 MIR_T_SQRT */
+          &&op_t_tanh,                     /* 87 MIR_T_TANH */
+          &&op_t_sigmoid,                  /* 88 MIR_T_SIGMOID */
+          &&op_t_gelu,                     /* 89 MIR_T_GELU */
+          &&op_t_relu,                     /* 90 MIR_T_RELU */
+          &&op_t_clamp,                    /* 91 MIR_T_CLAMP */
+          &&op_default,                    /* 92 MIR_T_GEMM_BIAS */
+          &&op_default,                    /* 93 MIR_FUSED_AFFINE */
+          &&op_default,                    /* 94 MIR_T_LAYERNORM_APPLY */
+          &&op_t_gemm_f32 };               /* 95 MIR_T_GEMM_F32 */
 
 #define DISPATCH() do { \
         pc++; \
@@ -407,6 +413,43 @@ op_ddiv:
 op_dneg:
     vr[in->dst] = (int64_t)wubu_sf_f64_neg((uint64_t)vr[in->a]);
     DISPATCH();
+/* Double comparisons for interpreter (software float path) */
+op_dgt: {
+    union { double d; int64_t i; } ua, ub;
+    ua.i = vr[in->a]; ub.i = vr[in->b];
+    vr[in->dst] = (ua.d > ub.d) ? 1 : 0;
+    DISPATCH();
+}
+op_dlt: {
+    union { double d; int64_t i; } ua, ub;
+    ua.i = vr[in->a]; ub.i = vr[in->b];
+    vr[in->dst] = (ua.d < ub.d) ? 1 : 0;
+    DISPATCH();
+}
+op_dge: {
+    union { double d; int64_t i; } ua, ub;
+    ua.i = vr[in->a]; ub.i = vr[in->b];
+    vr[in->dst] = (ua.d >= ub.d) ? 1 : 0;
+    DISPATCH();
+}
+op_dle: {
+    union { double d; int64_t i; } ua, ub;
+    ua.i = vr[in->a]; ub.i = vr[in->b];
+    vr[in->dst] = (ua.d <= ub.d) ? 1 : 0;
+    DISPATCH();
+}
+op_deq: {
+    union { double d; int64_t i; } ua, ub;
+    ua.i = vr[in->a]; ub.i = vr[in->b];
+    vr[in->dst] = (ua.d == ub.d) ? 1 : 0;
+    DISPATCH();
+}
+op_dne: {
+    union { double d; int64_t i; } ua, ub;
+    ua.i = vr[in->a]; ub.i = vr[in->b];
+    vr[in->dst] = (ua.d != ub.d) ? 1 : 0;
+    DISPATCH();
+}
 op_ditof:
     vr[in->dst] = (int64_t)wubu_sf_i64_to_f64(vr[in->a]);
     DISPATCH();

@@ -316,6 +316,12 @@ static const char *op_name(wubu_mir_op_t op)
     case MIR_DSUB:  return "dsub";
     case MIR_DMUL:  return "dmul";
     case MIR_DDIV:  return "ddiv";
+    case MIR_DGT:   return "dgt";
+    case MIR_DLT:   return "dlt";
+    case MIR_DGE:   return "dge";
+    case MIR_DLE:   return "dle";
+    case MIR_DEQ:   return "deq";
+    case MIR_DNE:   return "dne";
     case MIR_DNEG:  return "dneg";
     case MIR_DITOF: return "ditof";
     case MIR_DTOI:  return "dtoi";

@@ -91,6 +91,12 @@ typedef enum {
     MIR_DSUB,          /* dst = f64(a) - f64(b) */
     MIR_DMUL,          /* dst = f64(a) * f64(b) */
     MIR_DDIV,          /* dst = f64(a) / f64(b) */
+    MIR_DGT,           /* dst = (f64(a) > f64(b)) ? 1 : 0 */
+    MIR_DLT,           /* dst = (f64(a) < f64(b)) ? 1 : 0 */
+    MIR_DGE,           /* dst = (f64(a) >= f64(b)) ? 1 : 0 */
+    MIR_DLE,           /* dst = (f64(a) <= f64(b)) ? 1 : 0 */
+    MIR_DEQ,           /* dst = (f64(a) == f64(b)) ? 1 : 0 */
+    MIR_DNE,           /* dst = (f64(a) != f64(b)) ? 1 : 0 */
     MIR_DNEG,          /* dst = -f64(a) */
     MIR_DITOF,         /* dst = (f64)a */
     MIR_DTOI,          /* dst = (int)f64(a) */

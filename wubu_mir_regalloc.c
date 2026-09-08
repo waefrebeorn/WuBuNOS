@@ -48,6 +48,8 @@ static int op_has_dst(wubu_mir_op_t op)
     case MIR_FEQ: case MIR_FNE: case MIR_FLT: case MIR_FLE:
     case MIR_ITOF: case MIR_FTOI:
     case MIR_DADD: case MIR_DSUB: case MIR_DMUL: case MIR_DDIV:
+    case MIR_DGT: case MIR_DLT: case MIR_DGE: case MIR_DLE:
+    case MIR_DEQ: case MIR_DNE:
     case MIR_DNEG: case MIR_DITOF: case MIR_DTOI:
     case MIR_F32_TO_F64: case MIR_F64_TO_F32:
     case MIR_BF16_TO_F32: case MIR_F32_TO_BF16:

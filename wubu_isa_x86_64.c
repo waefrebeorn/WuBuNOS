@@ -1036,6 +1036,47 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             else emit_store_rbp(&e, spill_off(assign, assign_count, &e, in->dst), 0);
             break;
         }
+        /* Double (f64) comparisons: ucomisd + setcc */
+        case MIR_DGT: case MIR_DLT: case MIR_DGE: case MIR_DLE:
+        case MIR_DEQ: case MIR_DNE: {
+            int sa = VR_ENC_SAFE(in->a);
+            int sb = VR_ENC_SAFE(in->b);
+            /* Load a into xmm0 */
+            // sa already computed above
+            if (sa >= 0) {
+                emit_mov_rax_from_vr(&e, sa);
+            } else {
+                emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
+            }
+            rex(&e,1,0,0,0); e8(&e, 0x66); e8(&e, 0x0F); e8(&e, 0x6E); e8(&e, 0xC0); /* REX.W 66 0F 6E C0 = movq xmm0, rax */
+            /* Load b into xmm1 */
+            // sb already computed above
+            if (sb >= 0) {
+                emit_mov_rax_from_vr(&e, sb);
+            } else {
+                emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->b));
+            }
+            rex(&e,1,0,0,1); e8(&e, 0x66); e8(&e, 0x0F); e8(&e, 0x6E); e8(&e, 0xC8); /* REX.W+B 66 0F 6E C8 = movq xmm1, rax */
+            /* ucomisd xmm0, xmm1 */
+            e8(&e, 0x66); e8(&e, 0x0F); e8(&e, 0x2E); e8(&e, 0xC1);
+            /* setcc al based on comparison */
+            uint8_t cc;
+            switch (in->op) {
+            case MIR_DGT: cc = 0x97; break;  /* seta (CF=0 && ZF=0) */
+            case MIR_DLT: cc = 0x92; break;  /* setb (CF=1) */
+            case MIR_DGE: cc = 0x93; break;  /* setae (CF=0) */
+            case MIR_DLE: cc = 0x96; break;  /* setbe (CF=1 || ZF=1) */
+            case MIR_DEQ: cc = 0x94; break;  /* sete (ZF=1) */
+            case MIR_DNE: cc = 0x95; break;  /* setne (ZF=0) */
+            default: cc = 0x94; break;
+            }
+            e8(&e, 0x0F); e8(&e, cc); e8(&e, 0xC0);        /* setcc al */
+            rex(&e,1,0,0,0); e8(&e, 0x0F); e8(&e, 0xB6); e8(&e, 0xC0); /* movzx rax,al */
+            int sd = VR_ENC_SAFE(in->dst);
+            if (sd >= 0) emit_mov_vr_from_rax(&e, sd);
+            else emit_store_rbp(&e, spill_off(assign, assign_count, &e, in->dst), 0);
+            break;
+        }
         case MIR_NEG: {
             int sa = VR_ENC_SAFE(in->a);
             if (sa >= 0) emit_mov_rax_from_vr(&e, sa);
