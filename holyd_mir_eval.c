@@ -2876,8 +2876,22 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             for (uint32_t i = 0; i < body->n_stmts; i++) {
                 HDASTNode *stmt = body->stmts[i];
                 if (stmt->kind == HD_AST_CASE && stmt->cond != NULL && ncases < 64) {
-                    /* Evaluate case value */
+                    /* Evaluate case value, truncate to switch expr type */
                     wubu_vr_t cval = mir_gen_expr(g, stmt->cond);
+                    /* Truncate case value to match switch expression type */
+                    {
+                        HDType *sw_type = NULL;
+                        if (n->cond && n->cond->type) sw_type = n->cond->type;
+                        if (!sw_type && n->cond && n->cond->kind == HD_AST_IDENT && n->cond->ident[0]) {
+                            for (int i = 0; i < g->n_vars; i++)
+                                if (strcmp(g->vars[i].name, n->cond->ident) == 0) { sw_type = g->vars[i].type; break; }
+                        }
+                        if (sw_type && (sw_type->kind == HD_TYPE_I8 || sw_type->kind == HD_TYPE_U8 ||
+                            sw_type->kind == HD_TYPE_I16 || sw_type->kind == HD_TYPE_U16 ||
+                            sw_type->kind == HD_TYPE_I32 || sw_type->kind == HD_TYPE_U32)) {
+                            cval = mir_truncate_to_type(g, cval, sw_type);
+                        }
+                    }
                     uint32_t case_label = wubu_mir_new_label(g->prog);
                     /* Emit: if (cond == cval) goto case_label */
                     wubu_vr_t cmp = wubu_mir_binop(g->prog, MIR_EQ, cond, cval);
@@ -3132,6 +3146,15 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
                     param_is_unsigned = 1;
             }
             mir_bind_var(&g, fn->param_names[pi], addr, addr, param_is_unsigned);
+            /* Store parameter type for type-aware codegen */
+            if (fn->param_types[pi]) {
+                for (int i = 0; i < g.n_vars; i++) {
+                    if (strcmp(g.vars[i].name, fn->param_names[pi]) == 0) {
+                        g.vars[i].type = fn->param_types[pi];
+                        break;
+                    }
+                }
+            }
             /* If the parameter is a struct by value, mark is_struct so member access works */
             if (param_is_struct && fn->param_types[pi]->name[0]) {
                 for (int i = 0; i < g.n_vars; i++) {
