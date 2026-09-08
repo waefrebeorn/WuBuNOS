@@ -506,20 +506,24 @@ static HDASTNode *parse_primary(HDParser *p) {
         case HD_TOK_INT: {
             HDASTNode *n = hd_ast_new(HD_AST_INT_LIT);
             n->int_val = p->lex->tok.int_val;
-            /* Determine constant type from suffix and value */
-            if (p->lex->tok.is_unsigned || p->lex->tok.is_long) {
-                /* unsigned and/or long → 64-bit */
+            /* Determine constant type from suffix and value per C rules */
+            {
                 HDType *t = (HDType *)calloc(1, sizeof(HDType));
+                int64_t v = n->int_val;
                 if (p->lex->tok.is_unsigned && p->lex->tok.is_long) {
-                    t->kind = HD_TYPE_U64;
+                    t->kind = HD_TYPE_U64; t->size = 8;
                 } else if (p->lex->tok.is_unsigned) {
-                    /* Check if value fits in 32 bits */
-                    if (n->int_val <= 0xFFFFFFFFULL) t->kind = HD_TYPE_U32;
-                    else t->kind = HD_TYPE_U64;
+                    if (v <= (int64_t)0xFFFFFFFFULL) { t->kind = HD_TYPE_U32; t->size = 4; }
+                    else { t->kind = HD_TYPE_U64; t->size = 8; }
+                } else if (p->lex->tok.is_long) {
+                    t->kind = HD_TYPE_I64; t->size = 8;
+                } else if (v >= -2147483648LL && v <= 2147483647LL) {
+                    t->kind = HD_TYPE_I32; t->size = 4;
+                } else if (v > 2147483647LL && v <= (int64_t)0xFFFFFFFFULL) {
+                    t->kind = HD_TYPE_U32; t->size = 4;
                 } else {
-                    t->kind = HD_TYPE_I64;
+                    t->kind = HD_TYPE_I64; t->size = 8;
                 }
-                t->size = 8;
                 n->type = t;
             }
             advance(p);

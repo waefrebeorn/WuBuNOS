@@ -1932,11 +1932,22 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
     case HD_AST_EQ: {
         wubu_vr_t a = mir_gen_expr(g, n->left);
         wubu_vr_t b = mir_gen_expr(g, n->right);
+        /* Truncate both operands to common type for comparison */
+        HDType *ct = mir_binop_result_type(g, n->left, n->right);
+        if (ct && (ct->kind == HD_TYPE_I32 || ct->kind == HD_TYPE_U32)) {
+            a = mir_truncate_to_type(g, a, ct);
+            b = mir_truncate_to_type(g, b, ct);
+        }
         return wubu_mir_binop(g->prog, MIR_EQ, a, b);
     }
     case HD_AST_NE: {
         wubu_vr_t a = mir_gen_expr(g, n->left);
         wubu_vr_t b = mir_gen_expr(g, n->right);
+        HDType *ct = mir_binop_result_type(g, n->left, n->right);
+        if (ct && (ct->kind == HD_TYPE_I32 || ct->kind == HD_TYPE_U32)) {
+            a = mir_truncate_to_type(g, a, ct);
+            b = mir_truncate_to_type(g, b, ct);
+        }
         return wubu_mir_binop(g->prog, MIR_NE, a, b);
     }
     case HD_AST_LT: {
@@ -1944,6 +1955,11 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         wubu_vr_t b = mir_gen_expr(g, n->right);
         wubu_mir_op_t op = (mir_operand_is_unsigned(g, n->left) || mir_operand_is_unsigned(g, n->right))
                             ? MIR_ULT : MIR_LT;
+        HDType *ct = mir_binop_result_type(g, n->left, n->right);
+        if (ct && (ct->kind == HD_TYPE_I32 || ct->kind == HD_TYPE_U32)) {
+            a = mir_truncate_to_type(g, a, ct);
+            b = mir_truncate_to_type(g, b, ct);
+        }
         return wubu_mir_binop(g->prog, op, a, b);
     }
     case HD_AST_LE: {
@@ -1951,6 +1967,11 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         wubu_vr_t b = mir_gen_expr(g, n->right);
         wubu_mir_op_t op = (mir_operand_is_unsigned(g, n->left) || mir_operand_is_unsigned(g, n->right))
                             ? MIR_ULE : MIR_LE;
+        HDType *ct = mir_binop_result_type(g, n->left, n->right);
+        if (ct && (ct->kind == HD_TYPE_I32 || ct->kind == HD_TYPE_U32)) {
+            a = mir_truncate_to_type(g, a, ct);
+            b = mir_truncate_to_type(g, b, ct);
+        }
         return wubu_mir_binop(g->prog, op, a, b);
     }
     case HD_AST_GT: {
@@ -1958,6 +1979,11 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         wubu_vr_t b = mir_gen_expr(g, n->right);
         wubu_mir_op_t op = (mir_operand_is_unsigned(g, n->left) || mir_operand_is_unsigned(g, n->right))
                             ? MIR_UGT : MIR_GT;
+        HDType *ct = mir_binop_result_type(g, n->left, n->right);
+        if (ct && (ct->kind == HD_TYPE_I32 || ct->kind == HD_TYPE_U32)) {
+            a = mir_truncate_to_type(g, a, ct);
+            b = mir_truncate_to_type(g, b, ct);
+        }
         return wubu_mir_binop(g->prog, op, a, b);
     }
     case HD_AST_GE: {
@@ -1965,6 +1991,11 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         wubu_vr_t b = mir_gen_expr(g, n->right);
         wubu_mir_op_t op = (mir_operand_is_unsigned(g, n->left) || mir_operand_is_unsigned(g, n->right))
                             ? MIR_UGE : MIR_GE;
+        HDType *ct = mir_binop_result_type(g, n->left, n->right);
+        if (ct && (ct->kind == HD_TYPE_I32 || ct->kind == HD_TYPE_U32)) {
+            a = mir_truncate_to_type(g, a, ct);
+            b = mir_truncate_to_type(g, b, ct);
+        }
         return wubu_mir_binop(g->prog, op, a, b);
     }
     case HD_AST_TERNARY: {
@@ -2116,8 +2147,10 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
          * For arrays, n->type->size is 0 (not set by parser); use hd_type_size instead.
          * For sizeof(expr) without type annotation, derive from child. */
         int size = 8; /* default: pointer */
-        /* If n->type is not set (sizeof expr), try to derive from child */
-        if (!n->type && n->child) {
+        /* sizeof(sizeof(anything)) == sizeof(unsigned long) == 8 */
+        if (n->child && n->child->kind == HD_AST_SIZEOF) {
+            size = 8;
+        } else if (!n->type && n->child) {
             if (n->child->kind == HD_AST_CHAR_LIT) {
                 /* In C, char literals have type int, so sizeof 'a' == 4 */
                 size = 4;

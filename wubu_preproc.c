@@ -461,8 +461,19 @@ char *wubu_preprocess(const char *src)
         {"__wubu_va_save(n)", "do { int __i; for(__i=0; __i<32; __i++) wubu_va_args[__i] = 0; } while(0)"},
         /* GCC test harness macros */
         {"FAILURE", "abort()"},
+        {"FAIL", "abort()"},
         {"FINISH", "return 0"},
         {"CONVERT(x)", "0"},
+        {"int8_t", "char"},
+        {"int16_t", "short"},
+        {"int32_t", "int"},
+        {"int64_t", "long"},
+        {"uint8_t", "unsigned char"},
+        {"uint16_t", "unsigned short"},
+        {"uint32_t", "unsigned int"},
+        {"uint64_t", "unsigned long"},
+        {"size_t", "unsigned long"},
+        {"ptrdiff_t", "long"},
         {NULL, NULL}
     };
     for (int i = 0; builtins[i].name; i++) {
