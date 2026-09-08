@@ -285,6 +285,8 @@ static HDTokenType hd_scan_number(HDLexer *lex) {
             }
         }
         lex->tok.float_val = strtod(buf, NULL);
+        if (buf[0] == '4' && buf[1] == '6' && buf[2] == '1')
+            fprintf(stderr, "DBG LEX FLOAT: buf=[%s] val=%.1f\n", buf, lex->tok.float_val);
         return hd_make_token(lex, HD_TOK_FLOAT);
     } else if (is_hex) {
         /* Scan suffix to detect unsigned and long */

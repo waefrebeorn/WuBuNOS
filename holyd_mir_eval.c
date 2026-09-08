@@ -1224,7 +1224,8 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
                         }
                         HDTypeKind init_k = init_type ? init_type->kind : HD_TYPE_I32;
                         if ((var_k == HD_TYPE_I8 || var_k == HD_TYPE_U8 || var_k == HD_TYPE_I16 ||
-                             var_k == HD_TYPE_U16 || var_k == HD_TYPE_I32 || var_k == HD_TYPE_U32) &&
+                             var_k == HD_TYPE_U16 || var_k == HD_TYPE_I32 || var_k == HD_TYPE_U32 ||
+                             var_k == HD_TYPE_I64 || var_k == HD_TYPE_U64) &&
                             init_k == HD_TYPE_F64) {
                             /* double -> int: convert */
                             val = wubu_mir_unop(g->prog, MIR_DTOI, val);
@@ -1329,7 +1330,8 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
         if (g->fn_ret_type && (g->fn_ret_type->kind == HD_TYPE_I8 ||
             g->fn_ret_type->kind == HD_TYPE_U8 || g->fn_ret_type->kind == HD_TYPE_I16 ||
             g->fn_ret_type->kind == HD_TYPE_U16 || g->fn_ret_type->kind == HD_TYPE_I32 ||
-            g->fn_ret_type->kind == HD_TYPE_U32) && n->child) {
+            g->fn_ret_type->kind == HD_TYPE_U32 || g->fn_ret_type->kind == HD_TYPE_I64 ||
+            g->fn_ret_type->kind == HD_TYPE_U64) && n->child) {
             bool child_is_float = mir_is_float_node(g, n->child);
             /* Also check if child is a function call returning f64 */
             if (!child_is_float && n->child->kind == HD_AST_FUNC_CALL &&
@@ -1828,7 +1830,8 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 }
             }
             if (k == HD_TYPE_I8 || k == HD_TYPE_U8 || k == HD_TYPE_I16 ||
-                k == HD_TYPE_U16 || k == HD_TYPE_I32 || k == HD_TYPE_U32) {
+                k == HD_TYPE_U16 || k == HD_TYPE_I32 || k == HD_TYPE_U32 ||
+                k == HD_TYPE_I64 || k == HD_TYPE_U64) {
                 /* If RHS is a float, convert to int first */
                 if (rhs_type && rhs_type->kind == HD_TYPE_F64) {
                     val = wubu_mir_unop(g->prog, MIR_DTOI, val);
@@ -1867,7 +1870,8 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                     if (strcmp(g->vars[i].name, n->child->ident) == 0 && g->vars[i].type &&
                         (g->vars[i].type->kind == HD_TYPE_I8 || g->vars[i].type->kind == HD_TYPE_U8 ||
                          g->vars[i].type->kind == HD_TYPE_I16 || g->vars[i].type->kind == HD_TYPE_U16 ||
-                         g->vars[i].type->kind == HD_TYPE_I32 || g->vars[i].type->kind == HD_TYPE_U32)) {
+                         g->vars[i].type->kind == HD_TYPE_I32 || g->vars[i].type->kind == HD_TYPE_U32 ||
+                         g->vars[i].type->kind == HD_TYPE_I64 || g->vars[i].type->kind == HD_TYPE_U64)) {
                         upd = mir_truncate_to_type(g, upd, g->vars[i].type);
                         break;
                     }
@@ -1894,7 +1898,8 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                     if (strcmp(g->vars[i].name, n->child->ident) == 0 && g->vars[i].type &&
                         (g->vars[i].type->kind == HD_TYPE_I8 || g->vars[i].type->kind == HD_TYPE_U8 ||
                          g->vars[i].type->kind == HD_TYPE_I16 || g->vars[i].type->kind == HD_TYPE_U16 ||
-                         g->vars[i].type->kind == HD_TYPE_I32 || g->vars[i].type->kind == HD_TYPE_U32)) {
+                         g->vars[i].type->kind == HD_TYPE_I32 || g->vars[i].type->kind == HD_TYPE_U32 ||
+                         g->vars[i].type->kind == HD_TYPE_I64 || g->vars[i].type->kind == HD_TYPE_U64)) {
                         upd = mir_truncate_to_type(g, upd, g->vars[i].type);
                         break;
                     }
