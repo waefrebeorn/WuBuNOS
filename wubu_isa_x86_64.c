@@ -1075,30 +1075,26 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             else emit_store_rbp(&e, spill_off(assign, assign_count, &e, in->dst), 0);
             break;
         }
-        /* Double (f64) comparisons: ucomisd + setcc */
+        /* Double (f64) comparisons: ucomisd + setcc with NaN handling */
         case MIR_DGT: case MIR_DLT: case MIR_DGE: case MIR_DLE:
         case MIR_DEQ: case MIR_DNE: {
             int sa = VR_ENC_SAFE(in->a);
             int sb = VR_ENC_SAFE(in->b);
             /* Load a into xmm0 */
-            // sa already computed above
-            if (sa >= 0) {
-                emit_mov_rax_from_vr(&e, sa);
-            } else {
-                emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
-            }
-            e8(&e, 0x66); e8(&e, 0x48); e8(&e, 0x0F); e8(&e, 0x6E); e8(&e, 0xC0); /* 66 48 0F 6E C0 = movq xmm0, rax */
+            if (sa >= 0) emit_mov_rax_from_vr(&e, sa);
+            else emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
+            e8(&e, 0x66); e8(&e, 0x48); e8(&e, 0x0F); e8(&e, 0x6E); e8(&e, 0xC0);
             /* Load b into xmm1 */
-            // sb already computed above
-            if (sb >= 0) {
-                emit_mov_rax_from_vr(&e, sb);
-            } else {
-                emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->b));
-            }
-            e8(&e, 0x66); e8(&e, 0x48); e8(&e, 0x0F); e8(&e, 0x6E); e8(&e, 0xC8); /* 66 48 0F 6E C8 = movq xmm1, rax */
+            if (sb >= 0) emit_mov_rax_from_vr(&e, sb);
+            else emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->b));
+            e8(&e, 0x66); e8(&e, 0x48); e8(&e, 0x0F); e8(&e, 0x6E); e8(&e, 0xC8);
             /* ucomisd xmm0, xmm1 */
             e8(&e, 0x66); e8(&e, 0x0F); e8(&e, 0x2E); e8(&e, 0xC1);
-            /* setcc al based on comparison */
+            /* NaN handling: JP jumps if PF=1 (unordered/NaN) */
+            size_t jp_patch_pos = e.n;
+            e8(&e, 0x0F); e8(&e, 0x8A); e32(&e, 0); /* jp to nan_case (placeholder) */
+            size_t jp_target_idx = e.n;
+            /* Normal comparison (ordered case) */
             uint8_t cc;
             switch (in->op) {
             case MIR_DGT: cc = 0x97; break;  /* seta (CF=0 && ZF=0) */
@@ -1110,7 +1106,21 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             default: cc = 0x94; break;
             }
             e8(&e, 0x0F); e8(&e, cc); e8(&e, 0xC0);        /* setcc al */
-            rex(&e,1,0,0,0); e8(&e, 0x0F); e8(&e, 0xB6); e8(&e, 0xC0); /* movzx rax,al */
+            size_t jmp_end_pos = e.n;
+            e8(&e, 0xE9); e32(&e, 0); /* jmp to end (placeholder) */
+            size_t jmp_end_idx = e.n;
+            /* NaN case: set result based on comparison type */
+            size_t nan_case_idx = e.n;
+            *(int32_t*)(&e.code[jp_patch_pos + 2]) = (int32_t)((int64_t)nan_case_idx - (int64_t)jp_target_idx);
+            if (in->op == MIR_DNE) {
+                e8(&e, 0xB0); e8(&e, 0x01);            /* mov al, 1 (NaN != anything) */
+            } else {
+                e8(&e, 0xB0); e8(&e, 0x00);            /* mov al, 0 (NaN compared = false) */
+            }
+            size_t end_idx = e.n;
+            *(int32_t*)(&e.code[jmp_end_pos + 1]) = (int32_t)((int64_t)end_idx - (int64_t)jmp_end_idx);
+            /* movzx rax, al */
+            rex(&e,1,0,0,0); e8(&e, 0x0F); e8(&e, 0xB6); e8(&e, 0xC0);
             int sd = VR_ENC_SAFE(in->dst);
             if (sd >= 0) emit_mov_vr_from_rax(&e, sd);
             else emit_store_rbp(&e, spill_off(assign, assign_count, &e, in->dst), 0);
