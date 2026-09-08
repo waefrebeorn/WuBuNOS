@@ -149,16 +149,42 @@ static HDType *parse_type(HDParser *p) {
         }
         case HD_KW_I8:   t->kind = HD_TYPE_I8;   advance(p); break;
         case HD_KW_I16:  t->kind = HD_TYPE_I16;  advance(p); break;
-        case HD_KW_I32:  t->kind = HD_TYPE_I32;  advance(p); break;
+        case HD_KW_I32:  t->kind = HD_TYPE_I32;  advance(p);
+                         /* `int unsigned` == `unsigned int` */
+                         if (peek(p) == HD_KW_U32) { t->kind = HD_TYPE_U32; advance(p); }
+                         else if (peek(p) == HD_KW_U64) { t->kind = HD_TYPE_U64; advance(p); }
+                         /* `int signed` == `int`, `signed int` == `int` */
+                         else if (peek(p) == HD_KW_I32) advance(p);
+                         /* `signed long` == `long` */
+                         else if (peek(p) == HD_KW_I64) { t->kind = HD_TYPE_I64; advance(p);
+                             if (peek(p) == HD_KW_I64) advance(p); /* long long */
+                             else if (peek(p) == HD_KW_I32) advance(p); /* long int */
+                         }
+                         break;
         case HD_KW_I64:  t->kind = HD_TYPE_I64;  advance(p);
                          /* `long long` = two I64 tokens (both 64-bit on
                           * x86-64). Consume the optional second `long` so
                           * `long long x;` / `sizeof(long long)` parse. */
-                         if (peek(p) == HD_KW_I64) advance(p);
+                         if (peek(p) == HD_KW_I64) { advance(p);
+                             /* `long long unsigned` */
+                             if (peek(p) == HD_KW_U32) { t->kind = HD_TYPE_U64; advance(p); }
+                             else if (peek(p) == HD_KW_U64) { t->kind = HD_TYPE_U64; advance(p); }
+                         }
                          /* `long int` == `long` — consume the redundant `int` */
-                         else if (peek(p) == HD_KW_I32) advance(p);
+                         else if (peek(p) == HD_KW_I32) { advance(p);
+                             /* `long int unsigned` */
+                             if (peek(p) == HD_KW_U32) { t->kind = HD_TYPE_U64; advance(p); }
+                             else if (peek(p) == HD_KW_U64) { t->kind = HD_TYPE_U64; advance(p); }
+                         }
                          /* `long double` == `double` (F64) */
                          else if (peek(p) == HD_KW_F64) { t->kind = HD_TYPE_F64; advance(p); }
+                         /* `long unsigned` == `unsigned long` */
+                         else if (peek(p) == HD_KW_U32) { t->kind = HD_TYPE_U64; advance(p);
+                             /* `long unsigned long` */
+                             if (peek(p) == HD_KW_I64) advance(p);
+                             else if (peek(p) == HD_KW_I32) advance(p);
+                         }
+                         else if (peek(p) == HD_KW_U64) { t->kind = HD_TYPE_U64; advance(p); }
                          break;
         case HD_KW_U8:   t->kind = HD_TYPE_U8;   advance(p); break;
         case HD_KW_U16:  t->kind = HD_TYPE_U16;  advance(p); break;
@@ -333,6 +359,7 @@ static HDType *parse_type(HDParser *p) {
                             advance(p);
                             int asz = 0;
                             if (peek(p) == HD_TOK_INT) { asz = (int)p->lex->tok.int_val; advance(p); }
+                            else if (peek(p) == HD_TOK_CHAR) { asz = (int)p->lex->tok.int_val; advance(p); }
                             expect(p, HD_TOK_RBRACKET);
                             HDType *ma = (HDType *)calloc(1, sizeof(HDType));
                             ma->kind = HD_TYPE_ARRAY;
@@ -400,6 +427,7 @@ static HDType *parse_type(HDParser *p) {
                                 advance(p);
                                 int asz = 0;
                                 if (peek(p) == HD_TOK_INT) { asz = (int)p->lex->tok.int_val; advance(p); }
+                                else if (peek(p) == HD_TOK_CHAR) { asz = (int)p->lex->tok.int_val; advance(p); }
                                 expect(p, HD_TOK_RBRACKET);
                                 HDType *ma = (HDType *)calloc(1, sizeof(HDType));
                                 ma->kind = HD_TYPE_ARRAY;
@@ -1798,6 +1826,7 @@ done_params:
         if (peek(p) != HD_TOK_RBRACKET) {
             HDTokenType st = peek(p);
             if (st == HD_TOK_INT) { arr_size = (int)p->lex->tok.int_val; advance(p); }
+            else if (st == HD_TOK_CHAR) { arr_size = (int)p->lex->tok.int_val; advance(p); }
             else {
                 /* VLA: runtime expression for array size */
                 HDASTNode *sz_expr = parse_expr(p);
@@ -1876,6 +1905,7 @@ done_params:
             int asz = 0;
             if (peek(p) != HD_TOK_RBRACKET) {
                 if (peek(p) == HD_TOK_INT) { asz = (int)p->lex->tok.int_val; advance(p); }
+                else if (peek(p) == HD_TOK_CHAR) { asz = (int)p->lex->tok.int_val; advance(p); }
             }
             expect(p, HD_TOK_RBRACKET);
             if (n2 < 8) d2[n2++] = asz;
