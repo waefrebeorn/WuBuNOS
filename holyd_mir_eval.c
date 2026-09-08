@@ -483,6 +483,11 @@ static int mir_operand_is_unsigned(HDMirGen *g, const HDASTNode *operand) {
 /* Check if an AST node produces a float (f32 bits) value.
  * Float literals (HD_AST_FLOAT_LIT) and float variables are float;
  * unary negation of a float child is also float. */
+/* Select float MIR op: FADD vs DADD based on type */
+static wubu_mir_op_t mir_float_op(wubu_mir_op_t f32op, wubu_mir_op_t f64op, int is_f64) {
+    return is_f64 ? f64op : f32op;
+}
+
 static bool mir_is_float_node(HDMirGen *g, const HDASTNode *n) {
     if (!n) return false;
     if (n->kind == HD_AST_FLOAT_LIT) return true;
@@ -1699,10 +1704,10 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                            (n->right && n->right->kind == HD_AST_FLOAT_LIT);
             wubu_mir_op_t op = MIR_ADD;
             switch (n->kind) {
-                case HD_AST_ADD_ASSIGN: op = is_float ? MIR_FADD : MIR_ADD; break;
-                case HD_AST_SUB_ASSIGN: op = is_float ? MIR_FSUB : MIR_SUB; break;
-                case HD_AST_MUL_ASSIGN: op = is_float ? MIR_FMUL : MIR_MUL; break;
-                case HD_AST_DIV_ASSIGN: op = is_float ? MIR_FDIV : MIR_DIV; break;
+                case HD_AST_ADD_ASSIGN: op = is_float ? MIR_DADD : MIR_ADD; break;
+                case HD_AST_SUB_ASSIGN: op = is_float ? MIR_DSUB : MIR_SUB; break;
+                case HD_AST_MUL_ASSIGN: op = is_float ? MIR_DMUL : MIR_MUL; break;
+                case HD_AST_DIV_ASSIGN: op = is_float ? MIR_DDIV : MIR_DIV; break;
                 case HD_AST_MOD_ASSIGN: op = MIR_MOD; break;
                 case HD_AST_SHL_ASSIGN: op = MIR_SHL; break;
                 case HD_AST_SHR_ASSIGN: op = MIR_SHR; break;
@@ -1739,9 +1744,9 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         return mir_gen_expr(g, n->right);
     }
     case HD_AST_FLOAT_LIT: {
-        /* Store as 32-bit float bits (matching test expectations for float add) */
-        union { float f; uint32_t u; } u;
-        u.f = (float)n->float_val;
+        /* Store as 64-bit double bits for proper double precision */
+        union { double d; uint64_t u; } u;
+        u.d = n->float_val;
         return wubu_mir_const(g->prog, (int64_t)u.u);
     }
     case HD_AST_BOOL_LIT:
@@ -1774,8 +1779,7 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                        (n->right && n->right->type && n->right->type->kind == HD_TYPE_F64) ||
                        (n->left && n->left->kind == HD_AST_IDENT && mir_find_var_is_float(g, n->left->ident)) ||
                        (n->right && n->right->kind == HD_AST_IDENT && mir_find_var_is_float(g, n->right->ident));
-        wubu_vr_t r = wubu_mir_binop(g->prog, is_float ? MIR_FADD : MIR_ADD, a, b);
-        /* Truncate to 32-bit when both operands are 32-bit integers */
+        wubu_vr_t r = wubu_mir_binop(g->prog, is_float ? MIR_DADD : MIR_ADD, a, b);
         if (!is_float) {
             HDType *rt = mir_binop_result_type(g, n->left, n->right);
             if (rt && (rt->kind == HD_TYPE_I32 || rt->kind == HD_TYPE_U32))
@@ -1790,7 +1794,7 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                        (n->right && n->right->type && n->right->type->kind == HD_TYPE_F64) ||
                        (n->left && n->left->kind == HD_AST_IDENT && mir_find_var_is_float(g, n->left->ident)) ||
                        (n->right && n->right->kind == HD_AST_IDENT && mir_find_var_is_float(g, n->right->ident));
-        wubu_vr_t r = wubu_mir_binop(g->prog, is_float ? MIR_FSUB : MIR_SUB, a, b);
+        wubu_vr_t r = wubu_mir_binop(g->prog, is_float ? MIR_DSUB : MIR_SUB, a, b);
         if (!is_float) { HDType *rt = mir_binop_result_type(g, n->left, n->right);
             if (rt && (rt->kind == HD_TYPE_I32 || rt->kind == HD_TYPE_U32)) r = mir_truncate_to_type(g, r, rt); }
         return r;
@@ -1802,7 +1806,7 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                        (n->right && n->right->type && n->right->type->kind == HD_TYPE_F64) ||
                        (n->left && n->left->kind == HD_AST_IDENT && mir_find_var_is_float(g, n->left->ident)) ||
                        (n->right && n->right->kind == HD_AST_IDENT && mir_find_var_is_float(g, n->right->ident));
-        wubu_vr_t r = wubu_mir_binop(g->prog, is_float ? MIR_FMUL : MIR_MUL, a, b);
+        wubu_vr_t r = wubu_mir_binop(g->prog, is_float ? MIR_DMUL : MIR_MUL, a, b);
         if (!is_float) { HDType *rt = mir_binop_result_type(g, n->left, n->right);
             if (rt && (rt->kind == HD_TYPE_I32 || rt->kind == HD_TYPE_U32)) r = mir_truncate_to_type(g, r, rt); }
         return r;
@@ -1814,7 +1818,7 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                        (n->right && n->right->type && n->right->type->kind == HD_TYPE_F64) ||
                        (n->left && n->left->kind == HD_AST_IDENT && mir_find_var_is_float(g, n->left->ident)) ||
                        (n->right && n->right->kind == HD_AST_IDENT && mir_find_var_is_float(g, n->right->ident));
-        wubu_vr_t r = wubu_mir_binop(g->prog, is_float ? MIR_FDIV : MIR_DIV, a, b);
+        wubu_vr_t r = wubu_mir_binop(g->prog, is_float ? MIR_DDIV : MIR_DIV, a, b);
         if (!is_float) { HDType *rt = mir_binop_result_type(g, n->left, n->right);
             if (rt && (rt->kind == HD_TYPE_I32 || rt->kind == HD_TYPE_U32)) r = mir_truncate_to_type(g, r, rt); }
         return r;
@@ -1913,10 +1917,10 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
     }
     case HD_AST_NEG: {
         wubu_vr_t a = mir_gen_expr(g, n->child);
-        /* Float negation uses MIR_FNEG (f32 bit-flip); integer uses MIR_NEG */
+        /* Float negation uses MIR_DNEG for f64; integer uses MIR_NEG */
         bool is_float = mir_is_float_node(g, n->child);
         if (is_float)
-            return wubu_mir_unop(g->prog, MIR_FNEG, a);
+            return wubu_mir_unop(g->prog, MIR_DNEG, a);
         return wubu_mir_unop(g->prog, MIR_NEG, a);
     }
     case HD_AST_BITNOT: {
@@ -2030,11 +2034,11 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         }
         bool to_f64 = (n->type->kind == HD_TYPE_F64);
         if (to_f64 && !from_f64) {
-            /* int → f32 (use ITOF for 64-bit int to float) */
-            return wubu_mir_unop(g->prog, MIR_ITOF, val);
+            /* int → f64 */
+            return wubu_mir_unop(g->prog, MIR_DITOF, val);
         } else if (!to_f64 && from_f64) {
-            /* f32 → int (use FTOI for float to 64-bit int) */
-            return wubu_mir_unop(g->prog, MIR_FTOI, val);
+            /* f64 → int */
+            return wubu_mir_unop(g->prog, MIR_DTOI, val);
         }
         /* Integer-to-integer cast: truncate to target type width.
          * In the MIR model, all values are int64 cells. We need to mask
