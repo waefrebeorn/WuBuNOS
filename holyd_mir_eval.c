@@ -1737,10 +1737,21 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             }
             if (lhs_type) {
             HDTypeKind k = lhs_type->kind;
-            /* Determine RHS type — check AST node type first, then var table */
+            /* Determine RHS type — check AST node type first, then var table, then function call */
             HDType *rhs_type = n->right ? n->right->type : NULL;
             if (!rhs_type && n->right && n->right->kind == HD_AST_IDENT) {
                 rhs_type = mir_find_var_type(g, n->right->ident);
+            }
+            if (!rhs_type && n->right && (n->right->kind == HD_AST_FUNC_CALL || n->right->kind == HD_AST_CALL)
+                && n->right->callee && n->right->callee->kind == HD_AST_IDENT) {
+                /* Function call: look up the function's return type */
+                for (int fi = 0; fi < g->n_funcs; fi++) {
+                    if (g->func_ast[fi] && strcmp(g->func_ast[fi]->ident, n->right->callee->ident) == 0) {
+                        HDASTNode *fn = (HDASTNode *)g->func_ast[fi];
+                        if (fn->type) { rhs_type = fn->type; }
+                        break;
+                    }
+                }
             }
             if (k == HD_TYPE_I8 || k == HD_TYPE_U8 || k == HD_TYPE_I16 ||
                 k == HD_TYPE_U16 || k == HD_TYPE_I32 || k == HD_TYPE_U32) {
@@ -2546,10 +2557,20 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                         HDType *pt = g->func_ast[fi]->param_types[a];
                         if (pt && n->args[a]) {
                             HDTypeKind param_k = pt->kind;
-                            /* Determine argument type — check AST node, then var table, then infer */
+                            /* Determine argument type — check AST node, then var table, then function call */
                             HDType *arg_type = n->args[a]->type;
                             if (!arg_type && n->args[a]->kind == HD_AST_IDENT) {
                                 arg_type = mir_find_var_type(g, n->args[a]->ident);
+                            }
+                            if (!arg_type && n->args[a] && (n->args[a]->kind == HD_AST_FUNC_CALL || n->args[a]->kind == HD_AST_CALL)
+                                && n->args[a]->callee && n->args[a]->callee->kind == HD_AST_IDENT) {
+                                for (int fni = 0; fni < g->n_funcs; fni++) {
+                                    if (g->func_ast[fni] && strcmp(g->func_ast[fni]->ident, n->args[a]->callee->ident) == 0) {
+                                        HDASTNode *fn = (HDASTNode *)g->func_ast[fni];
+                                        if (fn->type) { arg_type = fn->type; }
+                                        break;
+                                    }
+                                }
                             }
                             HDTypeKind arg_k = arg_type ? arg_type->kind : 
                                 (mir_is_float_node(g, n->args[a]) ? HD_TYPE_F64 : HD_TYPE_I32);
