@@ -1234,7 +1234,11 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
                                     init_k == HD_TYPE_I16 || init_k == HD_TYPE_U16 ||
                                     init_k == HD_TYPE_I8 || init_k == HD_TYPE_U8)) {
                             /* int -> double: convert */
-                            val = wubu_mir_unop(g->prog, MIR_DITOF, val);
+                            if (init_k == HD_TYPE_U64 || init_k == HD_TYPE_U32 ||
+                                init_k == HD_TYPE_U16 || init_k == HD_TYPE_U8)
+                                val = wubu_mir_unop(g->prog, MIR_DITOF_U, val);
+                            else
+                                val = wubu_mir_unop(g->prog, MIR_DITOF, val);
                         }
                     }
                     if (n->type && (n->type->kind == HD_TYPE_I8 || n->type->kind == HD_TYPE_U8 ||
@@ -1339,6 +1343,35 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
                 }
             }
             if (child_is_float) val = wubu_mir_unop(g->prog, MIR_DTOI, val);
+        }
+        /* If return type is double but value is integer, convert int -> double */
+        if (g->fn_ret_type && g->fn_ret_type->kind == HD_TYPE_F64 && n->child) {
+            /* Check if child is NOT float (i.e. needs conversion to double) */
+            bool child_is_float = mir_is_float_node(g, n->child);
+            if (!child_is_float) {
+                /* Check if child is a function call returning f64 */
+                if (n->child->kind == HD_AST_FUNC_CALL &&
+                    n->child->callee && n->child->callee->kind == HD_AST_IDENT) {
+                    for (int i = 0; i < g->n_funcs; i++) {
+                        if (g->func_ast[i] && strcmp(g->func_ast[i]->ident, n->child->callee->ident) == 0) {
+                            HDASTNode *fn = (HDASTNode *)g->func_ast[i];
+                            if (fn->type && fn->type->kind == HD_TYPE_F64) child_is_float = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (!child_is_float) {
+                /* Child is integer, convert to double */
+                /* Check if the constant is unsigned */
+                if (n->child->kind == HD_AST_INT_LIT && n->child->type &&
+                    (n->child->type->kind == HD_TYPE_U64 || n->child->type->kind == HD_TYPE_U32 ||
+                     n->child->type->kind == HD_TYPE_U16 || n->child->type->kind == HD_TYPE_U8)) {
+                    val = wubu_mir_unop(g->prog, MIR_DITOF_U, val);
+                } else {
+                    val = wubu_mir_unop(g->prog, MIR_DITOF, val);
+                }
+            }
         }
         /* Truncate return value to function return type width */
         if (g->fn_ret_type && (g->fn_ret_type->kind == HD_TYPE_I8 ||

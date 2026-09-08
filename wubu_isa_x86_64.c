@@ -871,7 +871,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
                 /* and rax, 1; cvtsi2sd xmm1, rax; addsd xmm0, xmm1 */
                 e8(&e, 0x48); e8(&e, 0x83); e8(&e, 0xE0); e8(&e, 0x01);
                 e8(&e, 0xF2); e8(&e, 0x48); e8(&e, 0x0F); e8(&e, 0x2A); e8(&e, 0xC8);
-                e8(&e, 0x66); e8(&e, 0x0F); e8(&e, 0x5C); e8(&e, 0xC1);
+                e8(&e, 0x66); e8(&e, 0x0F); e8(&e, 0x58); e8(&e, 0xC1); /* addsd xmm0, xmm1 */
                 /* jmp .done */
                 e8(&e, 0xE9);
                 int jmp2_idx = e.n;
