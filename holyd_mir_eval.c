@@ -526,6 +526,41 @@ static bool mir_is_float_node(HDMirGen *g, const HDASTNode *n) {
     return false;
 }
 
+/* Promote an integer operand to double for mixed-type float operations.
+ * Only promotes clearly-integer expressions (literals, vars, integer ops).
+ * Does NOT promote DEREF, ADDR, INDEX where type is ambiguous. */
+static wubu_vr_t mir_promote_to_float(HDMirGen *g, wubu_vr_t val, const HDASTNode *n) {
+    if (!n) return val;
+    if (mir_is_float_node(g, n)) return val;  /* already float */
+    /* Only promote clearly-integer node types */
+    switch (n->kind) {
+    case HD_AST_INT_LIT:
+    case HD_AST_CHAR_LIT:
+    case HD_AST_NEG:
+    case HD_AST_ADD:
+    case HD_AST_SUB:
+    case HD_AST_MUL:
+    case HD_AST_DIV:
+    case HD_AST_MOD:
+    case HD_AST_BITNOT:
+    case HD_AST_AND:
+    case HD_AST_OR:
+    case HD_AST_BITXOR:
+    case HD_AST_IDENT:
+        break;
+    default:
+        return val;  /* don't promote ambiguous nodes */
+    }
+    /* Check if unsigned */
+    int is_unsigned = 0;
+    if (n->type && (n->type->kind == HD_TYPE_U8 || n->type->kind == HD_TYPE_U16 ||
+        n->type->kind == HD_TYPE_U32 || n->type->kind == HD_TYPE_U64))
+        is_unsigned = 1;
+    if (is_unsigned)
+        return wubu_mir_unop(g->prog, MIR_DITOF_U, val);
+    return wubu_mir_unop(g->prog, MIR_DITOF, val);
+}
+
 /* declare (or re-bind) a variable name -> vr */
 static wubu_vr_t mir_decl_var(HDMirGen *g, const char *name) {
     return mir_decl_var_unsigned(g, name, 0);
@@ -2026,6 +2061,11 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                        (n->right && n->right->type && n->right->type->kind == HD_TYPE_F64) ||
                        (n->left && n->left->kind == HD_AST_IDENT && mir_find_var_is_float(g, n->left->ident)) ||
                        (n->right && n->right->kind == HD_AST_IDENT && mir_find_var_is_float(g, n->right->ident));
+        /* Promote integer operands to float for mixed-type operations */
+        if (is_float) {
+            a = mir_promote_to_float(g, a, n->left);
+            b = mir_promote_to_float(g, b, n->right);
+        }
         wubu_vr_t r = wubu_mir_binop(g->prog, is_float ? MIR_DADD : MIR_ADD, a, b);
         if (!is_float) {
             HDType *rt = mir_binop_result_type(g, n->left, n->right);
@@ -2041,6 +2081,11 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                        (n->right && n->right->type && n->right->type->kind == HD_TYPE_F64) ||
                        (n->left && n->left->kind == HD_AST_IDENT && mir_find_var_is_float(g, n->left->ident)) ||
                        (n->right && n->right->kind == HD_AST_IDENT && mir_find_var_is_float(g, n->right->ident));
+        /* Promote integer operands to float for mixed-type operations */
+        if (is_float) {
+            a = mir_promote_to_float(g, a, n->left);
+            b = mir_promote_to_float(g, b, n->right);
+        }
         wubu_vr_t r = wubu_mir_binop(g->prog, is_float ? MIR_DSUB : MIR_SUB, a, b);
         if (!is_float) { HDType *rt = mir_binop_result_type(g, n->left, n->right);
             if (rt && (rt->kind == HD_TYPE_I32 || rt->kind == HD_TYPE_U32)) r = mir_truncate_to_type(g, r, rt); }
@@ -2053,6 +2098,11 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                        (n->right && n->right->type && n->right->type->kind == HD_TYPE_F64) ||
                        (n->left && n->left->kind == HD_AST_IDENT && mir_find_var_is_float(g, n->left->ident)) ||
                        (n->right && n->right->kind == HD_AST_IDENT && mir_find_var_is_float(g, n->right->ident));
+        /* Promote integer operands to float for mixed-type operations */
+        if (is_float) {
+            a = mir_promote_to_float(g, a, n->left);
+            b = mir_promote_to_float(g, b, n->right);
+        }
         wubu_vr_t r = wubu_mir_binop(g->prog, is_float ? MIR_DMUL : MIR_MUL, a, b);
         if (!is_float) { HDType *rt = mir_binop_result_type(g, n->left, n->right);
             if (rt && (rt->kind == HD_TYPE_I32 || rt->kind == HD_TYPE_U32)) r = mir_truncate_to_type(g, r, rt); }
@@ -2065,6 +2115,11 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                        (n->right && n->right->type && n->right->type->kind == HD_TYPE_F64) ||
                        (n->left && n->left->kind == HD_AST_IDENT && mir_find_var_is_float(g, n->left->ident)) ||
                        (n->right && n->right->kind == HD_AST_IDENT && mir_find_var_is_float(g, n->right->ident));
+        /* Promote integer operands to float for mixed-type operations */
+        if (is_float) {
+            a = mir_promote_to_float(g, a, n->left);
+            b = mir_promote_to_float(g, b, n->right);
+        }
         wubu_vr_t r = wubu_mir_binop(g->prog, is_float ? MIR_DDIV : MIR_DIV, a, b);
         if (!is_float) { HDType *rt = mir_binop_result_type(g, n->left, n->right);
             if (rt && (rt->kind == HD_TYPE_I32 || rt->kind == HD_TYPE_U32)) r = mir_truncate_to_type(g, r, rt); }
