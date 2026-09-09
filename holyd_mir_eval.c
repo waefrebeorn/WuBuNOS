@@ -501,6 +501,20 @@ static bool mir_is_float_node(HDMirGen *g, const HDASTNode *n) {
     if (n->kind == HD_AST_FLOAT_LIT) return true;
     if (n->kind == HD_AST_IDENT)
         return mir_find_var_is_float(g, n->ident);
+    if (n->kind == HD_AST_FUNC_CALL || n->kind == HD_AST_CALL) {
+        /* Function call: check the function's return type */
+        if (n->callee && n->callee->kind == HD_AST_IDENT) {
+            for (int i = 0; i < g->n_funcs; i++) {
+                if (g->func_ast[i] && strcmp(g->func_ast[i]->ident, n->callee->ident) == 0) {
+                    HDASTNode *fn = (HDASTNode *)g->func_ast[i];
+                    if (fn->type && fn->type->kind == HD_TYPE_F64) return true;
+                    break;
+                }
+            }
+        }
+        if (n->type && n->type->kind == HD_TYPE_F64) return true;
+        return false;
+    }
     if (n->kind == HD_AST_NEG || n->kind == HD_AST_ADD ||
         n->kind == HD_AST_SUB || n->kind == HD_AST_MUL ||
         n->kind == HD_AST_DIV) {
