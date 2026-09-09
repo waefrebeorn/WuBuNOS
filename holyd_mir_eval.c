@@ -1223,6 +1223,9 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
                             }
                         }
                         HDTypeKind init_k = init_type ? init_type->kind : HD_TYPE_I32;
+                        /* If init_type is NULL, check if the init expression is a float */
+                        if (!init_type && n->init && mir_is_float_node(g, n->init))
+                            init_k = HD_TYPE_F64;
                         if ((var_k == HD_TYPE_I8 || var_k == HD_TYPE_U8 || var_k == HD_TYPE_I16 ||
                              var_k == HD_TYPE_U16 || var_k == HD_TYPE_I32 || var_k == HD_TYPE_U32 ||
                              var_k == HD_TYPE_I64 || var_k == HD_TYPE_U64) &&
