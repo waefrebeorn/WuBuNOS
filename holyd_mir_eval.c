@@ -2709,6 +2709,17 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             if (n->child->kind == HD_AST_CHAR_LIT) {
                 /* In C, char literals have type int, so sizeof 'a' == 4 */
                 size = 4;
+            } else if (n->child->kind == HD_AST_TERNARY) {
+                /* sizeof(cond ? a : b): result type is common type of a and b */
+                /* For integer literals, result is int (4 bytes) */
+                size = 4;
+                /* Check if either branch is long */
+                if ((n->child->then_branch && n->child->then_branch->type &&
+                     (n->child->then_branch->type->kind == HD_TYPE_I64 || n->child->then_branch->type->kind == HD_TYPE_U64)) ||
+                    (n->child->else_branch && n->child->else_branch->type &&
+                     (n->child->else_branch->type->kind == HD_TYPE_I64 || n->child->else_branch->type->kind == HD_TYPE_U64))) {
+                    size = 8;
+                }
             } else if (n->child->kind == HD_AST_ADD || n->child->kind == HD_AST_SUB ||
                        n->child->kind == HD_AST_MUL || n->child->kind == HD_AST_DIV ||
                        n->child->kind == HD_AST_MOD || n->child->kind == HD_AST_AND ||
