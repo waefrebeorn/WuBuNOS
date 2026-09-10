@@ -396,7 +396,17 @@ static HDType *parse_type(HDParser *p) {
                                 /* Regular member: byte offset */
                                 t->members[t->n_members].offset = t->size;  /* byte offset */
                                 t->members[t->n_members].bit_offset = 0;
-                                t->size += (int)((msz + 7) / 8);  /* member size in int64 cells */
+                                /* For array members, compute cells as array_size * cells_per_element
+                                 * to ensure each element gets its own cell. */
+                                int member_cells;
+                                if (member_type->kind == HD_TYPE_ARRAY && member_type->base) {
+                                    int elem_cells = (int)((hd_type_size(member_type->base) + 7) / 8);
+                                    if (elem_cells < 1) elem_cells = 1;
+                                    member_cells = elem_cells * member_type->array_size;
+                                } else {
+                                    member_cells = (int)((msz + 7) / 8);
+                                }
+                                t->size += member_cells;
                             }
                             t->align = 1;
                         }
