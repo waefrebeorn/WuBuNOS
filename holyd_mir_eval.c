@@ -2034,6 +2034,10 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 case HD_AST_CARET_ASSIGN: op = MIR_XOR; break;
                 default: break;
             }
+            /* Promote integer RHS to float for mixed-type compound assignments */
+            if (is_float) {
+                rhs = mir_promote_to_float(g, rhs, n->right);
+            }
             wubu_vr_t upd = wubu_mir_binop(g->prog, op, lhs, rhs);
             /* Implicit type conversion: truncate result to LHS type width
              * for scalar integer compound assignments. */
