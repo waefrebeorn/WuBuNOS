@@ -554,6 +554,11 @@ static bool mir_is_float_node(HDMirGen *g, const HDASTNode *n) {
         if (n->right && mir_is_float_node(g, n->right)) return true;
         if (n->child && mir_is_float_node(g, n->child)) return true;
     }
+    if (n->kind == HD_AST_TERNARY) {
+        /* Ternary is float if either branch is float */
+        if (n->then_branch && mir_is_float_node(g, n->then_branch)) return true;
+        if (n->else_branch && mir_is_float_node(g, n->else_branch)) return true;
+    }
     if (n->type && n->type->kind == HD_TYPE_F64) return true;
     return false;
 }
@@ -1508,14 +1513,25 @@ extern_done:
             }
             if (!child_is_float) {
                 /* Child is integer, convert to double */
-                /* Check if the constant is unsigned */
+                /* Check if the constant/ternary is unsigned */
+                int is_unsigned = 0;
                 if (n->child->kind == HD_AST_INT_LIT && n->child->type &&
                     (n->child->type->kind == HD_TYPE_U64 || n->child->type->kind == HD_TYPE_U32 ||
                      n->child->type->kind == HD_TYPE_U16 || n->child->type->kind == HD_TYPE_U8)) {
-                    val = wubu_mir_unop(g->prog, MIR_DITOF_U, val);
-                } else {
-                    val = wubu_mir_unop(g->prog, MIR_DITOF, val);
+                    is_unsigned = 1;
                 }
+                /* For ternary nodes, check if either branch is unsigned */
+                if (!is_unsigned && n->child->kind == HD_AST_TERNARY) {
+                    HDASTNode *tb = n->child->then_branch;
+                    HDASTNode *eb = n->child->else_branch;
+                    if ((tb && tb->type && (tb->type->kind == HD_TYPE_U8 || tb->type->kind == HD_TYPE_U16 ||
+                        tb->type->kind == HD_TYPE_U32 || tb->type->kind == HD_TYPE_U64)) ||
+                        (eb && eb->type && (eb->type->kind == HD_TYPE_U8 || eb->type->kind == HD_TYPE_U16 ||
+                        eb->type->kind == HD_TYPE_U32 || eb->type->kind == HD_TYPE_U64))) {
+                        is_unsigned = 1;
+                    }
+                }
+                val = wubu_mir_unop(g->prog, is_unsigned ? MIR_DITOF_U : MIR_DITOF, val);
             }
         }
         /* Truncate return value to function return type width */
@@ -2488,10 +2504,24 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         wubu_mir_jz(g->prog, cond, else_label);
         wubu_vr_t merge = mir_new_vr(g);
         wubu_vr_t then_val = mir_gen_expr(g, n->then_branch);
+        /* If either branch is float, convert integer branch to float at runtime */
+        int either_float = mir_is_float_node(g, n->then_branch) || mir_is_float_node(g, n->else_branch);
+        if (either_float) {
+            if (!mir_is_float_node(g, n->then_branch)) {
+                int u = (n->then_branch && n->then_branch->type && (n->then_branch->type->kind == HD_TYPE_U8 || n->then_branch->type->kind == HD_TYPE_U16 || n->then_branch->type->kind == HD_TYPE_U32 || n->then_branch->type->kind == HD_TYPE_U64));
+                then_val = wubu_mir_unop(g->prog, u ? MIR_DITOF_U : MIR_DITOF, then_val);
+            }
+        }
         wubu_mir_mov_to(g->prog, merge, then_val);
         wubu_mir_jmp(g->prog, end_label);
         wubu_mir_place_label(g->prog, else_label);
         wubu_vr_t else_val = mir_gen_expr(g, n->else_branch);
+        if (either_float) {
+            if (!mir_is_float_node(g, n->else_branch)) {
+                int u = (n->else_branch && n->else_branch->type && (n->else_branch->type->kind == HD_TYPE_U8 || n->else_branch->type->kind == HD_TYPE_U16 || n->else_branch->type->kind == HD_TYPE_U32 || n->else_branch->type->kind == HD_TYPE_U64));
+                else_val = wubu_mir_unop(g->prog, u ? MIR_DITOF_U : MIR_DITOF, else_val);
+            }
+        }
         wubu_mir_mov_to(g->prog, merge, else_val);
         wubu_mir_place_label(g->prog, end_label);
         return merge;
@@ -2528,6 +2558,17 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                         }
                         break;
                     }
+                }
+            }
+            /* For ternary nodes, check if either branch is unsigned */
+            if (!src_unsigned && n->child && n->child->kind == HD_AST_TERNARY) {
+                HDASTNode *tb = n->child->then_branch;
+                HDASTNode *eb = n->child->else_branch;
+                if ((tb && tb->type && (tb->type->kind == HD_TYPE_U8 || tb->type->kind == HD_TYPE_U16 ||
+                    tb->type->kind == HD_TYPE_U32 || tb->type->kind == HD_TYPE_U64)) ||
+                    (eb && eb->type && (eb->type->kind == HD_TYPE_U8 || eb->type->kind == HD_TYPE_U16 ||
+                    eb->type->kind == HD_TYPE_U32 || eb->type->kind == HD_TYPE_U64))) {
+                    src_unsigned = true;
                 }
             }
             return wubu_mir_unop(g->prog, src_unsigned ? MIR_DITOF_U : MIR_DITOF, val);
