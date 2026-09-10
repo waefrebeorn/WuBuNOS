@@ -111,6 +111,20 @@ static HDType *mir_find_var_type(HDMirGen *g, const char *name) {
     return NULL;
 }
 
+static const HDASTNode *mir_find_func(HDMirGen *g, const char *name) {
+    for (int i = g->n_funcs - 1; i >= 0; i--) {
+        if (g->func_ast[i] && strcmp(g->func_ast[i]->ident, name) == 0)
+            return g->func_ast[i];
+    }
+    return NULL;
+}
+
+static HDType *mir_find_func_return_type(HDMirGen *g, const char *name) {
+    const HDASTNode *fn = mir_find_func(g, name);
+    if (fn && fn->type) return fn->type;
+    return NULL;
+}
+
 static wubu_vr_t mir_find_var(HDMirGen *g, const char *name) {
     /* Search from end to find the most recent declaration (shadowing) */
     for (int i = g->n_vars - 1; i >= 0; i--)
@@ -2623,6 +2637,21 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 if (n->child->type) {
                     size = (int)hd_type_size(n->child->type);
                     if (size <= 0) size = 8;
+                }
+            } else if (n->child->kind == HD_AST_FUNC_CALL) {
+                /* sizeof(func()): look up the function's return type */
+                const char *fn_name = NULL;
+                if (n->child->callee && n->child->callee->kind == HD_AST_IDENT)
+                    fn_name = n->child->callee->ident;
+                else if (n->child->ident[0])
+                    fn_name = n->child->ident;
+                if (fn_name && fn_name[0]) {
+                    /* Search for the function declaration in the AST */
+                    HDType *fn_ret = mir_find_func_return_type(g, fn_name);
+                    if (fn_ret) {
+                        size = (int)hd_type_size(fn_ret);
+                        if (size <= 0) size = 4;
+                    }
                 }
             } else if (n->child->type) {
                 /* Use the child's type annotation */
