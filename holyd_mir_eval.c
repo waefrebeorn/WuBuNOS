@@ -2653,6 +2653,22 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                         if (size <= 0) size = 4;
                     }
                 }
+            } else if (n->child->kind == HD_AST_ASSIGN) {
+                /* sizeof(lhs = rhs): result type is the type of the LHS */
+                if (n->child->left && n->child->left->kind == HD_AST_IDENT) {
+                    for (int i = 0; i < g->n_vars; i++) {
+                        if (strcmp(g->vars[i].name, n->child->left->ident) == 0) {
+                            if (g->vars[i].type) {
+                                size = (int)hd_type_size(g->vars[i].type);
+                                if (size <= 0) size = 4;
+                            } else {
+                                size = 4;
+                            }
+                            break;
+                        }
+                    }
+                }
+                if (size <= 0) size = 8;
             } else if (n->child->type) {
                 /* Use the child's type annotation */
                 size = (int)hd_type_size(n->child->type);
