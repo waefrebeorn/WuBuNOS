@@ -125,6 +125,24 @@ static HDType *mir_find_func_return_type(HDMirGen *g, const char *name) {
     return NULL;
 }
 
+/* Check if an AST node evaluates to an unsigned type */
+static int mir_is_unsigned_node(HDMirGen *g, const HDASTNode *n) {
+    if (!n) return 0;
+    if (n->type && (n->type->kind == HD_TYPE_U8 || n->type->kind == HD_TYPE_U16 ||
+        n->type->kind == HD_TYPE_U32 || n->type->kind == HD_TYPE_U64))
+        return 1;
+    /* For IDENT nodes, look up the variable type */
+    if (n->kind == HD_AST_IDENT && n->ident[0]) {
+        for (int i = g->n_vars - 1; i >= 0; i--) {
+            if (strcmp(g->vars[i].name, n->ident) == 0 && g->vars[i].type) {
+                HDTypeKind tk = g->vars[i].type->kind;
+                return (tk == HD_TYPE_U8 || tk == HD_TYPE_U16 || tk == HD_TYPE_U32 || tk == HD_TYPE_U64);
+            }
+        }
+    }
+    return 0;
+}
+
 static wubu_vr_t mir_find_var(HDMirGen *g, const char *name) {
     /* Search from end to find the most recent declaration (shadowing) */
     for (int i = g->n_vars - 1; i >= 0; i--)
@@ -2225,7 +2243,9 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             a = mir_promote_to_float(g, a, n->left);
             b = mir_promote_to_float(g, b, n->right);
         }
-        wubu_vr_t r = wubu_mir_binop(g->prog, is_float ? MIR_DDIV : MIR_DIV, a, b);
+        /* Use unsigned division if both operands are unsigned */
+        int is_unsigned = !is_float && mir_is_unsigned_node(g, n->left) && mir_is_unsigned_node(g, n->right);
+        wubu_vr_t r = wubu_mir_binop(g->prog, is_float ? MIR_DDIV : (is_unsigned ? MIR_UDIV : MIR_DIV), a, b);
         if (!is_float) { HDType *rt = mir_binop_result_type(g, n->left, n->right);
             if (rt && (rt->kind == HD_TYPE_I32 || rt->kind == HD_TYPE_U32)) r = mir_truncate_to_type(g, r, rt); }
         return r;
@@ -2233,7 +2253,9 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
     case HD_AST_MOD: {
         wubu_vr_t a = mir_gen_expr(g, n->left);
         wubu_vr_t b = mir_gen_expr(g, n->right);
-        wubu_vr_t r = wubu_mir_binop(g->prog, MIR_MOD, a, b);
+        /* Use unsigned modulo if both operands are unsigned */
+        int is_unsigned = mir_is_unsigned_node(g, n->left) && mir_is_unsigned_node(g, n->right);
+        wubu_vr_t r = wubu_mir_binop(g->prog, is_unsigned ? MIR_UMOD : MIR_MOD, a, b);
         HDType *rt = mir_binop_result_type(g, n->left, n->right);
         if (rt && (rt->kind == HD_TYPE_I32 || rt->kind == HD_TYPE_U32)) r = mir_truncate_to_type(g, r, rt);
         return r;

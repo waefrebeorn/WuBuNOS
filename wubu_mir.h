@@ -35,8 +35,10 @@ typedef enum {
     MIR_ADD,           /* dst = a + b */
     MIR_SUB,           /* dst = a - b */
     MIR_MUL,           /* dst = a * b */
-    MIR_DIV,           /* dst = a / b */
-    MIR_MOD,           /* dst = a % b */
+    MIR_DIV,           /* dst = a / b (signed) */
+    MIR_MOD,           /* dst = a % b (signed) */
+    MIR_UDIV,          /* dst = a / b (unsigned) */
+    MIR_UMOD,          /* dst = a % b (unsigned) */
     MIR_AND,           /* dst = a & b (bitwise) */
     MIR_OR,            /* dst = a | b (bitwise) */
     MIR_XOR,           /* dst = a ^ b */

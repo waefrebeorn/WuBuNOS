@@ -280,6 +280,8 @@ static const char *op_name(wubu_mir_op_t op)
     case MIR_MUL:   return "mul";
     case MIR_DIV:   return "div";
     case MIR_MOD:   return "mod";
+    case MIR_UDIV:  return "udiv";
+    case MIR_UMOD:  return "umod";
     case MIR_AND:   return "and";
     case MIR_OR:    return "or";
     case MIR_XOR:   return "xor";

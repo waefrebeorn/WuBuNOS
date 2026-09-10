@@ -35,6 +35,7 @@ static int op_has_dst(wubu_mir_op_t op)
     switch (op) {
     case MIR_CONST:
     case MIR_ADD: case MIR_SUB: case MIR_MUL: case MIR_DIV: case MIR_MOD:
+    case MIR_UDIV: case MIR_UMOD:
     case MIR_AND: case MIR_OR: case MIR_XOR:
     case MIR_SHL: case MIR_SHR:
     case MIR_NEG: case MIR_NOT:

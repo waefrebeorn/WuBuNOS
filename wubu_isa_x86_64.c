@@ -687,6 +687,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             break;
         }
         case MIR_ADD: case MIR_SUB: case MIR_MUL: case MIR_DIV: case MIR_MOD:
+        case MIR_UDIV: case MIR_UMOD:
         case MIR_AND: case MIR_OR: case MIR_XOR:
         case MIR_FEQ: case MIR_FNE: case MIR_FLT: case MIR_FLE:
         case MIR_FADD: case MIR_FSUB: case MIR_FMUL: case MIR_FDIV:
@@ -730,6 +731,19 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
                 rex(&e,1,0,0,0); e8(&e, 0x99);   /* cqo */
                 rex(&e,1,0,0,0); e8(&e, 0xF7); e8(&e, 0xF9);  /* idiv rcx */
                 if (in->op == MIR_MOD) {
+                    rex(&e,1,0,0,0); e8(&e, 0x89); e8(&e, 0xD0);  /* mov rax, rdx */
+                }
+                /* pop rdx */
+                e8(&e, 0x5A);
+                break;
+            }
+            case MIR_UDIV: case MIR_UMOD: {
+                /* xor rdx,rdx / div rcx for unsigned division */
+                /* push rdx */
+                e8(&e, 0x52);
+                rex(&e,1,0,0,0); e8(&e, 0x31); e8(&e, 0xD2);  /* xor rdx, rdx */
+                rex(&e,1,0,0,0); e8(&e, 0xF7); e8(&e, 0xF1);  /* div rcx */
+                if (in->op == MIR_UMOD) {
                     rex(&e,1,0,0,0); e8(&e, 0x89); e8(&e, 0xD0);  /* mov rax, rdx */
                 }
                 /* pop rdx */

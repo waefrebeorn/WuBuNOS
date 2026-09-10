@@ -118,6 +118,8 @@ int64_t wubu_mir_interp(const wubu_mir_prog_t *p)
           &&op_mul,                        /* 4  MIR_MUL    */
           &&op_div,                        /* 5  MIR_DIV    */
           &&op_mod,                        /* 6  MIR_MOD    */
+          &&op_udiv,                       /* 7  MIR_UDIV   */
+          &&op_umod,                       /* 8  MIR_UMOD   */
           &&op_and,                        /* 7  MIR_AND    */
           &&op_or,                         /* 8  MIR_OR     */
           &&op_xor,                        /* 9  MIR_XOR    */
@@ -242,6 +244,14 @@ op_div:
     DISPATCH();
 op_mod:
     vr[in->dst] = (vr[in->b] != 0) ? (vr[in->a] % vr[in->b]) : 0;
+    DISPATCH();
+op_udiv:
+    { uint64_t a = (uint64_t)vr[in->a]; uint64_t b = (uint64_t)vr[in->b];
+      vr[in->dst] = b ? (int64_t)(a / b) : 0; }
+    DISPATCH();
+op_umod:
+    { uint64_t a = (uint64_t)vr[in->a]; uint64_t b = (uint64_t)vr[in->b];
+      vr[in->dst] = b ? (int64_t)(a % b) : 0; }
     DISPATCH();
 op_and:
     vr[in->dst] = vr[in->a] & vr[in->b];
