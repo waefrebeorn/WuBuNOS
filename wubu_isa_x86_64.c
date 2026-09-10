@@ -692,7 +692,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
         case MIR_FADD: case MIR_FSUB: case MIR_FMUL: case MIR_FDIV:
         case MIR_ITOF: case MIR_FTOI:
         case MIR_BF16_TO_F32: case MIR_F32_TO_BF16:
-        case MIR_DITOF: case MIR_DITOF_U: case MIR_DTOI:
+        case MIR_DITOF: case MIR_DITOF_U: case MIR_DTOI: case MIR_DTOI_U:
         case MIR_F32_TO_F64: case MIR_F64_TO_F32:
         case MIR_DADD: case MIR_DSUB: case MIR_DMUL: case MIR_DDIV: case MIR_DNEG:
         case MIR_FNEG: {
@@ -830,7 +830,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
 
             case MIR_F16_TO_F32: case MIR_F32_TO_F16:
             case MIR_F16_ADD: case MIR_F16_MUL: case MIR_F16_DIV:
-            case MIR_DITOF: case MIR_DTOI: {
+            case MIR_DITOF: case MIR_DTOI: case MIR_DTOI_U: {
                 int sc = VR_ENC_SAFE(in->a);
                 if (sc >= 0) emit_mov_rax_from_vr(&e, sc);
                 else emit_load_rbp(&e, 0, VR_SPILL(in->a));
@@ -840,6 +840,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
                     /* movq rax, xmm0 */
                     e8(&e, 0x66); e8(&e, 0x48); e8(&e, 0x0F); e8(&e, 0x7E); e8(&e, 0xC0);
                 } else {
+                    /* MIR_DTOI or MIR_DTOI_U: double to int */
                     /* movq xmm0, rax */
                     e8(&e, 0x66); e8(&e, 0x48); e8(&e, 0x0F); e8(&e, 0x6E); e8(&e, 0xC0);
                     /* cvttsd2si rax, xmm0 : F2 48 0F 2C C0 */

@@ -551,11 +551,22 @@ static wubu_vr_t mir_promote_to_float(HDMirGen *g, wubu_vr_t val, const HDASTNod
     default:
         return val;  /* don't promote ambiguous nodes */
     }
-    /* Check if unsigned */
+    /* Check if unsigned — first check AST node type, then look up var table */
     int is_unsigned = 0;
     if (n->type && (n->type->kind == HD_TYPE_U8 || n->type->kind == HD_TYPE_U16 ||
         n->type->kind == HD_TYPE_U32 || n->type->kind == HD_TYPE_U64))
         is_unsigned = 1;
+    if (!is_unsigned && n->kind == HD_AST_IDENT && n->ident[0]) {
+        /* Look up variable type from var table */
+        for (int i = g->n_vars - 1; i >= 0; i--) {
+            if (strcmp(g->vars[i].name, n->ident) == 0 && g->vars[i].type) {
+                HDTypeKind tk = g->vars[i].type->kind;
+                if (tk == HD_TYPE_U8 || tk == HD_TYPE_U16 || tk == HD_TYPE_U32 || tk == HD_TYPE_U64)
+                    is_unsigned = 1;
+                break;
+            }
+        }
+    }
     if (is_unsigned)
         return wubu_mir_unop(g->prog, MIR_DITOF_U, val);
     return wubu_mir_unop(g->prog, MIR_DITOF, val);
@@ -2047,8 +2058,38 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             /* Promote integer RHS to float for mixed-type compound assignments */
             if (is_float) {
                 rhs = mir_promote_to_float(g, rhs, n->right);
+                /* Also promote LHS to float if it's an integer */
+                lhs = mir_promote_to_float(g, lhs, n->left);
             }
             wubu_vr_t upd = wubu_mir_binop(g->prog, op, lhs, rhs);
+            /* For float compound assignments to integer LHS, convert result back */
+            if (is_float) {
+                /* Check if LHS is an integer type */
+                HDType *lhs_type = NULL;
+                if (n->left && n->left->ident[0]) {
+                    for (int i = 0; i < g->n_vars; i++) {
+                        if (strcmp(g->vars[i].name, n->left->ident) == 0) {
+                            lhs_type = g->vars[i].type;
+                            break;
+                        }
+                    }
+                }
+                if (!lhs_type && n->left && n->left->type)
+                    lhs_type = n->left->type;
+                if (lhs_type && (lhs_type->kind == HD_TYPE_I8 || lhs_type->kind == HD_TYPE_U8 ||
+                    lhs_type->kind == HD_TYPE_I16 || lhs_type->kind == HD_TYPE_U16 ||
+                    lhs_type->kind == HD_TYPE_I32 || lhs_type->kind == HD_TYPE_U32 ||
+                    lhs_type->kind == HD_TYPE_I64 || lhs_type->kind == HD_TYPE_U64)) {
+                    /* Convert double result back to integer */
+                    /* Use unsigned conversion for unsigned types */
+                    int lhs_unsigned = (lhs_type->kind == HD_TYPE_U8 || lhs_type->kind == HD_TYPE_U16 ||
+                        lhs_type->kind == HD_TYPE_U32 || lhs_type->kind == HD_TYPE_U64);
+                    if (lhs_unsigned)
+                        upd = wubu_mir_unop(g->prog, MIR_DTOI_U, upd);
+                    else
+                        upd = wubu_mir_unop(g->prog, MIR_DTOI, upd);
+                }
+            }
             /* Implicit type conversion: truncate result to LHS type width
              * for scalar integer compound assignments. */
             {

@@ -326,6 +326,7 @@ static const char *op_name(wubu_mir_op_t op)
     case MIR_DITOF: return "ditof";
     case MIR_DITOF_U: return "ditof_u";
     case MIR_DTOI:  return "dtoi";
+    case MIR_DTOI_U: return "dtoi_u";
     case MIR_F32_TO_F64: return "f32to64";
     case MIR_F64_TO_F32: return "f64to32";
     case MIR_BF16_TO_F32: return "bf16to32";

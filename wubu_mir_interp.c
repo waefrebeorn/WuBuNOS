@@ -172,6 +172,7 @@ int64_t wubu_mir_interp(const wubu_mir_prog_t *p)
           &&op_dneg,                       /* 58 MIR_DNEG   */
           &&op_ditof,                      /* 59 MIR_DITOF  */
           &&op_dtoi,                       /* 60 MIR_DTOI   */
+          &&op_dtoi_u,                     /* 61 MIR_DTOI_U */
           &&op_f32_to_f64,                 /* 61 MIR_F32_TO_F64 */
           &&op_f64_to_f32,                 /* 62 MIR_F64_TO_F32 */
           &&op_bf16_to_f32,                /* 63 MIR_BF16_TO_F32 */
@@ -463,6 +464,9 @@ op_ditof_u: {
 }
 op_dtoi:
     vr[in->dst] = wubu_sf_f64_to_i64((uint64_t)vr[in->a]);
+    DISPATCH();
+op_dtoi_u:
+    { double d; memcpy(&d, &vr[in->a], 8); vr[in->dst] = (int64_t)(uint64_t)d; }
     DISPATCH();
 op_f32_to_f64:
     vr[in->dst] = (int64_t)wubu_sf_f32_to_f64((uint32_t)vr[in->a]);

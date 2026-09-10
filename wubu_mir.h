@@ -99,7 +99,8 @@ typedef enum {
     MIR_DNE,           /* dst = (f64(a) != f64(b)) ? 1 : 0 */
     MIR_DNEG,          /* dst = -f64(a) */
     MIR_DITOF,         /* dst = (f64)a */
-    MIR_DTOI,          /* dst = (int)f64(a) */
+    MIR_DTOI,          /* dst = (int64)f64(a) */
+    MIR_DTOI_U,        /* dst = (uint64)f64(a) — unsigned double to int */
     MIR_F32_TO_F64,    /* dst = (f64)f32(a)  (exact) */
     MIR_F64_TO_F32,    /* dst = (f32)f64(a)  (RNE) */
     /* bfloat16: the AGI tensor dtype. bf16 travels as uint16 in low bits. */
