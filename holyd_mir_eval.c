@@ -2504,22 +2504,41 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         wubu_mir_jz(g->prog, cond, else_label);
         wubu_vr_t merge = mir_new_vr(g);
         wubu_vr_t then_val = mir_gen_expr(g, n->then_branch);
-        /* If either branch is float, convert integer branch to float at runtime */
+        /* Determine common type for mixed-type ternaries */
         int either_float = mir_is_float_node(g, n->then_branch) || mir_is_float_node(g, n->else_branch);
+        /* Look up branch unsignedness from var table for IDENT nodes */
+        int then_unsigned = mir_is_unsigned_node(g, n->then_branch);
+        int else_unsigned = mir_is_unsigned_node(g, n->else_branch);
+        /* Zero-extend branches when common type is unsigned 32-bit */
+        if (!either_float) {
+            int common_unsigned = then_unsigned || else_unsigned;
+            /* Check if common type is 32-bit (not 64-bit) */
+            int then_is_64 = (n->then_branch && n->then_branch->type && (n->then_branch->type->kind == HD_TYPE_I64 || n->then_branch->type->kind == HD_TYPE_U64));
+            int else_is_64 = (n->else_branch && n->else_branch->type && (n->else_branch->type->kind == HD_TYPE_I64 || n->else_branch->type->kind == HD_TYPE_U64));
+            if (!then_is_64 && !else_is_64 && common_unsigned) {
+                then_val = wubu_mir_binop(g->prog, MIR_AND, then_val, wubu_mir_const(g->prog, 0xFFFFFFFF));
+            }
+        }
         if (either_float) {
             if (!mir_is_float_node(g, n->then_branch)) {
-                int u = (n->then_branch && n->then_branch->type && (n->then_branch->type->kind == HD_TYPE_U8 || n->then_branch->type->kind == HD_TYPE_U16 || n->then_branch->type->kind == HD_TYPE_U32 || n->then_branch->type->kind == HD_TYPE_U64));
-                then_val = wubu_mir_unop(g->prog, u ? MIR_DITOF_U : MIR_DITOF, then_val);
+                then_val = wubu_mir_unop(g->prog, then_unsigned ? MIR_DITOF_U : MIR_DITOF, then_val);
             }
         }
         wubu_mir_mov_to(g->prog, merge, then_val);
         wubu_mir_jmp(g->prog, end_label);
         wubu_mir_place_label(g->prog, else_label);
         wubu_vr_t else_val = mir_gen_expr(g, n->else_branch);
+        if (!either_float) {
+            int common_unsigned = then_unsigned || else_unsigned;
+            int then_is_64 = (n->then_branch && n->then_branch->type && (n->then_branch->type->kind == HD_TYPE_I64 || n->then_branch->type->kind == HD_TYPE_U64));
+            int else_is_64 = (n->else_branch && n->else_branch->type && (n->else_branch->type->kind == HD_TYPE_I64 || n->else_branch->type->kind == HD_TYPE_U64));
+            if (!then_is_64 && !else_is_64 && common_unsigned) {
+                else_val = wubu_mir_binop(g->prog, MIR_AND, else_val, wubu_mir_const(g->prog, 0xFFFFFFFF));
+            }
+        }
         if (either_float) {
             if (!mir_is_float_node(g, n->else_branch)) {
-                int u = (n->else_branch && n->else_branch->type && (n->else_branch->type->kind == HD_TYPE_U8 || n->else_branch->type->kind == HD_TYPE_U16 || n->else_branch->type->kind == HD_TYPE_U32 || n->else_branch->type->kind == HD_TYPE_U64));
-                else_val = wubu_mir_unop(g->prog, u ? MIR_DITOF_U : MIR_DITOF, else_val);
+                else_val = wubu_mir_unop(g->prog, else_unsigned ? MIR_DITOF_U : MIR_DITOF, else_val);
             }
         }
         wubu_mir_mov_to(g->prog, merge, else_val);
@@ -2562,12 +2581,8 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             }
             /* For ternary nodes, check if either branch is unsigned */
             if (!src_unsigned && n->child && n->child->kind == HD_AST_TERNARY) {
-                HDASTNode *tb = n->child->then_branch;
-                HDASTNode *eb = n->child->else_branch;
-                if ((tb && tb->type && (tb->type->kind == HD_TYPE_U8 || tb->type->kind == HD_TYPE_U16 ||
-                    tb->type->kind == HD_TYPE_U32 || tb->type->kind == HD_TYPE_U64)) ||
-                    (eb && eb->type && (eb->type->kind == HD_TYPE_U8 || eb->type->kind == HD_TYPE_U16 ||
-                    eb->type->kind == HD_TYPE_U32 || eb->type->kind == HD_TYPE_U64))) {
+                if (mir_is_unsigned_node(g, n->child->then_branch) ||
+                    mir_is_unsigned_node(g, n->child->else_branch)) {
                     src_unsigned = true;
                 }
             }
