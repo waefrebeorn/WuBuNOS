@@ -40,6 +40,7 @@ struct HDASTNode {
 
     /* For static storage class */
     int is_static;             /* 1 if this var_decl has static storage class */
+    int is_extern;             /* 1 if this var_decl has extern storage class */
 
     /* For extern_decl */
     char extern_c_name[HD_MAX_IDENT_LEN];

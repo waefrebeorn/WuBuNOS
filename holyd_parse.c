@@ -1486,8 +1486,11 @@ done_extern_params:
         return ext;
         } /* end extern "C" */
         /* extern variable declaration: extern type name; */
-        /* For JIT purposes, treat as a normal variable declaration */
-        return hd_parse_decl(p);
+        HDASTNode *decl = hd_parse_decl(p);
+        if (decl && decl->kind == HD_AST_VAR_DECL) {
+            decl->is_extern = 1;
+        }
+        return decl;
     }
 
     HDType *type = parse_type(p);

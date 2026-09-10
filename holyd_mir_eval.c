@@ -1044,6 +1044,15 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
             }
         }
         wubu_vr_t vr;
+        /* Handle extern declarations: don't create a new variable if it already exists */
+        if (n->is_extern) {
+            for (int i = g->n_vars - 1; i >= 0; i--) {
+                if (strcmp(g->vars[i].name, n->ident) == 0 && g->vars[i].addr != 0) {
+                    /* Variable already exists — skip allocation */
+                    goto extern_done;
+                }
+            }
+        }
         if (n->type && n->type->kind == HD_TYPE_F64)
             vr = mir_decl_var_float(g, n->ident);
         else
@@ -1099,6 +1108,7 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
                 }
             }
         }
+extern_done:
         if (n->init) {
             if (n->is_static && g->in_function_body) {
                 /* Static local: emit guard check + conditional init.
