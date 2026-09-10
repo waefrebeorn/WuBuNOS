@@ -2774,6 +2774,47 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                         if (size <= 0) size = 4;
                     }
                 }
+            } else if (n->child->kind == HD_AST_INDEX) {
+                /* sizeof(arr[i]): same as sizeof(arr[0]) — look up element type */
+                /* Traverse to find the root IDENT */
+                const HDASTNode *root = n->child;
+                while (root && root->kind == HD_AST_INDEX) root = root->left;
+                if (root && root->kind == HD_AST_IDENT) {
+                    for (int i = 0; i < g->n_vars; i++) {
+                        if (strcmp(g->vars[i].name, root->ident) == 0) {
+                            if (g->vars[i].is_array) {
+                                /* Array element size: use stride or 4 bytes for int */
+                                size = 4; /* int elements = 4 bytes */
+                            } else if (g->vars[i].type) {
+                                size = (int)hd_type_size(g->vars[i].type);
+                                if (size <= 0) size = 4;
+                            } else {
+                                size = 4;
+                            }
+                            break;
+                        }
+                    }
+                }
+                if (size <= 0) size = 4;
+            } else if (n->child->kind == HD_AST_DEREF) {
+                /* sizeof(*ptr) or sizeof(*arr): look up the pointed-to type */
+                const HDASTNode *deref_child = n->child->child;
+                if (deref_child && deref_child->kind == HD_AST_IDENT) {
+                    for (int i = 0; i < g->n_vars; i++) {
+                        if (strcmp(g->vars[i].name, deref_child->ident) == 0) {
+                            if (g->vars[i].is_array) {
+                                size = 4; /* int elements = 4 bytes */
+                            } else if (g->vars[i].type) {
+                                size = (int)hd_type_size(g->vars[i].type);
+                                if (size <= 0) size = 8;
+                            } else {
+                                size = 8;
+                            }
+                            break;
+                        }
+                    }
+                }
+                if (size <= 0) size = 8;
             } else if (n->child->kind == HD_AST_ASSIGN) {
                 /* sizeof(lhs = rhs): result type is the type of the LHS */
                 if (n->child->left && n->child->left->kind == HD_AST_IDENT) {
