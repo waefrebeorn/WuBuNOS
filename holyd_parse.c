@@ -1505,6 +1505,17 @@ done_extern_params:
 
     HDType *type = parse_type(p);
 
+    /* Handle storage class specifiers after type: "int static long x" */
+    int is_static = 0, is_extern = 0;
+    while (peek(p) == HD_KW_STATIC || peek(p) == HD_KW_EXTERN) {
+        if (match(p, HD_KW_STATIC)) { is_static = 1; }
+        else if (match(p, HD_KW_EXTERN)) { is_extern = 1; }
+        /* After static/extern, there may be more type specifiers like "long" */
+        if (peek(p) >= HD_KW_I0 && peek(p) <= HD_KW_VOLATILE) {
+            type = parse_type(p);
+        }
+    }
+
     /* Check if this is a struct/union/enum type definition without a variable name */
     if (type->kind == HD_TYPE_STRUCT || type->kind == HD_TYPE_UNION || type->kind == HD_TYPE_ENUM) {
         if (peek(p) == HD_TOK_SEMI) {
@@ -1831,6 +1842,8 @@ done_params:
     /* First declarator */
     HDASTNode *first_var = hd_ast_new(HD_AST_VAR_DECL);
     strncpy(first_var->ident, name, HD_MAX_IDENT_LEN - 1);
+    if (is_static) first_var->is_static = 1;
+    if (is_extern) first_var->is_extern = 1;
     int dbg_decl = 1;
 
     /* Array declarator: name[N][M]... or name[expr]... (VLA) */
