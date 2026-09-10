@@ -2709,6 +2709,31 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             if (n->child->kind == HD_AST_CHAR_LIT) {
                 /* In C, char literals have type int, so sizeof 'a' == 4 */
                 size = 4;
+            } else if (n->child->kind == HD_AST_ADD || n->child->kind == HD_AST_SUB ||
+                       n->child->kind == HD_AST_MUL || n->child->kind == HD_AST_DIV ||
+                       n->child->kind == HD_AST_MOD || n->child->kind == HD_AST_AND ||
+                       n->child->kind == HD_AST_OR || n->child->kind == HD_AST_BITXOR ||
+                       n->child->kind == HD_AST_SHL || n->child->kind == HD_AST_SHR ||
+                       n->child->kind == HD_AST_BITAND || n->child->kind == HD_AST_BITOR) {
+                /* sizeof(binary_op): use result type from usual arithmetic conversions */
+                HDType *rt = mir_binop_result_type(g, n->child->left, n->child->right);
+                if (rt) {
+                    size = (int)hd_type_size(rt);
+                    if (size <= 0) size = 4;
+                } else {
+                    /* 64-bit result */
+                    size = 8;
+                }
+            } else if (n->child->kind == HD_AST_NEG || n->child->kind == HD_AST_NOT ||
+                       n->child->kind == HD_AST_BITNOT) {
+                /* sizeof(unary_op): use operand type */
+                HDType *rt = mir_binop_result_type(g, n->child->child, n->child->child);
+                if (rt) {
+                    size = (int)hd_type_size(rt);
+                    if (size <= 0) size = 4;
+                } else {
+                    size = 8;
+                }
             } else if (n->child->kind == HD_AST_INT_LIT) {
                 /* Use the constant's type if available */
                 if (n->child->type) {
