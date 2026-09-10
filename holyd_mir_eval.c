@@ -3625,6 +3625,8 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
 
         /* Simple approach: emit comparisons inline */
         HDASTNode *body = n->body; /* BLOCK of CASE nodes */
+        int prev_break = -1;
+        int prev_loop_top = 0;
         if (body && body->kind == HD_AST_BLOCK) {
             /* Collect case values (skip default case — it has cond==NULL) */
             for (uint32_t i = 0; i < body->n_stmts; i++) {
@@ -3658,11 +3660,14 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             /* Jump to default if no case matched */
             wubu_mir_jmp(g->prog, default_label);
 
-            /* Push break label for break statements inside switch */
-            int prev_break = -1;
+            /* Push break label for break statements inside switch.
+             * Also preserve loop_top so continue inside switch
+             * jumps to the enclosing loop's continue label. */
             if (g->n_loops < MIRGEN_MAX_VARS) {
                 prev_break = g->loop_done[g->n_loops];
+                prev_loop_top = g->loop_top[g->n_loops];
                 g->loop_done[g->n_loops] = break_label;
+                g->loop_top[g->n_loops] = (g->n_loops > 0) ? g->loop_top[g->n_loops - 1] : 0;
                 g->n_loops++;
             }
 
@@ -3706,8 +3711,12 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 wubu_mir_place_label(g->prog, default_label);
             }
         }
-        /* Pop break label */
-        if (g->n_loops > 0) g->n_loops--;
+        /* Pop break label and restore loop_top/loop_done */
+        if (g->n_loops > 0) {
+            g->n_loops--;
+            g->loop_done[g->n_loops] = prev_break;
+            g->loop_top[g->n_loops] = prev_loop_top;
+        }
         wubu_mir_place_label(g->prog, break_label);
         return 0;
     }
