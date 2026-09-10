@@ -2488,22 +2488,10 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         wubu_mir_jz(g->prog, cond, else_label);
         wubu_vr_t merge = mir_new_vr(g);
         wubu_vr_t then_val = mir_gen_expr(g, n->then_branch);
-        /* Convert both branches to common type per C usual arithmetic conversions */
-        HDTypeKind ct = mir_common_cmp_type(g, n->then_branch, n->else_branch);
-        if (ct == HD_TYPE_U32) {
-            then_val = mir_truncate_to_type(g, then_val, &(HDType){.kind = HD_TYPE_U32, .size = 4});
-        } else if (ct == HD_TYPE_I32) {
-            then_val = mir_truncate_to_type(g, then_val, &(HDType){.kind = HD_TYPE_I32, .size = 4});
-        }
         wubu_mir_mov_to(g->prog, merge, then_val);
         wubu_mir_jmp(g->prog, end_label);
         wubu_mir_place_label(g->prog, else_label);
         wubu_vr_t else_val = mir_gen_expr(g, n->else_branch);
-        if (ct == HD_TYPE_U32) {
-            else_val = mir_truncate_to_type(g, else_val, &(HDType){.kind = HD_TYPE_U32, .size = 4});
-        } else if (ct == HD_TYPE_I32) {
-            else_val = mir_truncate_to_type(g, else_val, &(HDType){.kind = HD_TYPE_I32, .size = 4});
-        }
         wubu_mir_mov_to(g->prog, merge, else_val);
         wubu_mir_place_label(g->prog, end_label);
         return merge;
