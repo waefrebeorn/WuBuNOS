@@ -717,6 +717,44 @@ static HDType *mir_binop_result_type(HDMirGen *g, const HDASTNode *left, const H
     }
     return lt ? lt : rt;
 }
+/* Determine the common comparison type for two operands per C usual arithmetic conversions.
+ * Returns the type kind that both operands should be compared in. */
+static HDTypeKind mir_common_cmp_type(HDMirGen *g, const HDASTNode *left, const HDASTNode *right) {
+    HDType *lt = NULL, *rt = NULL;
+    if (left && left->type) lt = left->type;
+    if (right && right->type) rt = right->type;
+    if (!lt && left && left->kind == HD_AST_IDENT && left->ident[0]) {
+        for (int i = 0; i < g->n_vars; i++)
+            if (strcmp(g->vars[i].name, left->ident) == 0) { lt = g->vars[i].type; break; }
+    }
+    if (!rt && right && right->kind == HD_AST_IDENT && right->ident[0]) {
+        for (int i = 0; i < g->n_vars; i++)
+            if (strcmp(g->vars[i].name, right->ident) == 0) { rt = g->vars[i].type; break; }
+    }
+    if (!lt) lt = rt;
+    if (!rt) rt = lt;
+    if (!lt || !rt) return HD_TYPE_I32; /* default */
+    /* If either is 64-bit, common type is 64-bit */
+    int l64 = (lt->kind == HD_TYPE_I64 || lt->kind == HD_TYPE_U64);
+    int r64 = (rt->kind == HD_TYPE_I64 || rt->kind == HD_TYPE_U64);
+    if (l64 && r64) {
+        /* Both 64-bit: if either is unsigned, use unsigned */
+        if (lt->kind == HD_TYPE_U64 || rt->kind == HD_TYPE_U64) return HD_TYPE_U64;
+        return HD_TYPE_I64;
+    }
+    if (l64 || r64) {
+        /* One 64-bit, one 32-bit or smaller */
+        /* If the 64-bit type is signed, it can represent all values of the 32-bit type */
+        /* So common type is the 64-bit type */
+        if (l64) return lt->kind;
+        return rt->kind;
+    }
+    /* Both 32-bit or smaller: promote to int/unsigned int */
+    /* If either is unsigned int, use unsigned int */
+    if (lt->kind == HD_TYPE_U32 || rt->kind == HD_TYPE_U32) return HD_TYPE_U32;
+    return HD_TYPE_I32;
+}
+
 /* Evaluate the address-of-first-element of an lvalue. Returns a vr holding the
  * memory address (a value), suitable as the index into mem[].
  * - array IDENT  -> base address (a decays to &a[0])
@@ -2388,52 +2426,57 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
     case HD_AST_LT: {
         wubu_vr_t a = mir_gen_expr(g, n->left);
         wubu_vr_t b = mir_gen_expr(g, n->right);
-        wubu_mir_op_t op = (mir_operand_is_unsigned(g, n->left) || mir_operand_is_unsigned(g, n->right))
-                            ? MIR_ULT : MIR_LT;
+        /* Use common type to determine signedness per C usual arithmetic conversions */
+        HDTypeKind ct = mir_common_cmp_type(g, n->left, n->right);
+        int is_unsigned = (ct == HD_TYPE_U32 || ct == HD_TYPE_U64);
+        wubu_mir_op_t op = is_unsigned ? MIR_ULT : MIR_LT;
         op = mir_cmp_op(g, op, n->left, n->right);
-        HDType *ct = mir_binop_result_type(g, n->left, n->right);
-        if (ct && (ct->kind == HD_TYPE_I32 || ct->kind == HD_TYPE_U32)) {
-            a = mir_truncate_to_type(g, a, ct);
-            b = mir_truncate_to_type(g, b, ct);
+        HDType *rt = mir_binop_result_type(g, n->left, n->right);
+        if (rt && (rt->kind == HD_TYPE_I32 || rt->kind == HD_TYPE_U32)) {
+            a = mir_truncate_to_type(g, a, rt);
+            b = mir_truncate_to_type(g, b, rt);
         }
         return wubu_mir_binop(g->prog, op, a, b);
     }
     case HD_AST_LE: {
         wubu_vr_t a = mir_gen_expr(g, n->left);
         wubu_vr_t b = mir_gen_expr(g, n->right);
-        wubu_mir_op_t op = (mir_operand_is_unsigned(g, n->left) || mir_operand_is_unsigned(g, n->right))
-                            ? MIR_ULE : MIR_LE;
+        HDTypeKind ct = mir_common_cmp_type(g, n->left, n->right);
+        int is_unsigned = (ct == HD_TYPE_U32 || ct == HD_TYPE_U64);
+        wubu_mir_op_t op = is_unsigned ? MIR_ULE : MIR_LE;
         op = mir_cmp_op(g, op, n->left, n->right);
-        HDType *ct = mir_binop_result_type(g, n->left, n->right);
-        if (ct && (ct->kind == HD_TYPE_I32 || ct->kind == HD_TYPE_U32)) {
-            a = mir_truncate_to_type(g, a, ct);
-            b = mir_truncate_to_type(g, b, ct);
+        HDType *rt = mir_binop_result_type(g, n->left, n->right);
+        if (rt && (rt->kind == HD_TYPE_I32 || rt->kind == HD_TYPE_U32)) {
+            a = mir_truncate_to_type(g, a, rt);
+            b = mir_truncate_to_type(g, b, rt);
         }
         return wubu_mir_binop(g->prog, op, a, b);
     }
     case HD_AST_GT: {
         wubu_vr_t a = mir_gen_expr(g, n->left);
         wubu_vr_t b = mir_gen_expr(g, n->right);
-        wubu_mir_op_t op = (mir_operand_is_unsigned(g, n->left) || mir_operand_is_unsigned(g, n->right))
-                            ? MIR_UGT : MIR_GT;
+        HDTypeKind ct = mir_common_cmp_type(g, n->left, n->right);
+        int is_unsigned = (ct == HD_TYPE_U32 || ct == HD_TYPE_U64);
+        wubu_mir_op_t op = is_unsigned ? MIR_UGT : MIR_GT;
         op = mir_cmp_op(g, op, n->left, n->right);
-        HDType *ct = mir_binop_result_type(g, n->left, n->right);
-        if (ct && (ct->kind == HD_TYPE_I32 || ct->kind == HD_TYPE_U32)) {
-            a = mir_truncate_to_type(g, a, ct);
-            b = mir_truncate_to_type(g, b, ct);
+        HDType *rt = mir_binop_result_type(g, n->left, n->right);
+        if (rt && (rt->kind == HD_TYPE_I32 || rt->kind == HD_TYPE_U32)) {
+            a = mir_truncate_to_type(g, a, rt);
+            b = mir_truncate_to_type(g, b, rt);
         }
         return wubu_mir_binop(g->prog, op, a, b);
     }
     case HD_AST_GE: {
         wubu_vr_t a = mir_gen_expr(g, n->left);
         wubu_vr_t b = mir_gen_expr(g, n->right);
-        wubu_mir_op_t op = (mir_operand_is_unsigned(g, n->left) || mir_operand_is_unsigned(g, n->right))
-                            ? MIR_UGE : MIR_GE;
+        HDTypeKind ct = mir_common_cmp_type(g, n->left, n->right);
+        int is_unsigned = (ct == HD_TYPE_U32 || ct == HD_TYPE_U64);
+        wubu_mir_op_t op = is_unsigned ? MIR_UGE : MIR_GE;
         op = mir_cmp_op(g, op, n->left, n->right);
-        HDType *ct = mir_binop_result_type(g, n->left, n->right);
-        if (ct && (ct->kind == HD_TYPE_I32 || ct->kind == HD_TYPE_U32)) {
-            a = mir_truncate_to_type(g, a, ct);
-            b = mir_truncate_to_type(g, b, ct);
+        HDType *rt = mir_binop_result_type(g, n->left, n->right);
+        if (rt && (rt->kind == HD_TYPE_I32 || rt->kind == HD_TYPE_U32)) {
+            a = mir_truncate_to_type(g, a, rt);
+            b = mir_truncate_to_type(g, b, rt);
         }
         return wubu_mir_binop(g->prog, op, a, b);
     }
@@ -2445,10 +2488,22 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         wubu_mir_jz(g->prog, cond, else_label);
         wubu_vr_t merge = mir_new_vr(g);
         wubu_vr_t then_val = mir_gen_expr(g, n->then_branch);
+        /* Convert both branches to common type per C usual arithmetic conversions */
+        HDTypeKind ct = mir_common_cmp_type(g, n->then_branch, n->else_branch);
+        if (ct == HD_TYPE_U32) {
+            then_val = mir_truncate_to_type(g, then_val, &(HDType){.kind = HD_TYPE_U32, .size = 4});
+        } else if (ct == HD_TYPE_I32) {
+            then_val = mir_truncate_to_type(g, then_val, &(HDType){.kind = HD_TYPE_I32, .size = 4});
+        }
         wubu_mir_mov_to(g->prog, merge, then_val);
         wubu_mir_jmp(g->prog, end_label);
         wubu_mir_place_label(g->prog, else_label);
         wubu_vr_t else_val = mir_gen_expr(g, n->else_branch);
+        if (ct == HD_TYPE_U32) {
+            else_val = mir_truncate_to_type(g, else_val, &(HDType){.kind = HD_TYPE_U32, .size = 4});
+        } else if (ct == HD_TYPE_I32) {
+            else_val = mir_truncate_to_type(g, else_val, &(HDType){.kind = HD_TYPE_I32, .size = 4});
+        }
         wubu_mir_mov_to(g->prog, merge, else_val);
         wubu_mir_place_label(g->prog, end_label);
         return merge;
