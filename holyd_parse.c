@@ -538,10 +538,11 @@ static HDASTNode *parse_primary(HDParser *p) {
             {
                 HDType *t = (HDType *)calloc(1, sizeof(HDType));
                 int64_t v = n->int_val;
+                uint64_t uv = (uint64_t)v;  /* unsigned value for range checks */
                 if (p->lex->tok.is_unsigned && p->lex->tok.is_long) {
                     t->kind = HD_TYPE_U64; t->size = 8;
                 } else if (p->lex->tok.is_unsigned) {
-                    if (v <= (int64_t)0xFFFFFFFFULL) { t->kind = HD_TYPE_U32; t->size = 4; }
+                    if (uv <= 0xFFFFFFFFULL) { t->kind = HD_TYPE_U32; t->size = 4; }
                     else { t->kind = HD_TYPE_U64; t->size = 8; }
                 } else if (p->lex->tok.is_long) {
                     t->kind = HD_TYPE_I64; t->size = 8;
