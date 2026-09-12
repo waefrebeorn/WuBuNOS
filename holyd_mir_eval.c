@@ -2860,6 +2860,39 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 } else {
                     size = 8;
                 }
+            } else if (n->child->kind == HD_AST_PRE_INC ||
+                       n->child->kind == HD_AST_POST_INC ||
+                       n->child->kind == HD_AST_PRE_DEC ||
+                       n->child->kind == HD_AST_POST_DEC) {
+                /* sizeof(++expr/--expr): result type is operand type */
+                HDType *ot = NULL;
+                HDASTNode *operand = n->child->child ? n->child->child : n->child->left;
+                if (operand && operand->type) ot = operand->type;
+                if (!ot && operand && operand->kind == HD_AST_IDENT && operand->ident[0])
+                    ot = mir_find_var_type(g, operand->ident);
+                /* For array element access (INDEX), get the array's element type */
+                if (!ot && operand && operand->kind == HD_AST_INDEX && operand->left) {
+                    HDASTNode *arr = operand->left;
+                    if (arr->type && arr->type->kind == HD_TYPE_ARRAY && arr->type->base)
+                        ot = arr->type->base;
+                    if (!ot && arr->kind == HD_AST_IDENT && arr->ident[0]) {
+                        for (int vi = g->n_vars - 1; vi >= 0; vi--) {
+                            if (strcmp(g->vars[vi].name, arr->ident) == 0 && g->vars[vi].type) {
+                                if (g->vars[vi].type->kind == HD_TYPE_ARRAY && g->vars[vi].type->base)
+                                    ot = g->vars[vi].type->base;
+                                else if (g->vars[vi].type->base)
+                                    ot = g->vars[vi].type->base;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if (ot) {
+                    size = (int)hd_type_size(ot);
+                    if (size <= 0) size = 4;
+                } else {
+                    size = 8;
+                }
             } else if (n->child->kind == HD_AST_INT_LIT) {
                 /* Use the constant's type if available */
                 if (n->child->type) {
