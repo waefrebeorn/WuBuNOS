@@ -566,6 +566,8 @@ static bool mir_is_float_node(HDMirGen *g, const HDASTNode *n) {
         if (n->then_branch && mir_is_float_node(g, n->then_branch)) return true;
         if (n->else_branch && mir_is_float_node(g, n->else_branch)) return true;
     }
+    /* sizeof always returns an integer constant, never a float */
+    if (n->kind == HD_AST_SIZEOF) return false;
     if (n->type && n->type->kind == HD_TYPE_F64) return true;
     return false;
 }
@@ -1700,6 +1702,25 @@ static wubu_mir_op_t mir_cmp_op(HDMirGen *g, wubu_mir_op_t int_op,
     return int_op;
 }
 
+/* Check if a comparison op is a double/float op */
+static int mir_is_double_cmp(wubu_mir_op_t op) {
+    return (op == MIR_DLT || op == MIR_DLE || op == MIR_DGT || op == MIR_DGE ||
+            op == MIR_DEQ || op == MIR_DNE);
+}
+
+/* Promote operands to float if the comparison is a double comparison.
+ * This implements C usual arithmetic conversions for comparisons. */
+static void mir_promote_cmp_operands(HDMirGen *g, wubu_vr_t *a, wubu_vr_t *b,
+                                      const HDASTNode *left, const HDASTNode *right) {
+    int left_float = mir_is_float_node(g, left);
+    int right_float = mir_is_float_node(g, right);
+    if (left_float && !right_float) {
+        *b = mir_promote_to_float(g, *b, right);
+    } else if (!left_float && right_float) {
+        *a = mir_promote_to_float(g, *a, left);
+    }
+}
+
 static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
     if (!n) return 0;
     switch (n->kind) {
@@ -2498,6 +2519,8 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             b = mir_truncate_to_type(g, b, ct);
         }
         wubu_mir_op_t op = mir_cmp_op(g, MIR_EQ, n->left, n->right);
+        if (mir_is_double_cmp(op))
+            mir_promote_cmp_operands(g, &a, &b, n->left, n->right);
         return wubu_mir_binop(g->prog, op, a, b);
     }
     case HD_AST_NE: {
@@ -2509,6 +2532,8 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             b = mir_truncate_to_type(g, b, ct);
         }
         wubu_mir_op_t op = mir_cmp_op(g, MIR_NE, n->left, n->right);
+        if (mir_is_double_cmp(op))
+            mir_promote_cmp_operands(g, &a, &b, n->left, n->right);
         return wubu_mir_binop(g->prog, op, a, b);
     }
     case HD_AST_LT: {
@@ -2519,6 +2544,8 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         int is_unsigned = (ct == HD_TYPE_U32 || ct == HD_TYPE_U64);
         wubu_mir_op_t op = is_unsigned ? MIR_ULT : MIR_LT;
         op = mir_cmp_op(g, op, n->left, n->right);
+        if (mir_is_double_cmp(op))
+            mir_promote_cmp_operands(g, &a, &b, n->left, n->right);
         HDType *rt = mir_binop_result_type(g, n->left, n->right);
         if (rt && (rt->kind == HD_TYPE_I32 || rt->kind == HD_TYPE_U32)) {
             a = mir_truncate_to_type(g, a, rt);
@@ -2533,6 +2560,8 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         int is_unsigned = (ct == HD_TYPE_U32 || ct == HD_TYPE_U64);
         wubu_mir_op_t op = is_unsigned ? MIR_ULE : MIR_LE;
         op = mir_cmp_op(g, op, n->left, n->right);
+        if (mir_is_double_cmp(op))
+            mir_promote_cmp_operands(g, &a, &b, n->left, n->right);
         HDType *rt = mir_binop_result_type(g, n->left, n->right);
         if (rt && (rt->kind == HD_TYPE_I32 || rt->kind == HD_TYPE_U32)) {
             a = mir_truncate_to_type(g, a, rt);
@@ -2547,6 +2576,8 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         int is_unsigned = (ct == HD_TYPE_U32 || ct == HD_TYPE_U64);
         wubu_mir_op_t op = is_unsigned ? MIR_UGT : MIR_GT;
         op = mir_cmp_op(g, op, n->left, n->right);
+        if (mir_is_double_cmp(op))
+            mir_promote_cmp_operands(g, &a, &b, n->left, n->right);
         HDType *rt = mir_binop_result_type(g, n->left, n->right);
         if (rt && (rt->kind == HD_TYPE_I32 || rt->kind == HD_TYPE_U32)) {
             a = mir_truncate_to_type(g, a, rt);
@@ -2561,6 +2592,8 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         int is_unsigned = (ct == HD_TYPE_U32 || ct == HD_TYPE_U64);
         wubu_mir_op_t op = is_unsigned ? MIR_UGE : MIR_GE;
         op = mir_cmp_op(g, op, n->left, n->right);
+        if (mir_is_double_cmp(op))
+            mir_promote_cmp_operands(g, &a, &b, n->left, n->right);
         HDType *rt = mir_binop_result_type(g, n->left, n->right);
         if (rt && (rt->kind == HD_TYPE_I32 || rt->kind == HD_TYPE_U32)) {
             a = mir_truncate_to_type(g, a, rt);
