@@ -1153,7 +1153,7 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
         else
             vr = mir_decl_var_unsigned(g, n->ident, is_uns);
         /* Store the type for compound assignment type conversion */
-        for (int i = 0; i < g->n_vars; i++)
+        for (int i = g->n_vars - 1; i >= 0; i--)
             if (strcmp(g->vars[i].name, n->ident) == 0) { g->vars[i].type = n->type; break; }
         /* Allocate memory for the variable (arrays get arr_size cells, scalars 1, structs = total_size).
          * Use a HIGH VR for the address so it never collides with argument registers
@@ -1385,7 +1385,10 @@ extern_done:
                              var_k == HD_TYPE_I64 || var_k == HD_TYPE_U64) &&
                             init_k == HD_TYPE_F64) {
                             /* double -> int: convert */
-                            val = wubu_mir_unop(g->prog, MIR_DTOI, val);
+                            if (var_k == HD_TYPE_U64)
+                                val = wubu_mir_unop(g->prog, MIR_DTOI_U, val);
+                            else
+                                val = wubu_mir_unop(g->prog, MIR_DTOI, val);
                         } else if (var_k == HD_TYPE_F64 &&
                                    (init_k == HD_TYPE_I32 || init_k == HD_TYPE_I64 ||
                                     init_k == HD_TYPE_U32 || init_k == HD_TYPE_U64 ||
@@ -1501,7 +1504,12 @@ extern_done:
                     }
                 }
             }
-            if (child_is_float) val = wubu_mir_unop(g->prog, MIR_DTOI, val);
+            if (child_is_float) {
+                if (g->fn_ret_type->kind == HD_TYPE_U64)
+                    val = wubu_mir_unop(g->prog, MIR_DTOI_U, val);
+                else
+                    val = wubu_mir_unop(g->prog, MIR_DTOI, val);
+            }
         }
         /* If return type is double but value is integer, convert int -> double */
         if (g->fn_ret_type && g->fn_ret_type->kind == HD_TYPE_F64 && n->child) {
@@ -2002,7 +2010,10 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 k == HD_TYPE_I64 || k == HD_TYPE_U64) {
                 /* If RHS is a float, convert to int first */
                 if (rhs_type && rhs_type->kind == HD_TYPE_F64) {
-                    val = wubu_mir_unop(g->prog, MIR_DTOI, val);
+                    if (k == HD_TYPE_U64)
+                        val = wubu_mir_unop(g->prog, MIR_DTOI_U, val);
+                    else
+                        val = wubu_mir_unop(g->prog, MIR_DTOI, val);
                 }
                 val = mir_truncate_to_type(g, val, lhs_type);
             } else if (k == HD_TYPE_F64) {
