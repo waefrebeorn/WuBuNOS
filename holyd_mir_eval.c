@@ -1139,6 +1139,15 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
                 }
             }
         }
+        /* Handle static redeclarations: reuse existing variable if already declared */
+        if (n->is_static && !n->init) {
+            for (int i = g->n_vars - 1; i >= 0; i--) {
+                if (strcmp(g->vars[i].name, n->ident) == 0 && g->vars[i].addr != 0) {
+                    /* Variable already exists — skip allocation but update type */
+                    goto extern_done;
+                }
+            }
+        }
         if (n->type && n->type->kind == HD_TYPE_F64)
             vr = mir_decl_var_float(g, n->ident);
         else
