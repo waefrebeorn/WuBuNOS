@@ -2838,6 +2838,28 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 } else {
                     size = 8;
                 }
+            } else if (n->child->kind == HD_AST_ADD_ASSIGN ||
+                       n->child->kind == HD_AST_SUB_ASSIGN ||
+                       n->child->kind == HD_AST_MUL_ASSIGN ||
+                       n->child->kind == HD_AST_DIV_ASSIGN ||
+                       n->child->kind == HD_AST_MOD_ASSIGN ||
+                       n->child->kind == HD_AST_SHL_ASSIGN ||
+                       n->child->kind == HD_AST_SHR_ASSIGN ||
+                       n->child->kind == HD_AST_AMP_ASSIGN ||
+                       n->child->kind == HD_AST_PIPE_ASSIGN ||
+                       n->child->kind == HD_AST_CARET_ASSIGN ||
+                       n->child->kind == HD_AST_ASSIGN) {
+                /* sizeof(compound_assign): result type is LHS type */
+                HDType *lt = NULL;
+                if (n->child->left && n->child->left->type) lt = n->child->left->type;
+                if (!lt && n->child->left && n->child->left->kind == HD_AST_IDENT && n->child->left->ident[0])
+                    lt = mir_find_var_type(g, n->child->left->ident);
+                if (lt) {
+                    size = (int)hd_type_size(lt);
+                    if (size <= 0) size = 4;
+                } else {
+                    size = 8;
+                }
             } else if (n->child->kind == HD_AST_INT_LIT) {
                 /* Use the constant's type if available */
                 if (n->child->type) {
