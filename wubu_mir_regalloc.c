@@ -478,6 +478,16 @@ wubu_reg_assign_t *wubu_mir_alloc_regs(const wubu_mir_prog_t *p,
         }
     }
 
+    /* Assign unique spill slots to all spilled VRs that don't have one.
+     * VRs with reg=-1 and stack=0 share the spare_off slot, which causes
+     * corruption when multiple spilled VRs are live. Give each a unique slot. */
+    for (uint32_t v = 0; v < n_vr; v++) {
+        if (assign[v].reg < 0 && assign[v].stack == 0) {
+            assign[v].stack = -(next_spill_slot + 1) * 8;
+            next_spill_slot++;
+        }
+    }
+
     free(active);
     free(reg_vr);
     free(intervals);
