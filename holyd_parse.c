@@ -1319,6 +1319,11 @@ static HDASTNode *parse_stmt(HDParser *p) {
             HDASTNode *n = hd_ast_new(HD_AST_LABEL);
             strncpy(n->ident, saved_tok.text, HD_MAX_IDENT_LEN - 1);
             advance(p);          /* : */
+            /* Attach the following statement to the label */
+            HDASTNode *body = parse_stmt(p);
+            if (body) {
+                n->body = body;
+            }
             return n;
         }
         /* not a label: restore token + position to before `ident` */

@@ -3648,6 +3648,7 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             }
         }
         wubu_mir_place_label(g->prog, lbl);
+        if (n->body) mir_gen_stmt(g, n->body);
         return 0;
     }
     case HD_AST_GOTO: {
