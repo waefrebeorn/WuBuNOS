@@ -1136,17 +1136,14 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
         if (n->is_extern) {
             for (int i = 0; i < g->n_vars; i++) {
                 if (strcmp(g->vars[i].name, n->ident) == 0 && g->vars[i].addr != 0) {
-                    /* Variable already exists — remove any local shadowing entries
-                     * so that references resolve to this (global) variable */
-                    for (int j = g->n_vars - 1; j > i; j--) {
-                        if (strcmp(g->vars[j].name, n->ident) == 0) {
-                            /* Remove entry j by shifting all subsequent entries down */
-                            for (int k = j; k < g->n_vars - 1; k++)
-                                g->vars[k] = g->vars[k + 1];
-                            g->n_vars--;
-                        }
+                    /* Variable already exists — add a reference entry at the end
+                     * of the vars array so that references in this scope resolve
+                     * to it (even if a static local with the same name exists) */
+                    if (g->n_vars < MIRGEN_MAX_VARS) {
+                        g->vars[g->n_vars] = g->vars[i];  /* copy the global's var record */
+                        g->n_vars++;
                     }
-                    /* Variable already exists — skip allocation */
+                    /* Skip allocation */
                     goto extern_done;
                 }
             }
@@ -1164,9 +1161,13 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
             vr = mir_decl_var_float(g, n->ident);
         else
             vr = mir_decl_var_unsigned(g, n->ident, is_uns);
-        /* Store the type for compound assignment type conversion */
+        /* Store the type and is_static flag for compound assignment type conversion */
         for (int i = g->n_vars - 1; i >= 0; i--)
-            if (strcmp(g->vars[i].name, n->ident) == 0) { g->vars[i].type = n->type; break; }
+            if (strcmp(g->vars[i].name, n->ident) == 0) {
+                g->vars[i].type = n->type;
+                if (n->is_static) g->vars[i].is_static = 1;
+                break;
+            }
         /* Allocate memory for the variable (arrays get arr_size cells, scalars 1, structs = total_size).
          * Use a HIGH VR for the address so it never collides with argument registers
          * (v1..vN) or instruction-index VRs. */
