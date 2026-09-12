@@ -1130,10 +1130,22 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
             }
         }
         wubu_vr_t vr;
-        /* Handle extern declarations: don't create a new variable if it already exists */
+        /* Handle extern declarations: don't create a new variable if it already exists.
+         * Search from beginning (globals first) to find file-scope variables,
+         * since extern inside a function refers to globals, not locals. */
         if (n->is_extern) {
-            for (int i = g->n_vars - 1; i >= 0; i--) {
+            for (int i = 0; i < g->n_vars; i++) {
                 if (strcmp(g->vars[i].name, n->ident) == 0 && g->vars[i].addr != 0) {
+                    /* Variable already exists — remove any local shadowing entries
+                     * so that references resolve to this (global) variable */
+                    for (int j = g->n_vars - 1; j > i; j--) {
+                        if (strcmp(g->vars[j].name, n->ident) == 0) {
+                            /* Remove entry j by shifting all subsequent entries down */
+                            for (int k = j; k < g->n_vars - 1; k++)
+                                g->vars[k] = g->vars[k + 1];
+                            g->n_vars--;
+                        }
+                    }
                     /* Variable already exists — skip allocation */
                     goto extern_done;
                 }
