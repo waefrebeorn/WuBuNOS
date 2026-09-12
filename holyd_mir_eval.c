@@ -154,7 +154,14 @@ static wubu_vr_t mir_find_var(HDMirGen *g, const char *name) {
 static wubu_vr_t mir_find_var_addr(HDMirGen *g, const char *name) {
     /* Search from end to find the most recent declaration (shadowing) */
     for (int i = g->n_vars - 1; i >= 0; i--)
-        if (strcmp(g->vars[i].name, name) == 0) return g->vars[i].addr;
+        if (strcmp(g->vars[i].name, name) == 0) {
+            if (strcmp(name, "i") == 0) {
+                fprintf(stderr, "[DBG] mir_find_var_addr('i') → idx %d addr=%lld n_vars=%d\n", i, (long long)g->vars[i].addr, g->n_vars);
+                for (int j = 0; j < g->n_vars; j++)
+                    fprintf(stderr, "[DBG]   var[%d]='%s' addr=%lld is_static=%d\n", j, g->vars[j].name, (long long)g->vars[j].addr, g->vars[j].is_static);
+            }
+            return g->vars[i].addr;
+        }
     return 0;
 }
 
@@ -1151,8 +1158,8 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
         /* Handle static redeclarations: reuse existing variable if already declared */
         if (n->is_static && !n->init) {
             for (int i = g->n_vars - 1; i >= 0; i--) {
-                if (strcmp(g->vars[i].name, n->ident) == 0 && g->vars[i].addr != 0) {
-                    /* Variable already exists — skip allocation but update type */
+                if (strcmp(g->vars[i].name, n->ident) == 0 && g->vars[i].addr != 0 && g->vars[i].is_static) {
+                    /* Static variable already exists — skip allocation but update type */
                     goto extern_done;
                 }
             }
@@ -1165,7 +1172,10 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
         for (int i = g->n_vars - 1; i >= 0; i--)
             if (strcmp(g->vars[i].name, n->ident) == 0) {
                 g->vars[i].type = n->type;
-                if (n->is_static) g->vars[i].is_static = 1;
+                if (n->is_static) {
+                    g->vars[i].is_static = 1;
+                    fprintf(stderr, "[DBG] static local '%s' created at idx %d addr=%lld\n", n->ident, i, (long long)g->vars[i].addr);
+                }
                 break;
             }
         /* Allocate memory for the variable (arrays get arr_size cells, scalars 1, structs = total_size).
