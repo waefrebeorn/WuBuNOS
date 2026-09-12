@@ -2782,20 +2782,51 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                      (n->child->else_branch->type->kind == HD_TYPE_I64 || n->child->else_branch->type->kind == HD_TYPE_U64))) {
                     size = 8;
                 }
+            } else if (n->child->kind == HD_AST_SHL || n->child->kind == HD_AST_SHR) {
+                /* sizeof(shift): result type is left operand type (after promotion) */
+                HDType *lt = NULL;
+                if (n->child->left && n->child->left->type) lt = n->child->left->type;
+                if (!lt && n->child->left && n->child->left->kind == HD_AST_IDENT && n->child->left->ident[0]) {
+                    for (int i = g->n_vars - 1; i >= 0; i--)
+                        if (strcmp(g->vars[i].name, n->child->left->ident) == 0) { lt = g->vars[i].type; break; }
+                }
+                if (lt && (lt->kind == HD_TYPE_I8 || lt->kind == HD_TYPE_U8 ||
+                           lt->kind == HD_TYPE_I16 || lt->kind == HD_TYPE_U16)) {
+                    size = 4; /* char/short promoted to int */
+                } else if (lt) {
+                    size = (int)hd_type_size(lt);
+                    if (size <= 0) size = 4;
+                } else {
+                    size = 8;
+                }
             } else if (n->child->kind == HD_AST_ADD || n->child->kind == HD_AST_SUB ||
                        n->child->kind == HD_AST_MUL || n->child->kind == HD_AST_DIV ||
                        n->child->kind == HD_AST_MOD || n->child->kind == HD_AST_AND ||
                        n->child->kind == HD_AST_OR || n->child->kind == HD_AST_BITXOR ||
-                       n->child->kind == HD_AST_SHL || n->child->kind == HD_AST_SHR ||
                        n->child->kind == HD_AST_BITAND || n->child->kind == HD_AST_BITOR) {
                 /* sizeof(binary_op): use result type from usual arithmetic conversions */
-                HDType *rt = mir_binop_result_type(g, n->child->left, n->child->right);
-                if (rt) {
-                    size = (int)hd_type_size(rt);
-                    if (size <= 0) size = 4;
+                /* Check if both operands are 8/16-bit (promoted to int) */
+                HDType *olt = NULL, *ort = NULL;
+                if (n->child->left && n->child->left->type) olt = n->child->left->type;
+                if (!olt && n->child->left && n->child->left->kind == HD_AST_IDENT && n->child->left->ident[0])
+                    olt = mir_find_var_type(g, n->child->left->ident);
+                if (n->child->right && n->child->right->type) ort = n->child->right->type;
+                if (!ort && n->child->right && n->child->right->kind == HD_AST_IDENT && n->child->right->ident[0])
+                    ort = mir_find_var_type(g, n->child->right->ident);
+                if (olt && (olt->kind == HD_TYPE_I8 || olt->kind == HD_TYPE_U8 ||
+                            olt->kind == HD_TYPE_I16 || olt->kind == HD_TYPE_U16) &&
+                    ort && (ort->kind == HD_TYPE_I8 || ort->kind == HD_TYPE_U8 ||
+                            ort->kind == HD_TYPE_I16 || ort->kind == HD_TYPE_U16)) {
+                    size = 4; /* both promoted to int */
                 } else {
-                    /* 64-bit result */
-                    size = 8;
+                    HDType *rt = mir_binop_result_type(g, n->child->left, n->child->right);
+                    if (rt) {
+                        size = (int)hd_type_size(rt);
+                        if (size <= 0) size = 4;
+                    } else {
+                        /* 64-bit result */
+                        size = 8;
+                    }
                 }
             } else if (n->child->kind == HD_AST_NEG || n->child->kind == HD_AST_NOT ||
                        n->child->kind == HD_AST_BITNOT) {
