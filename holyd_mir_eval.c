@@ -1582,6 +1582,11 @@ extern_done:
         wubu_vr_t cond = mir_gen_expr(g, n->cond);
         uint32_t else_label = wubu_mir_new_label(g->prog);
         uint32_t end_label = wubu_mir_new_label(g->prog);
+        /* For float conditions, use floating-point comparison with 0.0
+         * so that -0.0 is correctly treated as falsy */
+        if (mir_is_float_node(g, n->cond)) {
+            cond = wubu_mir_binop(g->prog, MIR_DNE, cond, wubu_mir_const(g->prog, 0));
+        }
         wubu_mir_jz(g->prog, cond, else_label);
         wubu_vr_t merge = mir_new_vr(g);
         wubu_vr_t then_val = mir_gen_stmt(g, n->then_branch);
@@ -2357,10 +2362,22 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         wubu_vr_t a = mir_gen_expr(g, n->left);
         uint32_t lbl_false = wubu_mir_new_label(g->prog);
         uint32_t lbl_end = wubu_mir_new_label(g->prog);
-        wubu_vr_t za = wubu_mir_binop(g->prog, MIR_NE, a, wubu_mir_const(g->prog, 0));
+        /* For float operands, use floating-point comparison with 0.0
+         * so that -0.0 is correctly treated as falsy */
+        wubu_vr_t za;
+        if (mir_is_float_node(g, n->left)) {
+            za = wubu_mir_binop(g->prog, MIR_DNE, a, wubu_mir_const(g->prog, 0));
+        } else {
+            za = wubu_mir_binop(g->prog, MIR_NE, a, wubu_mir_const(g->prog, 0));
+        }
         wubu_mir_jz(g->prog, za, lbl_false);
         wubu_vr_t b = mir_gen_expr(g, n->right);
-        wubu_vr_t zb = wubu_mir_binop(g->prog, MIR_NE, b, wubu_mir_const(g->prog, 0));
+        wubu_vr_t zb;
+        if (mir_is_float_node(g, n->right)) {
+            zb = wubu_mir_binop(g->prog, MIR_DNE, b, wubu_mir_const(g->prog, 0));
+        } else {
+            zb = wubu_mir_binop(g->prog, MIR_NE, b, wubu_mir_const(g->prog, 0));
+        }
         wubu_vr_t merge = mir_new_vr(g);
         wubu_mir_mov_to(g->prog, merge, zb);
         wubu_mir_jmp(g->prog, lbl_end);
@@ -2382,10 +2399,22 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         wubu_vr_t a = mir_gen_expr(g, n->left);
         uint32_t lbl_true = wubu_mir_new_label(g->prog);
         uint32_t lbl_end = wubu_mir_new_label(g->prog);
-        wubu_vr_t za = wubu_mir_binop(g->prog, MIR_NE, a, wubu_mir_const(g->prog, 0));
+        /* For float operands, use floating-point comparison with 0.0
+         * so that -0.0 is correctly treated as falsy */
+        wubu_vr_t za;
+        if (mir_is_float_node(g, n->left)) {
+            za = wubu_mir_binop(g->prog, MIR_DNE, a, wubu_mir_const(g->prog, 0));
+        } else {
+            za = wubu_mir_binop(g->prog, MIR_NE, a, wubu_mir_const(g->prog, 0));
+        }
         wubu_mir_jnz(g->prog, za, lbl_true);
         wubu_vr_t b = mir_gen_expr(g, n->right);
-        wubu_vr_t zb = wubu_mir_binop(g->prog, MIR_NE, b, wubu_mir_const(g->prog, 0));
+        wubu_vr_t zb;
+        if (mir_is_float_node(g, n->right)) {
+            zb = wubu_mir_binop(g->prog, MIR_DNE, b, wubu_mir_const(g->prog, 0));
+        } else {
+            zb = wubu_mir_binop(g->prog, MIR_NE, b, wubu_mir_const(g->prog, 0));
+        }
         wubu_vr_t merge = mir_new_vr(g);
         wubu_mir_mov_to(g->prog, merge, zb);
         wubu_mir_jmp(g->prog, lbl_end);
