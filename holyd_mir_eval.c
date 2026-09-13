@@ -1042,9 +1042,11 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
     case HD_AST_STRUCT_DECL: {
         /* Register the struct type and its member offsets.
          * Member info is in n->type (HDType) which has members[]. */
-        if (g->n_structs < MAX_STRUCTS && n->ident[0]) {
+        /* Struct name may be in n->type->name instead of n->ident */
+        const char *sname = n->ident[0] ? n->ident : (n->type && n->type->name[0] ? n->type->name : NULL);
+        if (g->n_structs < MAX_STRUCTS && sname) {
             mir_struct_t *s = &g->structs[g->n_structs++];
-            strncpy(s->name, n->ident, HD_MAX_IDENT_LEN - 1);
+            strncpy(s->name, sname, HD_MAX_IDENT_LEN - 1);
             s->name[HD_MAX_IDENT_LEN - 1] = '\0';
             s->n_members = 0;
             s->total_size = 0;
@@ -1077,15 +1079,11 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
                 is_uns = 1;
             /* array type carries an element count in n->type->array_size */
             if (k == HD_TYPE_ARRAY && n->type->array_size > 0) {
-                arr_size = (int)n->type->array_size;
-                /* For struct arrays, multiply by struct element size */
-                if (n->type->base && n->type->base->kind == HD_TYPE_STRUCT) {
-                    int elem_cells = 0;
-                    mir_struct_t *elem_st = mir_find_struct(g, n->type->base->name);
-                    if (elem_st) elem_cells = elem_st->total_size;
-                    if (elem_cells > 1) arr_size *= elem_cells;
-                    else arr_size *= 1;
-                }
+                /* Compute total bytes for the array, then convert to cells */
+                int elem_sz = (int)hd_type_size(n->type->base);
+                if (elem_sz < 1) elem_sz = 1;
+                int total_bytes = elem_sz * (int)n->type->array_size;
+                arr_size = (total_bytes + 7) / 8; /* number of 8-byte cells */
             }
             if (k == HD_TYPE_PTR && n->type->base &&
                 (n->type->base->kind == HD_TYPE_STRUCT || n->type->base->kind == HD_TYPE_UNION)) {
@@ -1342,13 +1340,15 @@ extern_done:
                             n->type->members[e].type &&
                             n->type->members[e].type->kind == HD_TYPE_STRUCT);
                         if (member_is_struct && elem->kind == HD_AST_IDENT) {
-                            int src_cells = (int)n->type->members[e].type->size; /* already in cells */
-                            int dst_offset = offset;
+                            int src_bytes = (int)n->type->members[e].type->size; /* size in bytes */
+                            int src_cells = (src_bytes + 7) / 8; /* number of 8-byte cells */
+                            int dst_offset = offset; /* already in bytes */
                             wubu_vr_t src_addr = mir_find_var_addr(g, elem->ident);
                             if (src_addr > 0 && src_cells > 0) {
                                 for (int m = 0; m < src_cells; m++) {
-                                    wubu_vr_t src_elem_addr = wubu_mir_binop(g->prog, MIR_ADD, src_addr, wubu_mir_const(g->prog, (int64_t)m));
-                                    wubu_vr_t dst_elem_addr = wubu_mir_binop(g->prog, MIR_ADD, addr, wubu_mir_const(g->prog, (int64_t)(dst_offset + m)));
+                                    int byte_off = m * 8;
+                                    wubu_vr_t src_elem_addr = wubu_mir_binop(g->prog, MIR_ADD, src_addr, wubu_mir_const(g->prog, (int64_t)byte_off));
+                                    wubu_vr_t dst_elem_addr = wubu_mir_binop(g->prog, MIR_ADD, addr, wubu_mir_const(g->prog, (int64_t)(dst_offset + byte_off)));
                                     wubu_mir_store(g->prog, dst_elem_addr, wubu_mir_load(g->prog, src_elem_addr));
                                 }
                                 continue;
@@ -1383,9 +1383,12 @@ extern_done:
                     if (src_name) {
                         wubu_vr_t src_addr = mir_find_var_addr(g, src_name);
                         if (src_addr > 0 && arr_size > 0) {
-                            for (int m = 0; m < arr_size; m++) {
-                                wubu_vr_t src_elem = wubu_mir_binop(g->prog, MIR_ADD, src_addr, wubu_mir_const(g->prog, (int64_t)m));
-                                wubu_vr_t dst_elem = wubu_mir_binop(g->prog, MIR_ADD, addr, wubu_mir_const(g->prog, (int64_t)m));
+                            /* arr_size is in cells; copy 8 bytes per cell */
+                            int n_cells = arr_size;
+                            for (int m = 0; m < n_cells; m++) {
+                                int byte_off = m * 8;
+                                wubu_vr_t src_elem = wubu_mir_binop(g->prog, MIR_ADD, src_addr, wubu_mir_const(g->prog, (int64_t)byte_off));
+                                wubu_vr_t dst_elem = wubu_mir_binop(g->prog, MIR_ADD, addr, wubu_mir_const(g->prog, (int64_t)byte_off));
                                 wubu_mir_store(g->prog, dst_elem, wubu_mir_load(g->prog, src_elem));
                             }
                         } else if (src_addr == 0) {
@@ -1401,9 +1404,11 @@ extern_done:
                     } else {
                         wubu_vr_t val = mir_gen_expr(g, n->init);
                         if (arr_size > 0 && val != 0) {
-                            for (int m = 0; m < arr_size; m++) {
-                                wubu_vr_t src_elem = wubu_mir_binop(g->prog, MIR_ADD, val, wubu_mir_const(g->prog, (int64_t)m));
-                                wubu_vr_t dst_elem = wubu_mir_binop(g->prog, MIR_ADD, addr, wubu_mir_const(g->prog, (int64_t)m));
+                            int n_cells = arr_size;
+                            for (int m = 0; m < n_cells; m++) {
+                                int byte_off = m * 8;
+                                wubu_vr_t src_elem = wubu_mir_binop(g->prog, MIR_ADD, val, wubu_mir_const(g->prog, (int64_t)byte_off));
+                                wubu_vr_t dst_elem = wubu_mir_binop(g->prog, MIR_ADD, addr, wubu_mir_const(g->prog, (int64_t)byte_off));
                                 wubu_mir_store(g->prog, dst_elem, wubu_mir_load(g->prog, src_elem));
                             }
                         } else {
@@ -1980,6 +1985,7 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 }
             }
             if (struct_size > 0) {
+                /* struct_size is in CELLS (8 bytes each) */
                 /* Get source address: if RHS is a call returning struct, val is the source addr.
                  * If RHS is a struct IDENT, we need its address instead. */
                 wubu_vr_t src_addr;
@@ -1989,22 +1995,24 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                     /* val IS the source address (from call return or struct expr) */
                     src_addr = val;
                 }
-                /* Copy struct_size words from src_addr to addr.
-                 * Loop while i < struct_size: jz exits when (i < struct_size) == 0,
-                 * i.e. when i >= struct_size. */
+                /* Copy struct_size BYTES from src_addr to addr.
+                 * Copy 8 bytes (one int64 cell) at a time, incrementing by 8 each iteration. */
                 wubu_vr_t src_base = mir_new_vr(g);
                 wubu_mir_mov_to(g->prog, src_base, src_addr);
                 wubu_vr_t dst_base = mir_new_vr(g);
                 wubu_mir_mov_to(g->prog, dst_base, addr);
+                /* struct_size is in CELLS (8 bytes each) */
+                int n_cells = struct_size;
                 wubu_vr_t i_vr = mir_new_vr(g);
-                wubu_mir_const_to(g->prog, i_vr, 0);
+                wubu_mir_const_to(g->prog, i_vr, 0); /* cell index */
                 uint32_t copy_label = wubu_mir_new_label(g->prog);
                 uint32_t end_label = wubu_mir_new_label(g->prog);
                 wubu_mir_place_label(g->prog, copy_label);
-                /* jnz exits when (i >= struct_size) — i.e. loop is done. */
-                wubu_mir_jnz(g->prog, wubu_mir_binop(g->prog, MIR_GE, i_vr, wubu_mir_const(g->prog, (int64_t)struct_size)), end_label);
-                wubu_vr_t src_ptr = wubu_mir_binop(g->prog, MIR_ADD, src_base, i_vr);
-                wubu_vr_t dst_ptr = wubu_mir_binop(g->prog, MIR_ADD, dst_base, i_vr);
+                wubu_mir_jnz(g->prog, wubu_mir_binop(g->prog, MIR_GE, i_vr, wubu_mir_const(g->prog, (int64_t)n_cells)), end_label);
+                /* byte offset = cell_index * 8 */
+                wubu_vr_t byte_off = wubu_mir_binop(g->prog, MIR_MUL, i_vr, wubu_mir_const(g->prog, 8));
+                wubu_vr_t src_ptr = wubu_mir_binop(g->prog, MIR_ADD, src_base, byte_off);
+                wubu_vr_t dst_ptr = wubu_mir_binop(g->prog, MIR_ADD, dst_base, byte_off);
                 wubu_vr_t data = wubu_mir_load(g->prog, src_ptr);
                 wubu_mir_store(g->prog, dst_ptr, data);
                 wubu_mir_mov_to(g->prog, i_vr, wubu_mir_binop(g->prog, MIR_ADD, i_vr, wubu_mir_const(g->prog, 1)));
