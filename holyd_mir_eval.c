@@ -92,6 +92,7 @@ typedef struct {
     int n_enum_consts;
     int cl_counter;          /* compound literal temp var counter */
     int local_stack_offset;  /* next local stack offset for compound literals */
+    int array_elements_pending; /* element count for array being declared */
 } HDMirGen;
 
 static wubu_vr_t mir_new_vr(HDMirGen *g) {
@@ -782,23 +783,8 @@ static int mir_index_stride(HDMirGen *g, const HDASTNode *n) {
     /* Look up the variable in the symbol table */
     for (int i = 0; i < g->n_vars; i++) {
         if (strcmp(g->vars[i].name, root->ident) == 0 && g->vars[i].is_array) {
-            /* For struct arrays, stride = struct size in bytes */
-            if (g->vars[i].is_struct) {
-                mir_struct_t *st = mir_find_struct(g, g->vars[i].struct_name);
-                if (st && st->total_size > 0) return st->total_size * 8; /* cells → bytes */
-            }
-            /* For non-struct arrays, stride = element size in bytes */
-            if (root->type && root->type->kind == HD_TYPE_ARRAY && root->type->base) {
-                if (root->type->base->kind == HD_TYPE_STRUCT) {
-                    mir_struct_t *st = mir_find_struct(g, root->type->base->name);
-                    if (st && st->total_size > 0) return st->total_size * 8; /* cells → bytes */
-                }
-                /* For non-struct arrays, element size = hd_type_size bytes */
-                int elem_sz = (int)hd_type_size(root->type->base);
-                if (elem_sz < 1) elem_sz = 1;
-                return elem_sz;
-            }
-            return 8; /* default: 1 cell = 8 bytes */
+            /* Arrays are allocated with 1 cell per element, so stride = 8 */
+            return 8;
         }
     }
     return 8; /* default: 1 cell = 8 bytes */
@@ -843,7 +829,6 @@ static wubu_vr_t mir_address_of(HDMirGen *g, const HDASTNode *n) {
             wubu_vr_t base = mir_find_var_addr(g, varname);
             const char *struct_type = mir_find_var_struct_name(g, varname);
             int offset = mir_struct_member_offset(g, struct_type ? struct_type : "", n->ident);
-            fprintf(stderr, "[DBG] DOT: var=%s member=%s offset=%d\n", varname, n->ident, offset);
             if (offset < 0) return 0;
             wubu_vr_t member_addr = wubu_mir_binop(g->prog, MIR_ADD, base, wubu_mir_const(g->prog, (int64_t)offset));
             return member_addr;
@@ -1077,11 +1062,10 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
                 is_uns = 1;
             /* array type carries an element count in n->type->array_size */
             if (k == HD_TYPE_ARRAY && n->type->array_size > 0) {
-                /* Compute total bytes for the array */
-                int elem_sz = (int)hd_type_size(n->type->base);
-                if (elem_sz < 1) elem_sz = 1;
-                int total_bytes = elem_sz * (int)n->type->array_size;
-                arr_size = (total_bytes + 7) / 8; /* number of 8-byte cells */
+                /* Allocate 1 cell per element to avoid overlap from int64 stores.
+                 * TODO: add width-aware LOAD/STORE for packed arrays. */
+                arr_size = (int)n->type->array_size;
+                g->array_elements_pending = arr_size;
             }
             if (k == HD_TYPE_PTR && n->type->base &&
                 (n->type->base->kind == HD_TYPE_STRUCT || n->type->base->kind == HD_TYPE_UNION)) {
@@ -1267,6 +1251,7 @@ extern_done:
                 if (arr_size == 0 && n_elems > 0) {
                     arr_size = n_elems;
                     addr = wubu_mir_alloc(g->prog, arr_size);
+                    g->array_elements_pending = n_elems;
                     for (int i = 0; i < g->n_vars; i++)
                         if (strcmp(g->vars[i].name, n->ident) == 0) {
                             g->vars[i].addr = addr;
@@ -1276,8 +1261,9 @@ extern_done:
                             break;
                         }
                 }
-                for (uint32_t e = 0; e < n->init->n_args && e < (uint32_t)arr_size; e++) {
-                    int offset = (int)e; /* default: sequential */
+                int n_array_elems = g->array_elements_pending > 0 ? g->array_elements_pending : arr_size;
+                for (uint32_t e = 0; e < n->init->n_args && e < (uint32_t)n_array_elems; e++) {
+                    int offset = (int)e * 8; /* each element is 1 cell (8 bytes) */
                     /* For structs, use the actual member byte offset, not sequential. */
                     if (is_struct_var) {
                         if (struct_type_name[0]) {
@@ -1959,7 +1945,6 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         else if (n->left && n->left->kind == HD_AST_IDENT && n->left->ident[0])
             left_is_struct = mir_var_is_struct(g, n->left->ident);
         if (addr) {
-            fprintf(stderr, "[DBG] assign: left=%s addr=%lld left_is_struct=%d\n", n->left->ident, (long long)addr, left_is_struct);
         }
         if (addr && left_is_struct) {
             /* Get the size of the struct */
@@ -1978,7 +1963,6 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             if (struct_name) {
                 mir_struct_t *s = mir_find_struct(g, struct_name);
                 if (s) struct_size = s->total_size;
-                fprintf(stderr, "[DBG] struct copy: name=%s size=%d\n", struct_name, struct_size);
             }
             /* Fallback: if struct_name lookup failed but we know it's a struct
              * from the var table, try to get size from the var's array_size */
@@ -2005,7 +1989,6 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 wubu_mir_mov_to(g->prog, src_base, src_addr);
                 wubu_vr_t dst_base = mir_new_vr(g);
                 wubu_mir_mov_to(g->prog, dst_base, addr);
-                fprintf(stderr, "[DBG] struct copy: src_addr=%lld dst_addr=%lld size=%d\n", (long long)src_addr, (long long)addr, struct_size);
                 wubu_vr_t i_vr = mir_new_vr(g);
                 wubu_mir_const_to(g->prog, i_vr, 0); /* cell index */
                 uint32_t copy_label = wubu_mir_new_label(g->prog);
