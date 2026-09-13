@@ -2428,12 +2428,30 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         wubu_vr_t a = mir_gen_expr(g, n->left);
         wubu_vr_t b = mir_gen_expr(g, n->right);
         /* Pointer subtraction: scale by pointee size in bytes */
+        int ptr_scale = 0;
         if (n->left && n->left->type && n->left->type->kind == HD_TYPE_PTR
             && n->left->type->base && n->left->type->base->kind != HD_TYPE_STRUCT) {
-            int scale = 8; /* arrays use 1 cell per element */
-            if (scale > 1)
-                b = wubu_mir_binop(g->prog, MIR_MUL, b, wubu_mir_const(g->prog, (int64_t)scale));
+            ptr_scale = 8; /* cell-based: 1 cell per element */
         }
+        /* Also check var table for pointer/array types */
+        if (ptr_scale == 0 && n->left && n->left->kind == HD_AST_IDENT && n->left->ident[0]) {
+            for (int i = 0; i < g->n_vars; i++) {
+                if (strcmp(g->vars[i].name, n->left->ident) == 0) {
+                    if (g->vars[i].type && g->vars[i].type->kind == HD_TYPE_PTR) {
+                        ptr_scale = 8;
+                    } else if (g->vars[i].is_array) {
+                        ptr_scale = 8;
+                    }
+                    break;
+                }
+            }
+        }
+        /* String literal - integer */
+        if (ptr_scale == 0 && n->left && n->left->kind == HD_AST_STRING_LIT) {
+            ptr_scale = 8;
+        }
+        if (ptr_scale > 1)
+            b = wubu_mir_binop(g->prog, MIR_MUL, b, wubu_mir_const(g->prog, (int64_t)ptr_scale));
         int is_float = (n->left && n->left->type && n->left->type->kind == HD_TYPE_F64) ||
                        (n->right && n->right->type && n->right->type->kind == HD_TYPE_F64) ||
                        (n->left && n->left->kind == HD_AST_IDENT && mir_find_var_is_float(g, n->left->ident)) ||
