@@ -4216,8 +4216,9 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
                 wubu_vr_t src_addr_vr = mir_new_vr(&g);
                 wubu_mir_mov_to(prog, src_addr_vr, (wubu_vr_t)(pi + 1));
                 for (int m = 0; m < param_struct_size; m++) {
-                    wubu_vr_t src_p = wubu_mir_binop(prog, MIR_ADD, src_addr_vr, wubu_mir_const(prog, (int64_t)m));
-                    wubu_vr_t dst_p = wubu_mir_binop(prog, MIR_ADD, addr, wubu_mir_const(prog, (int64_t)m));
+                    int byte_off = m * 8;
+                    wubu_vr_t src_p = wubu_mir_binop(prog, MIR_ADD, src_addr_vr, wubu_mir_const(prog, (int64_t)byte_off));
+                    wubu_vr_t dst_p = wubu_mir_binop(prog, MIR_ADD, addr, wubu_mir_const(prog, (int64_t)byte_off));
                     wubu_mir_store(prog, dst_p, wubu_mir_load(prog, src_p));
                 }
             } else {
