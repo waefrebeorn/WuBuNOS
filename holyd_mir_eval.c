@@ -776,18 +776,9 @@ static HDTypeKind mir_common_cmp_type(HDMirGen *g, const HDASTNode *left, const 
  * and looking up its array type. Returns the inner dimension size for
  * multi-dimensional arrays, or 1 for 1D arrays. */
 static int mir_index_stride(HDMirGen *g, const HDASTNode *n) {
-    /* Traverse left spine to find the root IDENT */
-    const HDASTNode *root = n;
-    while (root && root->kind == HD_AST_INDEX) root = root->left;
-    if (!root || root->kind != HD_AST_IDENT) return 8; /* default: 8 bytes */
-    /* Look up the variable in the symbol table */
-    for (int i = 0; i < g->n_vars; i++) {
-        if (strcmp(g->vars[i].name, root->ident) == 0 && g->vars[i].is_array) {
-            /* Arrays are allocated with 1 cell per element, so stride = 8 */
-            return 8;
-        }
-    }
-    return 8; /* default: 1 cell = 8 bytes */
+    /* All arrays and strings use 1 cell per element (8 bytes).
+     * This is consistent with the cell-based memory model. */
+    return 8;
 }
 static wubu_vr_t mir_lvalue_addr(HDMirGen *g, const HDASTNode *n); /* forward decl */
 
@@ -2319,7 +2310,7 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 mir_struct_t *st = mir_find_struct(g, n->left->type->base->name);
                 if (st && st->total_size > 0) ptr_scale = st->total_size * 8;
             } else if (n->left->type->base) {
-                /* Arrays use 1 cell per element, so scale by 8 */
+                /* Both arrays and strings use 1 cell per element, so scale by 8 */
                 ptr_scale = 8;
             }
         }
@@ -2331,9 +2322,7 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                         mir_struct_t *st = mir_find_struct(g, g->vars[i].struct_name);
                         if (st && st->total_size > 0) ptr_scale = st->total_size * 8;
                     } else if (g->vars[i].type && g->vars[i].type->kind == HD_TYPE_PTR) {
-                        /* Non-struct pointer: scale by element size.
-                         * Arrays are allocated with 1 cell per element, so
-                         * pointer arithmetic must also use 8 bytes per element. */
+                        /* Both arrays and strings use 1 cell per element, so scale by 8 */
                         ptr_scale = 8;
                     }
                     break;
@@ -2367,7 +2356,7 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         /* Pointer subtraction: scale by pointee size in bytes */
         if (n->left && n->left->type && n->left->type->kind == HD_TYPE_PTR
             && n->left->type->base && n->left->type->base->kind != HD_TYPE_STRUCT) {
-            int scale = 8; /* arrays use 1 cell per element */
+            int scale = 8; /* both arrays and strings use 1 cell per element */
             if (scale > 1)
                 b = wubu_mir_binop(g->prog, MIR_MUL, b, wubu_mir_const(g->prog, (int64_t)scale));
         }
@@ -3173,11 +3162,13 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         return wubu_mir_const(g->prog, (int64_t)size);
     }
     case HD_AST_STRING_LIT: {
-        /* Store string in memory and return address. */
+        /* Store string in memory and return address.
+         * Each character is stored in its own cell (8 bytes) for consistency
+         * with the cell-based memory model. */
         size_t len = strlen(n->str_val) + 1; /* include NUL */
         wubu_vr_t addr = wubu_mir_alloc(g->prog, (uint32_t)len);
         for (size_t i = 0; i < len; i++)
-            wubu_mir_store(g->prog, wubu_mir_binop(g->prog, MIR_ADD, addr, wubu_mir_const(g->prog, (int64_t)i)),
+            wubu_mir_store(g->prog, wubu_mir_binop(g->prog, MIR_ADD, addr, wubu_mir_const(g->prog, (int64_t)(i * 8))),
                            wubu_mir_const(g->prog, (int64_t)(unsigned char)n->str_val[i]));
         return addr;
     }
