@@ -2312,25 +2312,36 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
     case HD_AST_ADD: {
         wubu_vr_t a = mir_gen_expr(g, n->left);
         wubu_vr_t b = mir_gen_expr(g, n->right);
-        /* Pointer arithmetic: if left is a pointer to struct, scale right by struct size */
-        if (n->left && n->left->type && n->left->type->kind == HD_TYPE_PTR
-            && n->left->type->base && n->left->type->base->kind == HD_TYPE_STRUCT) {
-            mir_struct_t *st = mir_find_struct(g, n->left->type->base->name);
-            if (st && st->total_size > 1) {
-                b = wubu_mir_binop(g->prog, MIR_MUL, b, wubu_mir_const(g->prog, (int64_t)st->total_size));
+        /* Pointer arithmetic: scale by pointee size in bytes */
+        int ptr_scale = 0;
+        if (n->left && n->left->type && n->left->type->kind == HD_TYPE_PTR) {
+            if (n->left->type->base && n->left->type->base->kind == HD_TYPE_STRUCT) {
+                mir_struct_t *st = mir_find_struct(g, n->left->type->base->name);
+                if (st && st->total_size > 0) ptr_scale = st->total_size * 8;
+            } else if (n->left->type->base) {
+                /* Arrays use 1 cell per element, so scale by 8 */
+                ptr_scale = 8;
             }
         }
-        /* Also check var table for pointer types (IDENT nodes don't have type annotations) */
-        if (n->left && n->left->kind == HD_AST_IDENT && n->left->ident[0]) {
+        /* Also check var table for pointer types */
+        if (ptr_scale == 0 && n->left && n->left->kind == HD_AST_IDENT && n->left->ident[0]) {
             for (int i = 0; i < g->n_vars; i++) {
-                if (strcmp(g->vars[i].name, n->left->ident) == 0 && g->vars[i].is_ptr_struct) {
-                    mir_struct_t *st = mir_find_struct(g, g->vars[i].struct_name);
-                    if (st && st->total_size > 1) {
-                        b = wubu_mir_binop(g->prog, MIR_MUL, b, wubu_mir_const(g->prog, (int64_t)st->total_size));
+                if (strcmp(g->vars[i].name, n->left->ident) == 0) {
+                    if (g->vars[i].is_ptr_struct) {
+                        mir_struct_t *st = mir_find_struct(g, g->vars[i].struct_name);
+                        if (st && st->total_size > 0) ptr_scale = st->total_size * 8;
+                    } else if (g->vars[i].type && g->vars[i].type->kind == HD_TYPE_PTR) {
+                        /* Non-struct pointer: scale by element size.
+                         * Arrays are allocated with 1 cell per element, so
+                         * pointer arithmetic must also use 8 bytes per element. */
+                        ptr_scale = 8;
                     }
                     break;
                 }
             }
+        }
+        if (ptr_scale > 1) {
+            b = wubu_mir_binop(g->prog, MIR_MUL, b, wubu_mir_const(g->prog, (int64_t)ptr_scale));
         }
         /* Use float ops if either operand is F64 or a float variable */
         int is_float = (n->left && n->left->type && n->left->type->kind == HD_TYPE_F64) ||
@@ -2353,6 +2364,13 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
     case HD_AST_SUB: {
         wubu_vr_t a = mir_gen_expr(g, n->left);
         wubu_vr_t b = mir_gen_expr(g, n->right);
+        /* Pointer subtraction: scale by pointee size in bytes */
+        if (n->left && n->left->type && n->left->type->kind == HD_TYPE_PTR
+            && n->left->type->base && n->left->type->base->kind != HD_TYPE_STRUCT) {
+            int scale = 8; /* arrays use 1 cell per element */
+            if (scale > 1)
+                b = wubu_mir_binop(g->prog, MIR_MUL, b, wubu_mir_const(g->prog, (int64_t)scale));
+        }
         int is_float = (n->left && n->left->type && n->left->type->kind == HD_TYPE_F64) ||
                        (n->right && n->right->type && n->right->type->kind == HD_TYPE_F64) ||
                        (n->left && n->left->kind == HD_AST_IDENT && mir_find_var_is_float(g, n->left->ident)) ||
