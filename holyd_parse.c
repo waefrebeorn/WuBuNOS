@@ -400,13 +400,11 @@ static HDType *parse_type(HDParser *p) {
                                  * to ensure each element gets its own cell. */
                                 int member_cells;
                                 if (member_type->kind == HD_TYPE_ARRAY && member_type->base) {
-                                	/* Array member: total bytes = elem_size * array_size */
-                                	int elem_sz = (int)hd_type_size(member_type->base);
-                                	if (elem_sz < 1) elem_sz = 1;
-                                	int total_bytes = elem_sz * member_type->array_size;
-                                	member_cells = (total_bytes + 7) / 8;
+                                    int elem_cells = (int)((hd_type_size(member_type->base) + 7) / 8);
+                                    if (elem_cells < 1) elem_cells = 1;
+                                    member_cells = elem_cells * member_type->array_size;
                                 } else {
-                                	member_cells = (int)((msz + 7) / 8);
+                                    member_cells = (int)((msz + 7) / 8);
                                 }
                                 t->size += member_cells;
                             }
@@ -1406,9 +1404,8 @@ HDASTNode *hd_parse_decl(HDParser *p) {
      * for one-time initialization. */
     if (match(p, HD_KW_STATIC)) {
         HDASTNode *decl = hd_parse_decl(p);
-        if (decl && decl->kind == HD_AST_VAR_DECL) {
+        if (decl && decl->kind == HD_AST_VAR_DECL)
             decl->is_static = 1;
-        }
         return decl;
     }
 

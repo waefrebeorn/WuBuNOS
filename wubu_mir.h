@@ -242,7 +242,7 @@ typedef struct {
     uint32_t n_labels;           /* next label id */
     uint32_t n_args;             /* number of function arguments (v1..n_args) */
     int64_t total_mem;           /* number of int64 cells reserved via MIR_ALLOC */
-    uint8_t *mem;                /* byte-addressable memory (for tests/external init) */
+    int64_t *mem;                /* direct-access memory (for tests/external init) */
     wubu_vr_t next_vr_hi;        /* high-water mark of high-vr address slots (call convention) */
     wubu_mir_func_t funcs[MIR_MAX_FUNCTIONS];
     int n_funcs;
@@ -267,16 +267,6 @@ wubu_vr_t wubu_mir_binop(wubu_mir_prog_t *p, wubu_mir_op_t op,
                          wubu_vr_t a, wubu_vr_t b);
 /* Return a float vr (bits reinterpreted as f32 on float-less ISAs). */
 void     wubu_mir_fret(wubu_mir_prog_t *p, wubu_vr_t a);
-
-/* Byte-addressable memory helpers */
-static inline int64_t mem_load64(const uint8_t *mem, int64_t byte_addr) {
-    const int64_t *p = (const int64_t *)(mem + byte_addr);
-    return *p;
-}
-static inline void mem_store64(uint8_t *mem, int64_t byte_addr, int64_t val) {
-    int64_t *p = (int64_t *)(mem + byte_addr);
-    *p = val;
-}
 wubu_vr_t wubu_mir_unop(wubu_mir_prog_t *p, wubu_mir_op_t op, wubu_vr_t a);
 wubu_vr_t wubu_mir_mov(wubu_mir_prog_t *p, wubu_vr_t a);
 /* mov INTO a pre-chosen dst (phi-merge: both arms write the same vr) */

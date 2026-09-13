@@ -88,7 +88,7 @@ int64_t wubu_mir_interp(const wubu_mir_prog_t *p)
     int64_t mem_hi = p->total_mem;
     if ((int64_t)(p->next_vr_hi) - 1 > mem_hi) mem_hi = (int64_t)(p->next_vr_hi) - 1;
     int64_t mem_size = (mem_hi < 1) ? 1 : (mem_hi + 1);
-    uint8_t *mem = p->mem ? p->mem : (uint8_t *)calloc((size_t)mem_size, sizeof(int64_t));
+    int64_t *mem = p->mem ? p->mem : (int64_t *)calloc((size_t)mem_size, sizeof(int64_t));
     int alloc_mem = (p->mem == NULL);
     if (!mem) { free(vr); free(label_pc); return 0; }
 
@@ -98,7 +98,7 @@ int64_t wubu_mir_interp(const wubu_mir_prog_t *p)
     /* call stack: each frame saves the return pc plus a snapshot of the
      * register file and memory so calls (incl. recursion) are reentrant —
      * the canonical MIR uses absolute vrs shared across all invocations. */
-    typedef struct { size_t ret_pc; int64_t *vr_save; uint8_t *mem_save; } call_frame_t;
+    typedef struct { size_t ret_pc; int64_t *vr_save; int64_t *mem_save; } call_frame_t;
     call_frame_t call_stack[MIR_MAX_CALL_DEPTH];
     int call_sp = 0;
 
@@ -360,13 +360,13 @@ op_continue:
 op_store:
     {
         int64_t addr = vr[in->a];
-        if (addr >= 0 && addr < mem_size * 8) mem_store64(mem, addr, vr[in->b]);
+        if (addr >= 0 && addr < mem_size) mem[addr] = vr[in->b];
     }
     DISPATCH();
 op_load:
     {
         int64_t addr = vr[in->a];
-        vr[in->dst] = (addr >= 0 && addr < mem_size * 8) ? mem_load64(mem, addr) : 0;
+        vr[in->dst] = (addr >= 0 && addr < mem_size) ? mem[addr] : 0;
     }
     DISPATCH();
 op_alloc:
