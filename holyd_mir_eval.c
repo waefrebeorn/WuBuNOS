@@ -170,7 +170,7 @@ static int mir_struct_member_offset(HDMirGen *g, const char *struct_name, const 
     mir_struct_t *s = mir_find_struct(g, struct_name);
     if (!s) return -1;
     for (int i = 0; i < s->n_members; i++)
-        if (strcmp(s->member_names[i], member) == 0) return s->member_offsets[i];
+        if (strcmp(s->member_names[i], member) == 0) return s->member_offsets[i] * 8;  /* cell → byte */
     return -1;
 }
 
@@ -287,7 +287,7 @@ static mir_struct_t *mir_find_struct_by_size(HDMirGen *g, int size) {
 static int mir_struct_member_offset_by_index(HDMirGen *g, const char *struct_name, int index) {
     mir_struct_t *s = mir_find_struct(g, struct_name);
     if (!s || index < 0 || index >= s->n_members) return -1;
-    return s->member_offsets[index];
+    return s->member_offsets[index] * 8;  /* cell → byte */
 }
 static int mir_struct_member_is_unsigned(HDMirGen *g, const char *struct_name, const char *member) {
     mir_struct_t *s = mir_find_struct(g, struct_name);
@@ -783,25 +783,28 @@ static int mir_index_stride(HDMirGen *g, const HDASTNode *n) {
     for (int i = 0; i < g->n_vars; i++) {
         if (strcmp(g->vars[i].name, root->ident) == 0 && g->vars[i].is_array) {
             if (g->vars[i].array_stride > 1)
-                return g->vars[i].array_stride;
+                return g->vars[i].array_stride * 8;  /* cell stride → byte stride */
             /* For arrays with element size > 1 cell, compute stride from element type */
             /* Check if this is a struct array (base type is struct) */
             if (g->vars[i].is_struct) {
                 mir_struct_t *st = mir_find_struct(g, g->vars[i].struct_name);
-                if (st && st->total_size > 1) return st->total_size;
+                if (st && st->total_size > 1) return st->total_size * 8;  /* cell → byte */
             }
             /* Check the node type for array base type */
             if (root->type && root->type->kind == HD_TYPE_ARRAY && root->type->base) {
                 if (root->type->base->kind == HD_TYPE_STRUCT) {
                     mir_struct_t *st = mir_find_struct(g, root->type->base->name);
-                    if (st && st->total_size > 1) return st->total_size;
+                    if (st && st->total_size > 1) return st->total_size * 8;  /* cell → byte */
                 }
-                /* For non-struct arrays, element size is 1 cell */
+                /* For non-struct arrays, element size = hd_type_size bytes */
+                int elem_sz = (int)hd_type_size(root->type->base);
+                if (elem_sz < 1) elem_sz = 1;
+                return elem_sz;
             }
-            return 1;
+            return 8;  /* default: 1 cell = 8 bytes */
         }
     }
-    return 1;
+    return 8;  /* default: 1 cell = 8 bytes */
 }
 static wubu_vr_t mir_lvalue_addr(HDMirGen *g, const HDASTNode *n); /* forward decl */
 
@@ -894,7 +897,7 @@ static wubu_vr_t mir_address_of(HDMirGen *g, const HDASTNode *n) {
                     int off = -1;
                     for (int mi = 0; mi < st->n_members; mi++) {
                         if (strcmp(st->member_names[mi], chain_names[ci]) == 0) {
-                            off = st->member_offsets[mi];
+                            off = st->member_offsets[mi] * 8;  /* cell → byte */
                             /* Update root_type for next iteration */
                             if (st->member_type_names[mi][0])
                                 root_type = st->member_type_names[mi];
@@ -1178,9 +1181,10 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
          * Use a HIGH VR for the address so it never collides with argument registers
          * (v1..vN) or instruction-index VRs. */
         wubu_vr_t addr = mir_new_vr(g);  /* high VR for the address */
-        int64_t mem_addr = (int64_t)(g->prog->total_mem + 1);
-        g->prog->total_mem = mem_addr + (arr_size > 0 ? arr_size : 1) - 1;
-        wubu_mir_const_to(g->prog, addr, mem_addr);  /* addr VR = constant mem_addr */
+        int64_t cell_idx = (int64_t)(g->prog->total_mem + 1);
+        int64_t mem_addr = cell_idx * 8;  /* byte address */
+        g->prog->total_mem = cell_idx + (arr_size > 0 ? arr_size : 1) - 1;
+        wubu_mir_const_to(g->prog, addr, mem_addr);  /* addr VR = byte address */
         /* Search from end to find the most recent declaration (shadowing) */
         for (int i = g->n_vars - 1; i >= 0; i--)
             if (strcmp(g->vars[i].name, n->ident) == 0) {
@@ -1224,13 +1228,16 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
         }
 extern_done:
         if (n->init) {
-            if (n->is_static && g->in_function_body) {
+            /* For array/struct initializer lists (brace init), always use
+             * the brace init path — even for static locals */
+            if (n->is_static && g->in_function_body && n->init->kind != HD_AST_BRACE_INIT) {
                 /* Static local: emit guard check + conditional init.
                  * Allocate a guard variable in global memory.
                  * Emit: if (guard == 0) { *addr = init_val; guard = 1; } */
                 wubu_vr_t guard_addr = mir_new_vr(g);
-                int64_t guard_mem = (int64_t)(g->prog->total_mem + 1);
-                g->prog->total_mem = guard_mem;
+                int64_t guard_cell = (int64_t)(g->prog->total_mem + 1);
+                int64_t guard_mem = guard_cell * 8;  /* byte address */
+                g->prog->total_mem = guard_cell;
                 wubu_mir_const_to(g->prog, guard_addr, guard_mem);
                 /* Mark var as static with guard */
                 for (int i = g->n_vars - 1; i >= 0; i--)
@@ -1258,7 +1265,22 @@ extern_done:
                 wubu_mir_place_label(g->prog, skip_label);
             } else if (n->init->kind == HD_AST_BRACE_INIT) {
                 /* array/struct initializer list: store each element.
-                 * Designated initializers (HD_AST_DESIG_INIT) store at a specific offset. */
+                 * For static locals, wrap in guard check. */
+                uint32_t brace_skip = 0;
+                wubu_vr_t bguard_addr = 0;
+                if (n->is_static && g->in_function_body) {
+                    /* Allocate guard and emit guard check */
+                    bguard_addr = mir_new_vr(g);
+                    int64_t bguard_cell = (int64_t)(g->prog->total_mem + 1);
+                    int64_t bguard_mem = bguard_cell * 8;
+                    g->prog->total_mem = bguard_cell;
+                    wubu_mir_const_to(g->prog, bguard_addr, bguard_mem);
+                    wubu_vr_t bguard_val = wubu_mir_load(g->prog, bguard_addr);
+                    wubu_vr_t bzero = wubu_mir_const(g->prog, 0);
+                    wubu_vr_t beq = wubu_mir_binop(g->prog, MIR_EQ, bguard_val, bzero);
+                    brace_skip = wubu_mir_new_label(g->prog);
+                    wubu_mir_jz(g->prog, beq, brace_skip);
+                }
                 int n_elems = (int)n->init->n_args;
                 /* Reallocate if the initializer determines the size */
                 if (arr_size == 0 && n_elems > 0) {
@@ -1275,6 +1297,12 @@ extern_done:
                 }
                 for (uint32_t e = 0; e < n->init->n_args && e < (uint32_t)arr_size; e++) {
                     int offset = (int)e; /* default: sequential */
+                    /* For arrays, compute byte offset from element index and size */
+                    if (!is_struct_var && n->type && n->type->kind == HD_TYPE_ARRAY && n->type->base) {
+                        int elem_sz = (int)hd_type_size(n->type->base);
+                        if (elem_sz < 1) elem_sz = 1;
+                        offset = (int)e * elem_sz;
+                    }
                     /* For structs, use the actual member byte offset, not sequential. */
                     if (is_struct_var) {
                         if (struct_type_name[0]) {
@@ -1283,7 +1311,7 @@ extern_done:
                         } else if (n->type && n->type->kind == HD_TYPE_STRUCT
                                    && e < (uint32_t)n->type->n_members) {
                             /* Unnamed struct: AST member offset is in cells */
-                            offset = (int)n->type->members[e].offset;
+                            offset = (int)n->type->members[e].offset * 8;  /* cell → byte */
                         }
                     }
                     HDASTNode *elem = n->init->args[e];
@@ -1291,8 +1319,14 @@ extern_done:
                     if (elem->kind == HD_AST_DESIG_INIT) {
                         /* Designated initializer: compute offset */
                         if (elem->ident[0] == '@') {
-                            /* Array index designator: [index] */
-                            offset = (int)elem->int_val;
+                            /* Array index designator: [index] — byte offset */
+                            int desig_idx = (int)elem->int_val;
+                            offset = desig_idx;
+                            if (!is_struct_var && n->type && n->type->kind == HD_TYPE_ARRAY && n->type->base) {
+                                int elem_sz = (int)hd_type_size(n->type->base);
+                                if (elem_sz < 1) elem_sz = 1;
+                                offset = desig_idx * elem_sz;
+                            }
                         } else {
                             /* Field designator: .field — look up struct member offset */
                             offset = mir_struct_member_offset(g, struct_type_name, elem->ident);
@@ -1331,6 +1365,12 @@ extern_done:
                     wubu_vr_t elem_addr = wubu_mir_binop(g->prog, MIR_ADD, addr,
                                                           wubu_mir_const(g->prog, (int64_t)offset));
                     wubu_mir_store(g->prog, elem_addr, ev);
+                }
+                if (brace_skip) {
+                    /* Set guard = 1 and place skip label */
+                    wubu_vr_t bone = wubu_mir_const(g->prog, 1);
+                    wubu_mir_store(g->prog, bguard_addr, bone);
+                    wubu_mir_place_label(g->prog, brace_skip);
                 }
             } else {
                 /* For struct variables initialized from another struct/expr,
@@ -2750,14 +2790,14 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                     /* Look up the member offset by field name */
                     for (int m = 0; m < n->type->n_members; m++) {
                         if (strcmp(n->type->members[m].name, n->args[i]->ident) == 0) {
-                            moffset = n->type->members[m].offset;
+                            moffset = n->type->members[m].offset * 8;  /* cell → byte */
                             break;
                         }
                     }
                 }
                 if (moffset < 0) {
                     /* No designated initializer — use sequential index */
-                    if (i < n->type->n_members) moffset = n->type->members[i].offset;
+                    if (i < n->type->n_members) moffset = n->type->members[i].offset * 8;  /* cell → byte */
                     else continue;
                 }
                 wubu_vr_t elem_addr = wubu_mir_binop(g->prog, MIR_ADD, addr,
@@ -4083,9 +4123,10 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
             /* Allocate memory for this parameter: struct params get
              * param_struct_size cells; scalar params get 1 cell. */
             wubu_vr_t addr = mir_new_vr(&g);  /* high VR for the address */
-            int64_t mem_addr = (int64_t)(prog->total_mem + 1);
-            prog->total_mem = mem_addr + param_struct_size - 1;
-            wubu_mir_const_to(prog, addr, mem_addr);  /* addr VR = memory address */
+            int64_t cell_idx = (int64_t)(prog->total_mem + 1);
+            int64_t mem_addr = cell_idx * 8;  /* byte address */
+            prog->total_mem = cell_idx + param_struct_size - 1;
+            wubu_mir_const_to(prog, addr, mem_addr);  /* addr VR = byte address */
             if (param_is_struct) {
                 /* Struct-by-value: v(pi+1) holds the source address.
                  * Copy param_struct_size cells from src addr to param slot. */
@@ -4179,8 +4220,9 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
             if (va_args_idx < 0 && g.n_vars < MIRGEN_MAX_VARS) {
                 va_args_idx = g.n_vars++;
                 strncpy(g.vars[va_args_idx].name, "wubu_va_args", HD_MAX_IDENT_LEN - 1);
-                int64_t mem_addr = (int64_t)(prog->total_mem + 1);
-                prog->total_mem = mem_addr + 31; /* 32 elements */
+                int64_t cell_idx = (int64_t)(prog->total_mem + 1);
+                int64_t mem_addr = cell_idx * 8;  /* byte address */
+                prog->total_mem = cell_idx + 31; /* 32 elements */
                 g.vars[va_args_idx].addr = wubu_mir_const(prog, mem_addr);
             }
             if (va_args_idx >= 0) {
@@ -4271,13 +4313,13 @@ int64_t hd_run_prog(const wubu_mir_prog_t *prog, const wubu_isa_driver_t *driver
     /* Ensure mem is allocated before JIT compile (JIT embeds mem pointer
      * as immediate in movabs instructions). The interpreter allocates it
      * lazily, but the JIT needs it at compile time. */
-    int64_t *mem_ptr = prog->mem;
+    uint8_t *mem_ptr = prog->mem;
     if (mem_ptr == NULL) {
         int64_t mem_hi = prog->total_mem;
         if ((int64_t)(prog->next_vr_hi) - 1 > mem_hi) mem_hi = (int64_t)(prog->next_vr_hi) - 1;
         int64_t mem_size = (mem_hi < 1) ? 1 : (mem_hi + 1);
         /* Extra padding: memset/memcpy may write up to 7 bytes past the last cell */
-        mem_ptr = (int64_t *)calloc((size_t)(mem_size + 16), sizeof(int64_t));
+        mem_ptr = (uint8_t *)calloc((size_t)(mem_size + 16), sizeof(int64_t));
     }
 
     /* Build a mutable copy of prog with mem set for the JIT compiler */

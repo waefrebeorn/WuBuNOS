@@ -209,7 +209,7 @@ wubu_vr_t wubu_mir_alloc(wubu_mir_prog_t *p, int64_t n_elements)
 {
     wubu_vr_t base = (wubu_vr_t)(p->total_mem + 1);  /* addr 0 reserved as null */
     p->total_mem = (int64_t)base + n_elements - 1;
-    return wubu_mir_const(p, (int64_t)base);
+    return wubu_mir_const(p, (int64_t)base * 8);  /* return byte address */
 }
 
 wubu_vr_t wubu_mir_load(wubu_mir_prog_t *p, wubu_vr_t addr)

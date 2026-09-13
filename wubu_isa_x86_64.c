@@ -1452,11 +1452,11 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
         case MIR_ALLOC:
             break;  /* home base already emitted as a CONST vr */
         case MIR_LOAD: {
-            /* dst = mem[addr]; use prog.mem directly (no stack frame) */
+            /* dst = mem[addr]; addr is a BYTE offset into prog.mem */
             int sa = VR_ENC_SAFE(in->a);
-            if (sa >= 0) emit_mov_rax_from_vr(&e, sa);     /* rax = addr */
+            if (sa >= 0) emit_mov_rax_from_vr(&e, sa);     /* rax = byte addr */
             else emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
-            rex(&e,1,0,0,0); e8(&e, 0xC1); e8(&e, 0xE0); e8(&e, 0x03); /* shl rax,3 */
+            /* No shl rax,3 — addresses are byte offsets, not cell indices */
             /* rsi = prog.mem + rax */
             /* rbx = mem base (set in prologue). mov rsi, rbx */
             rex(&e,1,0,0,0); e8(&e, 0x89); e8(&e, 0xDE);   /* mov rsi, rbx */
@@ -1473,14 +1473,14 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             break;
         }
         case MIR_STORE: {
-            /* mem[addr] = val; use prog.mem directly */
+            /* mem[addr] = val; addr is a BYTE offset into prog.mem */
             int sa = VR_ENC_SAFE(in->a);
-            if (sa >= 0) emit_mov_rax_from_vr(&e, sa);     /* rax = addr */
+            if (sa >= 0) emit_mov_rax_from_vr(&e, sa);     /* rax = byte addr */
             else emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
             int sb = VR_ENC_SAFE(in->b);
             if (sb >= 0) emit_mov_rdi_from_vr(&e, sb);     /* rdi = val */
             else emit_load_rbp(&e, 7, spill_off(assign, assign_count, &e, in->b));
-            rex(&e,1,0,0,0); e8(&e, 0xC1); e8(&e, 0xE0); e8(&e, 0x03); /* shl rax,3 */
+            /* No shl rax,3 — addresses are byte offsets */
             /* rsi = prog.mem + rax */
             rex(&e,1,0,0,0); e8(&e, 0x89); e8(&e, 0xDE);   /* mov rsi, rbx */
             rex(&e,1,0,0,0); e8(&e, 0x01); e8(&e, 0xC6);   /* add rsi, rax */
@@ -1488,11 +1488,11 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             break;
         }
         case MIR_TO_PTR: {
-            /* dst = mem_base + a * 8 (convert offset to pointer) */
+            /* dst = mem_base + a (a is already a byte offset) */
             int sa = VR_ENC_SAFE(in->a);
-            if (sa >= 0) emit_mov_rax_from_vr(&e, sa);     /* rax = offset */
+            if (sa >= 0) emit_mov_rax_from_vr(&e, sa);     /* rax = byte offset */
             else emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
-            rex(&e,1,0,0,0); e8(&e, 0xC1); e8(&e, 0xE0); e8(&e, 0x03); /* shl rax,3 (offset * 8) */
+            /* No shl — addresses are already byte offsets */
             rex(&e,1,0,0,0); e8(&e, 0x01); e8(&e, 0xD8);   /* add rax, rbx (add mem base) */
             int sd = VR_ENC_SAFE(in->dst);
             if (sd >= 0) emit_mov_vr_from_rax(&e, sd);     /* dst = rax */

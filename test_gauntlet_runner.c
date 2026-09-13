@@ -132,7 +132,7 @@ int main(int argc, char **argv) {
             wubu_mir_prog_t prog;
             if (hd_build_mir(src, &prog) != 0) { printf("build failed\n"); return 1; }
             /* Allocate mem like hd_run_prog does (JIT needs it for LOAD/STORE) */
-            int64_t *mem_ptr = prog.mem;
+            uint8_t *mem_ptr = prog.mem;
             if (mem_ptr == NULL) {
                 int64_t mem_hi = prog.total_mem;
                 if ((int64_t)(prog.next_vr_hi) - 1 > mem_hi) mem_hi = (int64_t)(prog.next_vr_hi) - 1;

@@ -1404,8 +1404,9 @@ HDASTNode *hd_parse_decl(HDParser *p) {
      * for one-time initialization. */
     if (match(p, HD_KW_STATIC)) {
         HDASTNode *decl = hd_parse_decl(p);
-        if (decl && decl->kind == HD_AST_VAR_DECL)
+        if (decl && decl->kind == HD_AST_VAR_DECL) {
             decl->is_static = 1;
+        }
         return decl;
     }
 
