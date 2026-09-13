@@ -205,11 +205,14 @@ void wubu_mir_ret(wubu_mir_prog_t *p, wubu_vr_t v)
 
 /* Reserve n_elements int64 cells in the program's memory. Addresses start at 1
  * (addr 0 is reserved as the canonical "null"). Returns the base address. */
-wubu_vr_t wubu_mir_alloc(wubu_mir_prog_t *p, int64_t n_elements)
+wubu_vr_t wubu_mir_alloc(wubu_mir_prog_t *p, int64_t n_bytes)
 {
-    wubu_vr_t base = (wubu_vr_t)(p->total_mem + 1);  /* addr 0 reserved as null */
-    p->total_mem = (int64_t)base + n_elements - 1;
-    return wubu_mir_const(p, (int64_t)base);
+    /* Allocate n_bytes bytes of memory. Returns byte address (0 reserved as null). */
+    int64_t base = p->total_mem + 1;  /* addr 0 reserved as null */
+    /* Align to 8-byte boundary for ABI compliance */
+    if (base & 7) base += 8 - (base & 7);
+    p->total_mem = base + n_bytes;
+    return wubu_mir_const(p, base);
 }
 
 wubu_vr_t wubu_mir_load(wubu_mir_prog_t *p, wubu_vr_t addr)
