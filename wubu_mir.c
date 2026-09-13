@@ -207,7 +207,9 @@ void wubu_mir_ret(wubu_mir_prog_t *p, wubu_vr_t v)
  * (addr 0 is reserved as the canonical "null"). Returns the base address. */
 wubu_vr_t wubu_mir_alloc(wubu_mir_prog_t *p, int64_t n_elements)
 {
+    /* Align base to 16-byte boundary: round up cell index so byte address is 16-aligned */
     wubu_vr_t base = (wubu_vr_t)(p->total_mem + 1);  /* addr 0 reserved as null */
+    if (base & 1) base++;  /* round up to even cell index => 16-byte aligned byte address */
     p->total_mem = (int64_t)base + n_elements - 1;
     return wubu_mir_const(p, (int64_t)base * 8);  /* return byte address */
 }

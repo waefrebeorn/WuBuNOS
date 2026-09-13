@@ -1182,6 +1182,8 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
          * (v1..vN) or instruction-index VRs. */
         wubu_vr_t addr = mir_new_vr(g);  /* high VR for the address */
         int64_t cell_idx = (int64_t)(g->prog->total_mem + 1);
+        /* Align to 16-byte boundary for ABI compliance */
+        if (cell_idx & 1) cell_idx++;
         int64_t mem_addr = cell_idx * 8;  /* byte address */
         g->prog->total_mem = cell_idx + (arr_size > 0 ? arr_size : 1) - 1;
         wubu_mir_const_to(g->prog, addr, mem_addr);  /* addr VR = byte address */
@@ -4124,6 +4126,7 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
              * param_struct_size cells; scalar params get 1 cell. */
             wubu_vr_t addr = mir_new_vr(&g);  /* high VR for the address */
             int64_t cell_idx = (int64_t)(prog->total_mem + 1);
+            if (cell_idx & 1) cell_idx++;  /* 16-byte align */
             int64_t mem_addr = cell_idx * 8;  /* byte address */
             prog->total_mem = cell_idx + param_struct_size - 1;
             wubu_mir_const_to(prog, addr, mem_addr);  /* addr VR = byte address */
@@ -4221,6 +4224,7 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
                 va_args_idx = g.n_vars++;
                 strncpy(g.vars[va_args_idx].name, "wubu_va_args", HD_MAX_IDENT_LEN - 1);
                 int64_t cell_idx = (int64_t)(prog->total_mem + 1);
+                if (cell_idx & 1) cell_idx++;  /* 16-byte align */
                 int64_t mem_addr = cell_idx * 8;  /* byte address */
                 prog->total_mem = cell_idx + 31; /* 32 elements */
                 g.vars[va_args_idx].addr = wubu_mir_const(prog, mem_addr);

@@ -137,7 +137,7 @@ int main(int argc, char **argv) {
                 int64_t mem_hi = prog.total_mem;
                 if ((int64_t)(prog.next_vr_hi) - 1 > mem_hi) mem_hi = (int64_t)(prog.next_vr_hi) - 1;
                 int64_t mem_size = (mem_hi < 1) ? 1 : (mem_hi + 1);
-                mem_ptr = (int64_t *)calloc((size_t)mem_size, sizeof(int64_t));
+                mem_ptr = (uint8_t *)calloc((size_t)mem_size, sizeof(int64_t));
             }
             wubu_mir_prog_t prog_copy = prog;
             prog_copy.mem = mem_ptr;
