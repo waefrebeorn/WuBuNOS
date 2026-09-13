@@ -1164,6 +1164,11 @@ HDASTNode *hd_parse_block(HDParser *p) {
 /* -- Parse Statement ---------------------------------------------- */
 
 static HDASTNode *parse_stmt(HDParser *p) {
+    /* Null statement: ';' — just consume and return a no-op */
+    if (peek(p) == HD_TOK_SEMI) {
+        advance(p);
+        return hd_ast_new(HD_AST_EXPR_STMT);  /* no-op expr stmt */
+    }
     /* If statement */
     if (match(p, HD_KW_IF)) {
         HDASTNode *n = hd_ast_new(HD_AST_IF);
