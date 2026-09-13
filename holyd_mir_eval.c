@@ -1368,6 +1368,44 @@ extern_done:
                     }
                 } else {
                     /* Scalar/array init from expr */
+                    /* Special case: char array initialized from string literal */
+                    if (n->init && n->init->kind == HD_AST_STRING_LIT && n->type &&
+                        n->type->kind == HD_TYPE_ARRAY && n->type->base &&
+                        (n->type->base->kind == HD_TYPE_U8 || n->type->base->kind == HD_TYPE_I8)) {
+                        size_t slen = strlen(n->init->str_val) + 1;
+                        wubu_vr_t src_addr = mir_gen_expr(g, n->init);
+                        /* Reallocate array if size not yet determined */
+                        if (arr_size == 0) {
+                            arr_size = (int)slen;
+                            addr = wubu_mir_alloc(g->prog, arr_size);
+                            g->array_elements_pending = arr_size;
+                            for (int i = 0; i < g->n_vars; i++)
+                                if (strcmp(g->vars[i].name, n->ident) == 0) {
+                                    g->vars[i].addr = addr;
+                                    g->vars[i].is_array = 1;
+                                    g->vars[i].array_size = arr_size;
+                                    g->vars[i].array_stride = 1;
+                                    break;
+                                }
+                        }
+                        /* Copy string data cell-by-cell (up to string length) */
+                        int copy_len = (int)slen < arr_size ? (int)slen : arr_size;
+                        if (src_addr > 0 && copy_len > 0) {
+                            for (int m = 0; m < copy_len; m++) {
+                                int byte_off = m * 8;
+                                wubu_vr_t src_elem = wubu_mir_binop(g->prog, MIR_ADD, src_addr, wubu_mir_const(g->prog, (int64_t)byte_off));
+                                wubu_vr_t dst_elem = wubu_mir_binop(g->prog, MIR_ADD, addr, wubu_mir_const(g->prog, (int64_t)byte_off));
+                                wubu_mir_store(g->prog, dst_elem, wubu_mir_load(g->prog, src_elem));
+                            }
+                        }
+                        /* Zero remaining elements (C standard: uninitialized elements are 0) */
+                        for (int m = copy_len; m < arr_size; m++) {
+                            int byte_off = m * 8;
+                            wubu_vr_t dst_elem = wubu_mir_binop(g->prog, MIR_ADD, addr, wubu_mir_const(g->prog, (int64_t)byte_off));
+                            wubu_mir_store(g->prog, dst_elem, wubu_mir_const(g->prog, 0));
+                        }
+                        return addr;
+                    }
                     wubu_vr_t val = mir_gen_expr(g, n->init);
                     /* Implicit type conversion: convert value to variable type */
                     if (n->type) {
@@ -3191,11 +3229,13 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         return wubu_mir_const(g->prog, (int64_t)size);
     }
     case HD_AST_STRING_LIT: {
-        /* Store string in memory and return address. */
+        /* Store string in memory and return address.
+         * Each character is stored in its own cell (8 bytes) for consistency
+         * with the cell-based memory model. */
         size_t len = strlen(n->str_val) + 1; /* include NUL */
         wubu_vr_t addr = wubu_mir_alloc(g->prog, (uint32_t)len);
         for (size_t i = 0; i < len; i++)
-            wubu_mir_store(g->prog, wubu_mir_binop(g->prog, MIR_ADD, addr, wubu_mir_const(g->prog, (int64_t)i)),
+            wubu_mir_store(g->prog, wubu_mir_binop(g->prog, MIR_ADD, addr, wubu_mir_const(g->prog, (int64_t)(i * 8))),
                            wubu_mir_const(g->prog, (int64_t)(unsigned char)n->str_val[i]));
         return addr;
     }
