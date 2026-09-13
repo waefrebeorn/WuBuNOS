@@ -2379,6 +2379,10 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 ptr_scale = 8;
             }
         }
+        /* String literal + integer: scale by 8 (cell-based chars) */
+        if (ptr_scale == 0 && n->left && n->left->kind == HD_AST_STRING_LIT) {
+            ptr_scale = 8;
+        }
         /* Also check var table for pointer/array types */
         if (ptr_scale == 0 && n->left && n->left->kind == HD_AST_IDENT && n->left->ident[0]) {
             for (int i = 0; i < g->n_vars; i++) {
