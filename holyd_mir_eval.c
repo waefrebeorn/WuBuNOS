@@ -2379,7 +2379,7 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 ptr_scale = 8;
             }
         }
-        /* Also check var table for pointer types */
+        /* Also check var table for pointer/array types */
         if (ptr_scale == 0 && n->left && n->left->kind == HD_AST_IDENT && n->left->ident[0]) {
             for (int i = 0; i < g->n_vars; i++) {
                 if (strcmp(g->vars[i].name, n->left->ident) == 0) {
@@ -2390,6 +2390,9 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                         /* Non-struct pointer: scale by element size.
                          * Arrays are allocated with 1 cell per element, so
                          * pointer arithmetic must also use 8 bytes per element. */
+                        ptr_scale = 8;
+                    } else if (g->vars[i].is_array) {
+                        /* Array decays to pointer: scale by element stride (8 bytes per cell) */
                         ptr_scale = 8;
                     }
                     break;
