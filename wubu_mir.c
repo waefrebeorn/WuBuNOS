@@ -209,8 +209,8 @@ wubu_vr_t wubu_mir_alloc(wubu_mir_prog_t *p, int64_t n_bytes)
 {
     /* Allocate n_bytes bytes of memory. Returns byte address (0 reserved as null). */
     int64_t base = p->total_mem + 1;  /* addr 0 reserved as null */
-    /* Align to 8-byte boundary for ABI compliance */
-    if (base & 7) base += 8 - (base & 7);
+    /* Align to 16-byte boundary for ABI compliance (SSE/AVX requirements) */
+    if (base & 15) base += 16 - (base & 15);
     p->total_mem = base + n_bytes;
     return wubu_mir_const(p, base);
 }
