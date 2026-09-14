@@ -3134,10 +3134,14 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                             }
                             if (size <= 0) size = 8;
                         } else if (g->vars[i].is_array) {
-                            /* Array: element_size * element_count in bytes */
-                            size = g->vars[i].array_size * 4; /* assume int elements = 4B each */
-                            if (size <= 0) size = 4;
-                        } else {
+                            /* Array: use the full type size in bytes */
+                            if (g->vars[i].type) {
+                                size = (int)hd_type_size(g->vars[i].type);
+                                if (size <= 0) size = 8;
+                            } else {
+                                size = g->vars[i].array_size * 8;
+                                if (size <= 0) size = 8;
+                            }
                             /* Scalar: use the variable's declared type */
                             if (g->vars[i].type) {
                                 size = (int)hd_type_size(g->vars[i].type);
@@ -3179,14 +3183,23 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 if (root && root->kind == HD_AST_IDENT) {
                     for (int i = 0; i < g->n_vars; i++) {
                         if (strcmp(g->vars[i].name, root->ident) == 0) {
-                            if (g->vars[i].is_array) {
-                                /* Array element size: use stride or 4 bytes for int */
-                                size = 4; /* int elements = 4 bytes */
+                            if (g->vars[i].is_array && g->vars[i].type) {
+                                /* For multi-dimensional arrays, the type of arr[i]
+                                 * is the base type (one fewer dimension).
+                                 * e.g. long[4][5] -> arr[2] has type long[5] = 40 bytes.
+                                 * For 1D arrays, arr[i] is a single element. */
+                                if (g->vars[i].type->base && g->vars[i].type->base->kind == HD_TYPE_ARRAY) {
+                                    size = (int)hd_type_size(g->vars[i].type->base);
+                                    if (size <= 0) size = 8;
+                                } else {
+                                    size = (int)hd_type_size(g->vars[i].type->base);
+                                    if (size <= 0) size = 8;
+                                }
                             } else if (g->vars[i].type) {
                                 size = (int)hd_type_size(g->vars[i].type);
-                                if (size <= 0) size = 4;
+                                if (size <= 0) size = 8;
                             } else {
-                                size = 4;
+                                size = 8;
                             }
                             break;
                         }
