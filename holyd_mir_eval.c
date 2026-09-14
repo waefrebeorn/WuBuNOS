@@ -1074,9 +1074,14 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
                 is_uns = 1;
             /* array type carries an element count in n->type->array_size */
             if (k == HD_TYPE_ARRAY && n->type->array_size > 0) {
-                /* Allocate 1 cell per element to avoid overlap from int64 stores.
-                 * TODO: add width-aware LOAD/STORE for packed arrays. */
-                arr_size = (int)n->type->array_size;
+                /* Allocate 1 cell per element. For multi-dimensional arrays,
+                 * compute total element count by multiplying all dimensions. */
+                arr_size = 1;
+                HDType *at = n->type;
+                while (at && at->kind == HD_TYPE_ARRAY) {
+                    arr_size *= (int)at->array_size;
+                    at = at->base;
+                }
                 g->array_elements_pending = arr_size;
             }
             if (k == HD_TYPE_PTR && n->type->base &&
@@ -1278,8 +1283,9 @@ extern_done:
                     int elem_sz = 8; /* default: 1 cell */
                     if (n->type && n->type->kind == HD_TYPE_ARRAY && n->type->base
                         && n->type->base->kind == HD_TYPE_ARRAY) {
-                        /* Multi-dimensional: element size = inner array size in bytes */
-                        elem_sz = (int)(hd_type_size(n->type->base));
+                        /* Multi-dimensional: element size = inner array size in cells * 8 bytes.
+                         * Each element occupies 1 cell (8 bytes) regardless of logical type size. */
+                        elem_sz = (int)(n->type->base->array_size * 8);
                     }
                     int offset = (int)e * elem_sz;
                     /* For structs, use the actual member byte offset, not sequential. */
@@ -1297,9 +1303,11 @@ extern_done:
                     wubu_vr_t ev;
                     if (elem->kind == HD_AST_BRACE_INIT) {
                         /* Nested brace-init (multi-dimensional array): flatten */
+                        fprintf(stderr, "[DBG] nested brace-init: e=%u offset=%d nelem=%u\n", e, offset, elem->n_args);
                         for (uint32_t se = 0; se < elem->n_args; se++) {
                             int sub_off = offset + (int)se * 8;
                             wubu_vr_t sub_ev = mir_gen_expr(g, elem->args[se]);
+                            fprintf(stderr, "[DBG]   storing %ld at offset %d\n", (long)sub_ev, sub_off);
                             wubu_vr_t sub_addr = wubu_mir_binop(g->prog, MIR_ADD, addr,
                                 wubu_mir_const(g->prog, (int64_t)sub_off));
                             wubu_mir_store(g->prog, sub_addr, sub_ev);
