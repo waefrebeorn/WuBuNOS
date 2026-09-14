@@ -783,8 +783,10 @@ static int mir_index_stride(HDMirGen *g, const HDASTNode *n) {
     /* Look up the variable in the symbol table */
     for (int i = 0; i < g->n_vars; i++) {
         if (strcmp(g->vars[i].name, root->ident) == 0 && g->vars[i].is_array) {
-            /* Arrays are allocated with 1 cell per element, so stride = 8 */
-            return 8;
+            /* Use the array_stride (inner dimension) * 8 bytes per cell */
+            int stride = g->vars[i].array_stride * 8;
+            if (stride < 8) stride = 8;
+            return stride;
         }
     }
     return 8; /* default: 1 cell = 8 bytes */
@@ -1257,13 +1259,19 @@ extern_done:
                             g->vars[i].addr = addr;
                             g->vars[i].is_array = 1;
                             g->vars[i].array_size = arr_size;
-                            g->vars[i].array_stride = 1;
+                            if (g->vars[i].array_stride < 1) g->vars[i].array_stride = 1;
                             break;
                         }
                 }
                 int n_array_elems = g->array_elements_pending > 0 ? g->array_elements_pending : arr_size;
                 for (uint32_t e = 0; e < n->init->n_args && e < (uint32_t)n_array_elems; e++) {
-                    int offset = (int)e * 8; /* each element is 1 cell (8 bytes) */
+                    int elem_sz = 8; /* default: 1 cell */
+                    if (n->type && n->type->kind == HD_TYPE_ARRAY && n->type->base
+                        && n->type->base->kind == HD_TYPE_ARRAY) {
+                        /* Multi-dimensional: element size = inner array size in bytes */
+                        elem_sz = (int)(hd_type_size(n->type->base));
+                    }
+                    int offset = (int)e * elem_sz;
                     /* For structs, use the actual member byte offset, not sequential. */
                     if (is_struct_var) {
                         if (struct_type_name[0]) {
@@ -1277,7 +1285,17 @@ extern_done:
                     }
                     HDASTNode *elem = n->init->args[e];
                     wubu_vr_t ev;
-                    if (elem->kind == HD_AST_DESIG_INIT) {
+                    if (elem->kind == HD_AST_BRACE_INIT) {
+                        /* Nested brace-init (multi-dimensional array): flatten */
+                        for (uint32_t se = 0; se < elem->n_args; se++) {
+                            int sub_off = offset + (int)se * 8;
+                            wubu_vr_t sub_ev = mir_gen_expr(g, elem->args[se]);
+                            wubu_vr_t sub_addr = wubu_mir_binop(g->prog, MIR_ADD, addr,
+                                wubu_mir_const(g->prog, (int64_t)sub_off));
+                            wubu_mir_store(g->prog, sub_addr, sub_ev);
+                        }
+                        continue;
+                    } else if (elem->kind == HD_AST_DESIG_INIT) {
                         /* Designated initializer: compute offset */
                         if (elem->ident[0] == '@') {
                             /* Array index designator: [index] */
