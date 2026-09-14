@@ -773,9 +773,14 @@ static HDTypeKind mir_common_cmp_type(HDMirGen *g, const HDASTNode *left, const 
  * - DEREF  -> the pointer's held value */
 
 /* Find the stride for an INDEX node by traversing to the root IDENT
- * and looking up its array type. Returns the inner dimension size for
- * multi-dimensional arrays, or 1 for 1D arrays. */
+ * and looking up its array type. For multi-dimensional arrays, the
+ * stride depends on which dimension we're indexing. */
 static int mir_index_stride(HDMirGen *g, const HDASTNode *n) {
+    /* Count nesting depth to determine which dimension we're indexing */
+    int depth = 0;
+    const HDASTNode *p = n;
+    while (p && p->kind == HD_AST_INDEX) { depth++; p = p->left; }
+
     /* Traverse left spine to find the root IDENT */
     const HDASTNode *root = n;
     while (root && root->kind == HD_AST_INDEX) root = root->left;
@@ -783,10 +788,15 @@ static int mir_index_stride(HDMirGen *g, const HDASTNode *n) {
     /* Look up the variable in the symbol table */
     for (int i = 0; i < g->n_vars; i++) {
         if (strcmp(g->vars[i].name, root->ident) == 0 && g->vars[i].is_array) {
-            /* Use the array_stride (inner dimension) * 8 bytes per cell */
-            int stride = g->vars[i].array_stride * 8;
-            if (stride < 8) stride = 8;
-            return stride;
+            if (depth <= 1) {
+                /* Outermost index: use array_stride * 8 */
+                int stride = g->vars[i].array_stride * 8;
+                if (stride < 8) stride = 8;
+                return stride;
+            } else {
+                /* Inner index: each element is 1 cell = 8 bytes */
+                return 8;
+            }
         }
     }
     return 8; /* default: 1 cell = 8 bytes */
