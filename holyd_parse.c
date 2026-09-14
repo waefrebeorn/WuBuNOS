@@ -1268,9 +1268,20 @@ static HDASTNode *parse_stmt(HDParser *p) {
             n->init_expr = parse_expr(p);
             expect(p, HD_TOK_SEMI);
         }
-        n->cond = parse_expr(p);
-        expect(p, HD_TOK_SEMI);
-        n->update = parse_expr(p);
+        /* Null condition: for(; ;) — infinite loop */
+        if (peek(p) == HD_TOK_SEMI) {
+            n->cond = NULL;  /* NULL cond = infinite loop */
+            advance(p);  /* consume ; */
+        } else {
+            n->cond = parse_expr(p);
+            expect(p, HD_TOK_SEMI);
+        }
+        /* Null update: for(;;) */
+        if (peek(p) == HD_TOK_RPAREN) {
+            n->update = NULL;
+        } else {
+            n->update = parse_expr(p);
+        }
         expect(p, HD_TOK_RPAREN);
         n->body = parse_stmt(p);
         return n;
