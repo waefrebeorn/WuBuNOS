@@ -1303,11 +1303,9 @@ extern_done:
                     wubu_vr_t ev;
                     if (elem->kind == HD_AST_BRACE_INIT) {
                         /* Nested brace-init (multi-dimensional array): flatten */
-                        fprintf(stderr, "[DBG] nested brace-init: e=%u offset=%d nelem=%u\n", e, offset, elem->n_args);
                         for (uint32_t se = 0; se < elem->n_args; se++) {
                             int sub_off = offset + (int)se * 8;
                             wubu_vr_t sub_ev = mir_gen_expr(g, elem->args[se]);
-                            fprintf(stderr, "[DBG]   storing %ld at offset %d\n", (long)sub_ev, sub_off);
                             wubu_vr_t sub_addr = wubu_mir_binop(g->prog, MIR_ADD, addr,
                                 wubu_mir_const(g->prog, (int64_t)sub_off));
                             wubu_mir_store(g->prog, sub_addr, sub_ev);
