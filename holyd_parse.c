@@ -1719,6 +1719,21 @@ done_extern_params:
                     strncpy(pname, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
                     advance(p);
                 }
+                /* Parse optional array dimensions: int a[5] -> adjust to pointer */
+                if (peek(p) == HD_TOK_LBRACKET) {
+                    while (peek(p) == HD_TOK_LBRACKET) {
+                        advance(p); /* [ */
+                        if (peek(p) == HD_TOK_INT) advance(p); /* dimension */
+                        if (peek(p) == HD_TOK_IDENT) advance(p); /* named dim */
+                        expect(p, HD_TOK_RBRACKET);
+                    }
+                    /* C standard: array parameters are adjusted to pointers */
+                    HDType *ptr = (HDType *)calloc(1, sizeof(HDType));
+                    ptr->kind = HD_TYPE_PTR;
+                    ptr->base = pt;
+                    ptr->size = 8;
+                    pt = ptr;
+                }
                 fn->param_types[fn->n_params] = pt;
                 strncpy(fn->param_names[fn->n_params], pname, HD_MAX_IDENT_LEN - 1);
                 fn->n_params++;
