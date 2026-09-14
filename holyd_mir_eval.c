@@ -1654,12 +1654,14 @@ extern_done:
     }
     case HD_AST_DO_WHILE: {
         uint32_t top = wubu_mir_new_label(g->prog);
+        uint32_t cond_label = wubu_mir_new_label(g->prog);
         uint32_t done = wubu_mir_new_label(g->prog);
         int lvl = g->n_loops++;
-        g->loop_top[lvl] = top;
+        g->loop_top[lvl] = cond_label;  /* continue -> condition check */
         g->loop_done[lvl] = done;
         wubu_mir_place_label(g->prog, top);
         mir_gen_stmt(g, n->body);
+        wubu_mir_place_label(g->prog, cond_label);
         wubu_vr_t cond = mir_gen_expr(g, n->cond);
         wubu_mir_jz(g->prog, cond, done);
         wubu_mir_jmp(g->prog, top);
