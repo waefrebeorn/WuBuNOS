@@ -1498,6 +1498,34 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
                             e8(&e, 0x0F); e8(&e, 0xB6); e8(&e, 0xC0);
                             int vr0_enc = VR_ENC_SAFE(0);
                             if (vr0_enc >= 0) emit_mov_reg(&e, vr0_enc, 0);
+                        } else if (strcmp(in->func_name, "double_isnan") == 0) {
+                            /* double_isnan(double d): same as isnan */
+                            /* Load d into xmm0 */
+                            int sa = VR_ENC_SAFE(1);
+                            if (sa >= 0) emit_mov_rax_from_vr(&e, sa);
+                            else emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
+                            e8(&e, 0x66); e8(&e, 0x48); e8(&e, 0x0F); e8(&e, 0x6E); e8(&e, 0xC0);
+                            /* Copy xmm0 to xmm1: movsd xmm1, xmm0: F2 0F 10 C9 */
+                            e8(&e, 0xF2); e8(&e, 0x0F); e8(&e, 0x10); e8(&e, 0xC9);
+                            /* ucomisd xmm0, xmm1 — compares d with itself */
+                            e8(&e, 0x66); e8(&e, 0x0F); e8(&e, 0x2E); e8(&e, 0xC1);
+                            /* JP to nan_case (PF=1 means unordered/NaN) */
+                            size_t jp_patch_pos = e.n;
+                            e8(&e, 0x0F); e8(&e, 0x8A); e32(&e, 0);
+                            /* Not NaN: mov al, 0 */
+                            e8(&e, 0xB0); e8(&e, 0x00);
+                            size_t jmp_end_pos = e.n;
+                            e8(&e, 0xE9); e32(&e, 0);
+                            /* NaN case: mov al, 1 */
+                            size_t nan_case_idx = e.n;
+                            *(int32_t*)(&e.code[jp_patch_pos + 2]) = (int32_t)((int64_t)nan_case_idx - (int64_t)jp_patch_pos - 7);
+                            e8(&e, 0xB0); e8(&e, 0x01);
+                            /* end */
+                            *(int32_t*)(&e.code[jmp_end_pos + 1]) = (int32_t)((int64_t)e.n - (int64_t)jmp_end_pos - 5);
+                            /* movzx rax, al */
+                            e8(&e, 0x0F); e8(&e, 0xB6); e8(&e, 0xC0);
+                            int vr0_enc = VR_ENC_SAFE(0);
+                            if (vr0_enc >= 0) emit_mov_reg(&e, vr0_enc, 0);
                         } else {
                             /* dlsym failed — return 0 for undefined external functions */
                             e8(&e, 0x48); e8(&e, 0x31); e8(&e, 0xC0);
