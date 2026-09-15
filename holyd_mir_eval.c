@@ -1373,6 +1373,24 @@ extern_done:
                             }
                         }
                         ev = mir_gen_expr(g, elem);
+                        /* Convert initializer value to element type for arrays.
+                         * For arrays of integer types, convert float initializers. */
+                        if (!is_struct_var && n->type && n->type->kind == HD_TYPE_ARRAY && n->type->base) {
+                            HDType *elem_type = n->type->base;
+                            HDTypeKind elem_k = elem_type->kind;
+                            /* Check if the initializer is a float */
+                            int init_is_float = mir_is_float_node(g, elem);
+                            if (init_is_float && (elem_k == HD_TYPE_I64 || elem_k == HD_TYPE_U64 ||
+                                                  elem_k == HD_TYPE_I32 || elem_k == HD_TYPE_U32 ||
+                                                  elem_k == HD_TYPE_I16 || elem_k == HD_TYPE_U16 ||
+                                                  elem_k == HD_TYPE_I8 || elem_k == HD_TYPE_U8)) {
+                                if (elem_k == HD_TYPE_U64 || elem_k == HD_TYPE_U32 ||
+                                    elem_k == HD_TYPE_U16 || elem_k == HD_TYPE_U8)
+                                    ev = wubu_mir_unop(g->prog, MIR_DTOI_U, ev);
+                                else
+                                    ev = wubu_mir_unop(g->prog, MIR_DTOI, ev);
+                            }
+                        }
                         /* Convert initializer value to member type */
                         if (is_struct_var && n->type && n->type->kind == HD_TYPE_STRUCT
                             && e < (uint32_t)n->type->n_members) {
@@ -2169,6 +2187,17 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             HDType *lhs_type = n->left->type;
             if (!lhs_type && n->left->kind == HD_AST_IDENT) {
                 lhs_type = mir_find_var_type(g, n->left->ident);
+            }
+            if (!lhs_type && n->left->kind == HD_AST_INDEX) {
+                /* For INDEX (arr[i]), look up the root variable type */
+                const HDASTNode *root = n->left;
+                while (root && root->kind == HD_AST_INDEX) root = root->left;
+                if (root && root->kind == HD_AST_IDENT) {
+                    lhs_type = mir_find_var_type(g, root->ident);
+                    /* For arrays, get the element type */
+                    if (lhs_type && lhs_type->kind == HD_TYPE_ARRAY && lhs_type->base)
+                        lhs_type = lhs_type->base;
+                }
             }
             if (lhs_type) {
             HDTypeKind k = lhs_type->kind;

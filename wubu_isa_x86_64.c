@@ -203,9 +203,11 @@ static bool vr_is_float(uint32_t vr, const wubu_mir_prog_t *prog, size_t call_id
         switch (mi->op) {
             case MIR_DADD: case MIR_DSUB: case MIR_DMUL: case MIR_DDIV:
             case MIR_DNEG: case MIR_DITOF: case MIR_DITOF_U:
-            case MIR_DTOI: case MIR_DTOI_U:
-            case MIR_FTOI: case MIR_F32_TO_F64: case MIR_F64_TO_F32:
+            case MIR_F32_TO_F64: case MIR_F64_TO_F32:
                 return true;
+            case MIR_DTOI: case MIR_DTOI_U: case MIR_FTOI:
+                /* double/float-to-int: result is integer, not double */
+                return false;
             case MIR_CONST: {
                 union { double d; uint64_t u; } u;
                 u.u = (uint64_t)mi->imm;
