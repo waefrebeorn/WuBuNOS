@@ -2418,40 +2418,48 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
          * Handle both ptr + int and int + ptr cases. */
         int ptr_scale = 0;
         bool left_is_ptr = true;
-        if (n->left && n->left->type && n->left->type->kind == HD_TYPE_PTR) {
+        /* Check array types first (arrays decay to pointers) */
+        if (n->left && n->left->type && n->left->type->kind == HD_TYPE_ARRAY) {
+            if (n->left->type->base && n->left->type->base->kind == HD_TYPE_ARRAY) {
+                /* Multi-dimensional array: scale by inner array size * 8 */
+                ptr_scale = n->left->type->base->array_size * 8;
+            } else if (n->left->type->base) {
+                /* 1D array: scale by element size (8 bytes per cell) */
+                ptr_scale = 8;
+            }
+        } else if (n->left && n->left->type && n->left->type->kind == HD_TYPE_PTR) {
             if (n->left->type->base && n->left->type->base->kind == HD_TYPE_STRUCT) {
                 mir_struct_t *st = mir_find_struct(g, n->left->type->base->name);
                 if (st && st->total_size > 0) ptr_scale = st->total_size * 8;
             } else if (n->left->type->base && n->left->type->base->kind == HD_TYPE_ARRAY) {
-                /* Pointer to array: scale by array_size * element_size */
-                int nelem = n->left->type->base->array_size;
-                int elem_sz = 8; /* default cell size */
-                if (n->left->type->base->base) {
-                    elem_sz = hd_type_size(n->left->type->base->base);
-                }
-                ptr_scale = nelem * elem_sz;
+                /* Pointer to array: scale by array_size * cell_size (8 bytes per cell) */
+                ptr_scale = n->left->type->base->array_size * 8;
             } else if (n->left->type->base) {
                 ptr_scale = 8;
             }
         }
-        /* Check for int + ptr case (right side is pointer) */
-        if (ptr_scale == 0 && n->right && n->right->type && n->right->type->kind == HD_TYPE_PTR) {
-            if (n->right->type->base && n->right->type->base->kind == HD_TYPE_STRUCT) {
-                mir_struct_t *st = mir_find_struct(g, n->right->type->base->name);
-                if (st && st->total_size > 0) ptr_scale = st->total_size * 8;
-                left_is_ptr = false;
-            } else if (n->right->type->base && n->right->type->base->kind == HD_TYPE_ARRAY) {
-                /* Pointer to array: scale by array_size * element_size */
-                int nelem = n->right->type->base->array_size;
-                int elem_sz = 8;
-                if (n->right->type->base->base) {
-                    elem_sz = hd_type_size(n->right->type->base->base);
+        /* Check for int + ptr case (right side is pointer/array) */
+        if (ptr_scale == 0 && n->right && n->right->type) {
+            HDTypeKind right_kind = n->right->type->kind;
+            if (right_kind == HD_TYPE_ARRAY) {
+                if (n->right->type->base && n->right->type->base->kind == HD_TYPE_ARRAY) {
+                    ptr_scale = n->right->type->base->array_size * 8;
+                } else if (n->right->type->base) {
+                    ptr_scale = 8;
                 }
-                ptr_scale = nelem * elem_sz;
                 left_is_ptr = false;
-            } else if (n->right->type->base) {
-                ptr_scale = 8;
-                left_is_ptr = false;
+            } else if (right_kind == HD_TYPE_PTR) {
+                if (n->right->type->base && n->right->type->base->kind == HD_TYPE_STRUCT) {
+                    mir_struct_t *st = mir_find_struct(g, n->right->type->base->name);
+                    if (st && st->total_size > 0) ptr_scale = st->total_size * 8;
+                    left_is_ptr = false;
+                } else if (n->right->type->base && n->right->type->base->kind == HD_TYPE_ARRAY) {
+                    ptr_scale = n->right->type->base->array_size * 8;
+                    left_is_ptr = false;
+                } else if (n->right->type->base) {
+                    ptr_scale = 8;
+                    left_is_ptr = false;
+                }
             }
         }
         /* String literal + integer: scale by 8 (cell-based chars) */
@@ -2526,27 +2534,46 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         wubu_vr_t b = mir_gen_expr(g, n->right);
         /* Pointer subtraction: scale by pointee size in bytes */
         int ptr_scale = 0;
-        if (n->left && n->left->type && n->left->type->kind == HD_TYPE_PTR
+        bool left_is_ptr = true;
+        if (n->left && n->left->type && n->left->type->kind == HD_TYPE_ARRAY) {
+            if (n->left->type->base && n->left->type->base->kind == HD_TYPE_ARRAY) {
+                ptr_scale = n->left->type->base->array_size * 8;
+            } else if (n->left->type->base) {
+                ptr_scale = 8;
+            }
+        } else if (n->left && n->left->type && n->left->type->kind == HD_TYPE_PTR
             && n->left->type->base && n->left->type->base->kind != HD_TYPE_STRUCT) {
-            ptr_scale = 8; /* cell-based: 1 cell per element */
+            ptr_scale = 8;
         }
         /* Also check var table for pointer/array types */
         if (ptr_scale == 0 && n->left && n->left->kind == HD_AST_IDENT && n->left->ident[0]) {
             for (int i = 0; i < g->n_vars; i++) {
                 if (strcmp(g->vars[i].name, n->left->ident) == 0) {
-                    if (g->vars[i].type && g->vars[i].type->kind == HD_TYPE_PTR) {
-                        ptr_scale = 8;
-                    } else if (g->vars[i].is_array) {
-                        ptr_scale = 8;
-                    }
-                    break;
-                }
-            }
-        }
-        /* String literal - integer */
-        if (ptr_scale == 0 && n->left && n->left->kind == HD_AST_STRING_LIT) {
-            ptr_scale = 8;
-        }
+                    if (g->vars[i].type && g->vars[i].type->kind == HD_TYPE_ARRAY) {
+                        if (g->vars[i].type->base && g->vars[i].type->base->kind == HD_TYPE_ARRAY) {
+                            ptr_scale = g->vars[i].type->base->array_size * 8;
+                        } else if (g->vars[i].type->base) {
+                            ptr_scale = 8;
+                        }
+                    } else if (g->vars[i].type && g->vars[i].type->kind == HD_TYPE_ARRAY) {
+     if (g->vars[i].type->base && g->vars[i].type->base->kind == HD_TYPE_ARRAY) {
+         ptr_scale = g->vars[i].type->base->array_size * 8;
+     } else if (g->vars[i].type->base) {
+         ptr_scale = 8;
+     }
+ } else if (g->vars[i].type && g->vars[i].type->kind == HD_TYPE_PTR) {
+     ptr_scale = 8;
+ } else if (g->vars[i].is_array) {
+     ptr_scale = 8;
+ }
+ break;
+ }
+ }
+ }
+ /* String literal - integer */
+ if (ptr_scale == 0 && n->left && n->left->kind == HD_AST_STRING_LIT) {
+ ptr_scale = 8;
+ }
         if (ptr_scale > 1)
             b = wubu_mir_binop(g->prog, MIR_MUL, b, wubu_mir_const(g->prog, (int64_t)ptr_scale));
         int is_float = (n->left && n->left->type && n->left->type->kind == HD_TYPE_F64) ||
