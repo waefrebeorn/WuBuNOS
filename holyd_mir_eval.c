@@ -826,8 +826,18 @@ static wubu_vr_t mir_address_of(HDMirGen *g, const HDASTNode *n) {
         return rv;
     }
     if (n->kind == HD_AST_INDEX) {
-        wubu_vr_t base = mir_address_of(g, n->left);
-        wubu_vr_t idx  = mir_gen_expr(g, n->right);
+        /* Handle reverse subscript: &3[arr] == &arr[3] */
+        HDASTNode *base_node = n->left;
+        HDASTNode *idx_node = n->right;
+        if (base_node && base_node->kind == HD_AST_INT_LIT &&
+            idx_node && (idx_node->kind == HD_AST_IDENT || idx_node->kind == HD_AST_INDEX)) {
+            /* Swap: treat idx_node as base, base_node as index */
+            HDASTNode *tmp = base_node;
+            base_node = idx_node;
+            idx_node = tmp;
+        }
+        wubu_vr_t base = mir_address_of(g, base_node);
+        wubu_vr_t idx  = mir_gen_expr(g, idx_node);
         int stride = mir_index_stride(g, n);
         if (stride > 1) {
             idx = wubu_mir_binop(g->prog, MIR_MUL, idx, wubu_mir_const(g->prog, (int64_t)stride));
