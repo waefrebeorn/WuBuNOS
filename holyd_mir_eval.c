@@ -3240,6 +3240,7 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                                 size = g->vars[i].array_size * 8;
                                 if (size <= 0) size = 8;
                             }
+                        } else {
                             /* Scalar: use the variable's declared type */
                             if (g->vars[i].type) {
                                 size = (int)hd_type_size(g->vars[i].type);
@@ -3257,6 +3258,14 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 if (n->child->type) {
                     size = (int)hd_type_size(n->child->type);
                     if (size <= 0) size = 8;
+                }
+            } else if (n->child->kind == HD_AST_ADDR) {
+                /* sizeof(&arr): address of array is a pointer (8 bytes) */
+                if (n->child->type) {
+                    size = (int)hd_type_size(n->child->type);
+                    if (size <= 0) size = 8;
+                } else {
+                    size = 8; /* pointer size */
                 }
             } else if (n->child->kind == HD_AST_FUNC_CALL) {
                 /* sizeof(func()): look up the function's return type */
