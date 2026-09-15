@@ -2422,6 +2422,14 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             if (n->left->type->base && n->left->type->base->kind == HD_TYPE_STRUCT) {
                 mir_struct_t *st = mir_find_struct(g, n->left->type->base->name);
                 if (st && st->total_size > 0) ptr_scale = st->total_size * 8;
+            } else if (n->left->type->base && n->left->type->base->kind == HD_TYPE_ARRAY) {
+                /* Pointer to array: scale by array_size * element_size */
+                int nelem = n->left->type->base->array_size;
+                int elem_sz = 8; /* default cell size */
+                if (n->left->type->base->base) {
+                    elem_sz = hd_type_size(n->left->type->base->base);
+                }
+                ptr_scale = nelem * elem_sz;
             } else if (n->left->type->base) {
                 ptr_scale = 8;
             }
@@ -2431,6 +2439,15 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             if (n->right->type->base && n->right->type->base->kind == HD_TYPE_STRUCT) {
                 mir_struct_t *st = mir_find_struct(g, n->right->type->base->name);
                 if (st && st->total_size > 0) ptr_scale = st->total_size * 8;
+                left_is_ptr = false;
+            } else if (n->right->type->base && n->right->type->base->kind == HD_TYPE_ARRAY) {
+                /* Pointer to array: scale by array_size * element_size */
+                int nelem = n->right->type->base->array_size;
+                int elem_sz = 8;
+                if (n->right->type->base->base) {
+                    elem_sz = hd_type_size(n->right->type->base->base);
+                }
+                ptr_scale = nelem * elem_sz;
                 left_is_ptr = false;
             } else if (n->right->type->base) {
                 ptr_scale = 8;
