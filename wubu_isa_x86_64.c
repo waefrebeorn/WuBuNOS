@@ -164,6 +164,7 @@ static bool is_float_func(const char *name) {
         "fmod", "remainder", "fdim", "fmax", "fmin", "fabs",
         "hypot", "erf", "erfc", "lgamma", "tgamma",
         "modf", "frexp", "nextafter", "nexttoward",
+        "isnan", "double_isnan",
         NULL
     };
     for (int i = 0; float_funcs[i]; i++) {
@@ -1407,7 +1408,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
                         dlopen("libm.so.6", RTLD_LAZY | RTLD_GLOBAL);
                         libm_loaded = 1;
                     }
-                    void *sym = dlsym(RTLD_DEFAULT, in->func_name);
+                    fprintf(stderr, "[JIT] dlsym for %s\n", in->func_name); fflush(stderr); void *sym = dlsym(RTLD_DEFAULT, in->func_name);
                     if (!sym) sym = dlsym(RTLD_NEXT, in->func_name);
                     if (sym) {
                         /* Read argument register encodings BEFORE saving registers */
@@ -1463,7 +1464,11 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
                         if (use_float_cc) {
                             /* Read float return value from xmm0 */
                             /* movq rax, xmm0: 66 48 0F 7E C0 */
-                            e8(&e, 0x66); e8(&e, 0x48); e8(&e, 0x0F); e8(&e, 0x7E); e8(&e, 0xC0);
+                            /* Skip for isnan/double_isnan which return int in rax */
+                            if (strcmp(in->func_name, "isnan") != 0 &&
+                                strcmp(in->func_name, "double_isnan") != 0) {
+                                e8(&e, 0x66); e8(&e, 0x48); e8(&e, 0x0F); e8(&e, 0x7E); e8(&e, 0xC0);
+                            }
                         }
                         /* mov VR0_home, rax (save return value) */
                         if (vr0_enc >= 0) emit_mov_reg(&e, vr0_enc, 0);
