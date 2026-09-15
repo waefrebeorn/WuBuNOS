@@ -1468,6 +1468,12 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
                             else { e8(&e,0x58+r); }
                         }
                         break;
+                    } else {
+                        /* dlsym failed — return 0 for undefined external functions */
+                        e8(&e, 0x48); e8(&e, 0x31); e8(&e, 0xC0);
+                        int vr0_enc = VR_ENC_SAFE(0);
+                        if (vr0_enc >= 0) emit_mov_reg(&e, vr0_enc, 0);
+                        break;
                     }
                 }
             }

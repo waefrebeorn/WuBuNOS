@@ -4196,36 +4196,83 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
     if (*source == '{') {
         ast = hd_parse_stmt(&parse);
     } else {
-        ast = hd_parse_expr(&parse);
+        /* Check if this is an expression-only source (no semicolon,
+         * doesn't start with a keyword or type). The preprocessor prepends
+         * "int wubu_va_args[32];" which makes hd_parse_expr see a
+         * declaration instead of an expression. For these sources, wrap
+         * in "return ...;" and parse as a block. */
+        const char *p = source;
+        while (*p && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
+        int expr_only = 1;
+        if (strncmp(p, "if ", 3) == 0 || strncmp(p, "while ", 6) == 0 ||
+            strncmp(p, "for ", 4) == 0 || strncmp(p, "do ", 3) == 0 ||
+            strncmp(p, "return", 6) == 0 || strncmp(p, "break", 5) == 0 ||
+            strncmp(p, "continue", 8) == 0 || *p == '{')
+            expr_only = 0;
+        if (strncmp(p, "int ", 4) == 0 || strncmp(p, "char ", 5) == 0 ||
+            strncmp(p, "void ", 5) == 0 || strncmp(p, "long ", 5) == 0 ||
+            strncmp(p, "short ", 6) == 0 || strncmp(p, "float ", 6) == 0 ||
+            strncmp(p, "double ", 7) == 0 || strncmp(p, "struct ", 7) == 0 ||
+            strncmp(p, "union ", 6) == 0 || strncmp(p, "enum ", 5) == 0 ||
+            strncmp(p, "unsigned ", 9) == 0 || strncmp(p, "signed ", 7) == 0 ||
+            strncmp(p, "static ", 7) == 0 || strncmp(p, "extern ", 7) == 0 ||
+            strncmp(p, "const ", 6) == 0 || strncmp(p, "register ", 9) == 0 ||
+            strncmp(p, "auto ", 5) == 0 || strncmp(p, "typedef ", 8) == 0 ||
+            strncmp(p, "inline ", 7) == 0 || strncmp(p, "volatile ", 9) == 0 ||
+            strncmp(p, "restrict ", 9) == 0 || strncmp(p, "_Bool", 5) == 0)
+            expr_only = 0;
+        if (expr_only) {
+            const char *sp = source;
+            while (*sp) { if (*sp == ';') { expr_only = 0; break; } sp++; }
+        }
 
-        if (parse.has_error || (hd_parse_peek(&parse) != HD_TOK_EOF && hd_parse_peek(&parse) != HD_TOK_SEMI)) {
-            hd_ast_free(ast);
-            parse.has_error = false;
-            parse.n_errors = 0;
-            hd_lex_init(&lex, effective);
+        if (expr_only) {
+            /* Wrap in "return ...;" then preprocess, then wrap in braces */
+            size_t len = strlen(source);
+            char *wrapped = malloc(len + 20);
+            sprintf(wrapped, "return %s;", source);
+            char *pp2 = wubu_preprocess(wrapped);
+            const char *eff2 = pp2 ? pp2 : wrapped;
+            size_t elen = strlen(eff2);
+            char *block_str = malloc(elen + 20);
+            sprintf(block_str, "{ %s }", eff2);
+            hd_lex_init(&lex, block_str);
             hd_parse_init(&parse, &lex);
-            const char *p = source;
-            while (*p && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
-            bool starts_with_keyword = false;
-            if (strncmp(p, "if ", 3) == 0 || strncmp(p, "while ", 6) == 0 ||
-                strncmp(p, "for ", 4) == 0 || strncmp(p, "do ", 3) == 0 ||
-                strncmp(p, "return", 6) == 0 || strncmp(p, "break", 5) == 0 ||
-                strncmp(p, "continue", 8) == 0 || *p == '{') {
-                starts_with_keyword = true;
-            }
-            bool has_semicolon = false;
-            p = source;
-            while (*p) { if (*p == ';') { has_semicolon = true; break; } p++; }
-            if (has_semicolon && !starts_with_keyword) {
-                size_t len = strlen(effective);
-                char *wrapped = malloc(len + 5);
-                sprintf(wrapped, "{ %s }", effective);
-                hd_lex_init(&lex, wrapped);
+            ast = hd_parse_block(&parse);
+            free(block_str);
+            if (pp2) free(pp2);
+            free(wrapped);
+        } else {
+            ast = hd_parse_expr(&parse);
+
+            if (parse.has_error || (hd_parse_peek(&parse) != HD_TOK_EOF && hd_parse_peek(&parse) != HD_TOK_SEMI)) {
+                hd_ast_free(ast);
+                parse.has_error = false;
+                parse.n_errors = 0;
+                hd_lex_init(&lex, effective);
                 hd_parse_init(&parse, &lex);
-                ast = hd_parse_block(&parse);
-                free(wrapped);
-            } else {
-                ast = hd_parse_stmt(&parse);
+                p = source;
+                while (*p && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
+                int starts_with_keyword = 0;
+                if (strncmp(p, "if ", 3) == 0 || strncmp(p, "while ", 6) == 0 ||
+                    strncmp(p, "for ", 4) == 0 || strncmp(p, "do ", 3) == 0 ||
+                    strncmp(p, "return", 6) == 0 || strncmp(p, "break", 5) == 0 ||
+                    strncmp(p, "continue", 8) == 0 || *p == '{')
+                    starts_with_keyword = 1;
+                int has_semicolon = 0;
+                p = source;
+                while (*p) { if (*p == ';') { has_semicolon = 1; break; } p++; }
+                if (has_semicolon && !starts_with_keyword) {
+                    size_t len = strlen(effective);
+                    char *wrapped = malloc(len + 5);
+                    sprintf(wrapped, "{ %s }", effective);
+                    hd_lex_init(&lex, wrapped);
+                    hd_parse_init(&parse, &lex);
+                    ast = hd_parse_block(&parse);
+                    free(wrapped);
+                } else {
+                    ast = hd_parse_stmt(&parse);
+                }
             }
         }
     }
