@@ -150,10 +150,72 @@ static int32_t spill_off(const wubu_reg_assign_t *assign, size_t assign_count,
     return off;
 }
 
-/* Load the base address of mem[] into rdi (same pattern as T_GEMM).
- * lea rdi, [rbp - mem_off]  (modrm 0xBD = mod10 reg7 rm5 = rbp disp32) */
-static void emit_mov_mem0_rdi(x86_emitter_t *e) {
-    rex(e,1,0,0,0); e8(e,0x8D); e8(e,0xBD); e32(e,(uint32_t)(-(int32_t)e->mem_off));
+/* Check if an external function name is a known math/float function
+ * from the C standard library that takes and/or returns float/double.
+ * These functions need XMM register calling convention per x86-64 SysV ABI. */
+static bool is_float_func(const char *name) {
+    /* Math functions that take double args and return double */
+    static const char *float_funcs[] = {
+        "fma", "ldexp", "copysign", "pow", "sqrt", "cbrt",
+        "sin", "cos", "tan", "asin", "acos", "atan", "atan2",
+        "sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
+        "exp", "exp2", "expm1", "log", "log2", "log10", "log1p",
+        "floor", "ceil", "trunc", "round", "nearbyint", "rint",
+        "fmod", "remainder", "fdim", "fmax", "fmin", "fabs",
+        "hypot", "erf", "erfc", "lgamma", "tgamma",
+        "modf", "frexp", "nextafter", "nexttoward",
+        NULL
+    };
+    for (int i = 0; float_funcs[i]; i++) {
+        if (strcmp(name, float_funcs[i]) == 0) return true;
+    }
+    return false;
+}
+
+/* Load a VR into an XMM register for float function call argument.
+ * dst_xmm: 0+ for xmm0, xmm1, etc. */
+static void emit_load_vr_to_xmm(x86_emitter_t *e, wubu_vr_t vr,
+                                 const wubu_reg_assign_t *assign,
+                                 size_t assign_count,
+                                 const wubu_mir_prog_t *prog,
+                                 size_t cur_idx, int dst_xmm) {
+    int vr_reg = (vr < (wubu_vr_t)assign_count && assign[vr].reg >= 0)
+                 ? assign[vr].reg : -1;
+    int vr_enc = (vr_reg >= 0) ? reg_x86[vr_reg] : -1;
+    /* First load VR into rax (integer staging) */
+    if (vr_enc >= 0) {
+        if (vr_enc != 0) emit_mov_rax_from_vr(e, vr_enc);
+    } else {
+        emit_load_rbp(e, 0, spill_off(assign, assign_count, e, vr));
+    }
+    /* movq xmmN, rax: 66 48 0F 6E (C0 + dst_xmm*8 + 0) */
+    e8(e, 0x66); e8(e, 0x48); e8(e, 0x0F); e8(e, 0x6E);
+    e8(e, (uint8_t)(0xC0 + (dst_xmm << 3)));
+}
+
+/* Check if a VR holds a float value by scanning MIR for its definition. */
+static bool vr_is_float(uint32_t vr, const wubu_mir_prog_t *prog, size_t call_idx) {
+    if (vr == 0) return false;
+    for (size_t i = call_idx; i > 0; i--) {
+        const wubu_mir_instr_t *mi = &prog->ins[i - 1];
+        if (mi->dst != vr) continue;
+        switch (mi->op) {
+            case MIR_DADD: case MIR_DSUB: case MIR_DMUL: case MIR_DDIV:
+            case MIR_DNEG: case MIR_DITOF: case MIR_DITOF_U:
+            case MIR_DTOI: case MIR_DTOI_U:
+            case MIR_FTOI: case MIR_F32_TO_F64: case MIR_F64_TO_F32:
+                return true;
+            case MIR_CONST: {
+                union { double d; uint64_t u; } u;
+                u.u = (uint64_t)mi->imm;
+                uint64_t exp = (u.u >> 52) & 0x7FF;
+                return (exp != 0 && exp != 0x7FF);
+            }
+            default:
+                return false;
+        }
+    }
+    return false;
 }
 
 /* ---- AGI tensor ops host dispatch ---- */
@@ -1345,6 +1407,8 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
                         int vr1 = VR_ENC_SAFE(1);
                         int vr2 = VR_ENC_SAFE(2);
                         int vr3 = VR_ENC_SAFE(3);
+                        /* Check if this is a known float function */
+                        bool use_float_cc = is_float_func(in->func_name);
                         /* Save caller-sysv registers (except rax which holds return) */
                         /* Save: r11, r12, r13, r14, r15, r8, r9, rdx */
                         static const int save_regs[] = {11,12,13,14,15,8,9,2};
@@ -1353,15 +1417,34 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
                             if (r >= 8) { e8(&e,0x41); e8(&e,0x50+(r&7)); }
                             else { e8(&e,0x50+r); }
                         }
-                        /* rdi (x86 enc 7) = VR1 (first arg) */
-                        if (vr1 >= 0) emit_mov_reg(&e, 7, vr1);
-                        else emit_load_rbp(&e, 7, spill_off(assign, assign_count, &e, 1));
-                        /* rsi (x86 enc 6) = VR2 (second arg) */
-                        if (vr2 >= 0) emit_mov_reg(&e, 6, vr2);
-                        else emit_load_rbp(&e, 6, spill_off(assign, assign_count, &e, 2));
-                        /* rdx (x86 enc 2) = VR3 (third arg) */
-                        if (vr3 >= 0) emit_mov_reg(&e, 2, vr3);
-                        else emit_load_rbp(&e, 2, spill_off(assign, assign_count, &e, 3));
+                        if (use_float_cc) {
+                            /* Pass float args in XMM registers per x86-64 SysV ABI */
+                            int xmm_reg = 0;
+                            if (vr1 >= 0) {
+                                emit_load_vr_to_xmm(&e, 1, assign, assign_count, prog, i, xmm_reg++);
+                            }
+                            if (vr2 >= 0) {
+                                emit_load_vr_to_xmm(&e, 2, assign, assign_count, prog, i, xmm_reg++);
+                            }
+                            if (vr3 >= 0) {
+                                emit_load_vr_to_xmm(&e, 3, assign, assign_count, prog, i, xmm_reg++);
+                            }
+                            /* Set al = number of vector registers used */
+                            e8(&e, 0xB0); e8(&e, (uint8_t)xmm_reg);
+                        } else {
+                            /* Pass integer args in integer registers */
+                            /* rdi (x86 enc 7) = VR1 (first arg) */
+                            if (vr1 >= 0) emit_mov_reg(&e, 7, vr1);
+                            else emit_load_rbp(&e, 7, spill_off(assign, assign_count, &e, 1));
+                            /* rsi (x86 enc 6) = VR2 (second arg) */
+                            if (vr2 >= 0) emit_mov_reg(&e, 6, vr2);
+                            else emit_load_rbp(&e, 6, spill_off(assign, assign_count, &e, 2));
+                            /* rdx (x86 enc 2) = VR3 (third arg) */
+                            if (vr3 >= 0) emit_mov_reg(&e, 2, vr3);
+                            else emit_load_rbp(&e, 2, spill_off(assign, assign_count, &e, 3));
+                            /* al = 0 (no vector registers) */
+                            e8(&e, 0xB0); e8(&e, 0x00);
+                        }
                         /* movabs rax, <sym> */
                         e8(&e, 0x48); e8(&e, 0xB8);
                         uint64_t addr = (uint64_t)sym;
@@ -1370,6 +1453,11 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
                         int vr0_enc = VR_ENC_SAFE(0);
                         /* call rax */
                         e8(&e, 0xFF); e8(&e, 0xD0);
+                        if (use_float_cc) {
+                            /* Read float return value from xmm0 */
+                            /* movq rax, xmm0: 66 48 0F 7E C0 */
+                            e8(&e, 0x66); e8(&e, 0x48); e8(&e, 0x0F); e8(&e, 0x7E); e8(&e, 0xC0);
+                        }
                         /* mov VR0_home, rax (save return value) */
                         if (vr0_enc >= 0) emit_mov_reg(&e, vr0_enc, 0);
                         /* If VR0 is spilled, store rax to its stack slot */
