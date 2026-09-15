@@ -1400,7 +1400,14 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
                  *   call rax (where rax = dlsym result)
                  *   mov vr0, rax (return value) */
                 {
-                    fprintf(stderr, "[JIT] dlsym for %s\n", in->func_name); fflush(stderr); void *sym = dlsym(RTLD_DEFAULT, in->func_name);
+                    /* Preload libm.so.6 with RTLD_GLOBAL so dlsym(RTLD_DEFAULT)
+                     * can find isnan and other libm symbols. */
+                    static int libm_loaded = 0;
+                    if (!libm_loaded) {
+                        dlopen("libm.so.6", RTLD_LAZY | RTLD_GLOBAL);
+                        libm_loaded = 1;
+                    }
+                    void *sym = dlsym(RTLD_DEFAULT, in->func_name);
                     if (!sym) sym = dlsym(RTLD_NEXT, in->func_name);
                     if (sym) {
                         /* Read argument register encodings BEFORE saving registers */
