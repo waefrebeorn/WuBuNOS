@@ -3453,12 +3453,6 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
              * the actual definition comes later and has a body. */
             for (int i = g->prog->n_funcs - 1; i >= 0; i--)
                 if (strcmp(g->prog->funcs[i].name, n->callee->ident) == 0) { fid = i; break; }
-            /* If the found function has no body (forward declaration), treat as external. */
-            if (fid >= 0 && g->func_ast[fid] &&
-                g->func_ast[fid]->kind == HD_AST_FUNC_DECL &&
-                !g->func_ast[fid]->body) {
-                fid = -1;
-            }
         }
         /* Function pointer member call: s.fn(args) where callee is a DOT/MEMBER expr.
          * The function pointer was previously stored as a func_id in the var.
