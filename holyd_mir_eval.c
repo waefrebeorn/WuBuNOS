@@ -2475,8 +2475,11 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                         if (st && st->total_size > 0) ptr_scale = st->total_size * 8;
                     } else if (g->vars[i].type && g->vars[i].type->kind == HD_TYPE_PTR) {
                         ptr_scale = 8;
-                    } else if (g->vars[i].is_array) {
-                        ptr_scale = 8;
+                    } else if (g->vars[i].is_array && g->vars[i].type) {
+                        if (g->vars[i].type->base && g->vars[i].type->base->kind == HD_TYPE_ARRAY)
+                            ptr_scale = g->vars[i].type->base->array_size * 8;
+                        else
+                            ptr_scale = 8;
                     }
                     break;
                 }
@@ -2493,8 +2496,11 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                     } else if (g->vars[i].type && g->vars[i].type->kind == HD_TYPE_PTR) {
                         ptr_scale = 8;
                         left_is_ptr = false;
-                    } else if (g->vars[i].is_array) {
-                        ptr_scale = 8;
+                    } else if (g->vars[i].is_array && g->vars[i].type) {
+                        if (g->vars[i].type->base && g->vars[i].type->base->kind == HD_TYPE_ARRAY)
+                            ptr_scale = g->vars[i].type->base->array_size * 8;
+                        else
+                            ptr_scale = 8;
                         left_is_ptr = false;
                     }
                     break;
