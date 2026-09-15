@@ -150,58 +150,6 @@ static int32_t spill_off(const wubu_reg_assign_t *assign, size_t assign_count,
     return off;
 }
 
-/* Check if a VR holds a float value by scanning MIR for its definition.
- * Returns true if the VR was produced by a float operation (DADD, DMUL, etc.)
- * or if it loads from a float global. */
-static bool vr_is_float(uint32_t vr, const wubu_mir_prog_t *prog, size_t call_idx) {
-    if (vr == 0) return false;
-    for (size_t i = call_idx; i > 0; i--) {
-        const wubu_mir_instr_t *mi = &prog->ins[i - 1];
-        if (mi->dst != vr) continue;
-        switch (mi->op) {
-            case MIR_DADD: case MIR_DSUB: case MIR_DMUL: case MIR_DDIV:
-            case MIR_DNEG: case MIR_DITOF: case MIR_DITOF_U:
-            case MIR_DTOI: case MIR_DTOI_U:
-            case MIR_FTOI: case MIR_F32_TO_F64: case MIR_F64_TO_F32:
-                return true;
-            case MIR_CONST: {
-                /* Float constants have non-zero exponent bits */
-                union { double d; uint64_t u; } u;
-                u.u = (uint64_t)mi->imm;
-                uint64_t exp = (u.u >> 52) & 0x7FF;
-                return (exp != 0 && exp != 0x7FF);
-            }
-            case MIR_LOAD: {
-                return false; /* conservative: assume int for LOAD */
-            }
-            default:
-                return false;
-        }
-    }
-    return false;
-}
-
-/* Load a VR into an XMM register for float function call argument.
- * dst_xmm: 0-2 for xmm0-xmm2 */
-static void emit_load_vr_to_xmm(x86_emitter_t *e, wubu_vr_t vr,
-                                 const wubu_reg_assign_t *assign,
-                                 size_t assign_count,
-                                 const wubu_mir_prog_t *prog,
-                                 size_t cur_idx, int dst_xmm) {
-    int vr_reg = (vr < (wubu_vr_t)assign_count && assign[vr].reg >= 0)
-                 ? assign[vr].reg : -1;
-    int vr_enc = (vr_reg >= 0) ? reg_x86[vr_reg] : -1;
-    /* First load VR into rax (integer staging) */
-    if (vr_enc >= 0) {
-        if (vr_enc != 0) emit_mov_rax_from_vr(e, vr_enc);
-    } else {
-        emit_load_rbp(e, 0, spill_off(assign, assign_count, e, vr));
-    }
-    /* movq xmmN, rax: 66 48 0F 6E (C0 + dst_xmm*8 + 0) */
-    e8(e, 0x66); e8(e, 0x48); e8(e, 0x0F); e8(e, 0x6E);
-    e8(e, (uint8_t)(0xC0 + (dst_xmm << 3)));
-}
-
 /* Load the base address of mem[] into rdi (same pattern as T_GEMM).
  * lea rdi, [rbp - mem_off]  (modrm 0xBD = mod10 reg7 rm5 = rbp disp32) */
 static void emit_mov_mem0_rdi(x86_emitter_t *e) {
@@ -1397,10 +1345,6 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
                         int vr1 = VR_ENC_SAFE(1);
                         int vr2 = VR_ENC_SAFE(2);
                         int vr3 = VR_ENC_SAFE(3);
-                        /* Determine which arguments are floats */
-                        bool arg1_float = vr_is_float(1, prog, i);
-                        bool arg2_float = vr_is_float(2, prog, i);
-                        bool arg3_float = vr_is_float(3, prog, i);
                         /* Save caller-sysv registers (except rax which holds return) */
                         /* Save: r11, r12, r13, r14, r15, r8, r9, rdx */
                         static const int save_regs[] = {11,12,13,14,15,8,9,2};
@@ -1409,61 +1353,15 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
                             if (r >= 8) { e8(&e,0x41); e8(&e,0x50+(r&7)); }
                             else { e8(&e,0x50+r); }
                         }
-                        /* Pass arguments per x86-64 SysV ABI:
-                         * Integer args in rdi, rsi, rdx
-                         * Float args in xmm0, xmm1, xmm2
-                         * Mix: integer args use integer regs, float args use xmm regs */
-                        int int_reg = 0; /* 0=rdi, 1=rsi, 2=rdx */
-                        int xmm_reg = 0; /* 0=xmm0, 1=xmm1, 2=xmm2 */
-                        /* First argument (VR1) */
-                        if (arg1_float) {
-                            emit_load_vr_to_xmm(&e, 1, assign, assign_count, prog, i, xmm_reg++);
-                        } else {
-                            /* Pass in integer register */
-                            if (vr1 >= 0) {
-                                if (int_reg == 0) emit_mov_reg(&e, 7, vr1);      /* rdi */
-                                else if (int_reg == 1) emit_mov_reg(&e, 6, vr1); /* rsi */
-                                else emit_mov_reg(&e, 2, vr1);                    /* rdx */
-                            } else {
-                                if (int_reg == 0) emit_load_rbp(&e, 7, spill_off(assign, assign_count, &e, 1));
-                                else if (int_reg == 1) emit_load_rbp(&e, 6, spill_off(assign, assign_count, &e, 1));
-                                else emit_load_rbp(&e, 2, spill_off(assign, assign_count, &e, 1));
-                            }
-                            int_reg++;
-                        }
-                        /* Second argument (VR2) */
-                        if (arg2_float) {
-                            emit_load_vr_to_xmm(&e, 2, assign, assign_count, prog, i, xmm_reg++);
-                        } else {
-                            if (vr2 >= 0) {
-                                if (int_reg == 0) emit_mov_reg(&e, 7, vr2);
-                                else if (int_reg == 1) emit_mov_reg(&e, 6, vr2);
-                                else emit_mov_reg(&e, 2, vr2);
-                            } else {
-                                if (int_reg == 0) emit_load_rbp(&e, 7, spill_off(assign, assign_count, &e, 2));
-                                else if (int_reg == 1) emit_load_rbp(&e, 6, spill_off(assign, assign_count, &e, 2));
-                                else emit_load_rbp(&e, 2, spill_off(assign, assign_count, &e, 2));
-                            }
-                            int_reg++;
-                        }
-                        /* Third argument (VR3) */
-                        if (arg3_float) {
-                            emit_load_vr_to_xmm(&e, 3, assign, assign_count, prog, i, xmm_reg++);
-                        } else {
-                            if (vr3 >= 0) {
-                                if (int_reg == 0) emit_mov_reg(&e, 7, vr3);
-                                else if (int_reg == 1) emit_mov_reg(&e, 6, vr3);
-                                else emit_mov_reg(&e, 2, vr3);
-                            } else {
-                                if (int_reg == 0) emit_load_rbp(&e, 7, spill_off(assign, assign_count, &e, 3));
-                                else if (int_reg == 1) emit_load_rbp(&e, 6, spill_off(assign, assign_count, &e, 3));
-                                else emit_load_rbp(&e, 2, spill_off(assign, assign_count, &e, 3));
-                            }
-                            int_reg++;
-                        }
-                        /* Set al = number of vector registers used */
-                        /* mov al, xmm_reg */
-                        e8(&e, 0xB0); e8(&e, (uint8_t)xmm_reg);
+                        /* rdi (x86 enc 7) = VR1 (first arg) */
+                        if (vr1 >= 0) emit_mov_reg(&e, 7, vr1);
+                        else emit_load_rbp(&e, 7, spill_off(assign, assign_count, &e, 1));
+                        /* rsi (x86 enc 6) = VR2 (second arg) */
+                        if (vr2 >= 0) emit_mov_reg(&e, 6, vr2);
+                        else emit_load_rbp(&e, 6, spill_off(assign, assign_count, &e, 2));
+                        /* rdx (x86 enc 2) = VR3 (third arg) */
+                        if (vr3 >= 0) emit_mov_reg(&e, 2, vr3);
+                        else emit_load_rbp(&e, 2, spill_off(assign, assign_count, &e, 3));
                         /* movabs rax, <sym> */
                         e8(&e, 0x48); e8(&e, 0xB8);
                         uint64_t addr = (uint64_t)sym;
@@ -1472,59 +1370,6 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
                         int vr0_enc = VR_ENC_SAFE(0);
                         /* call rax */
                         e8(&e, 0xFF); e8(&e, 0xD0);
-                        /* Check if this function returns a float.
-                         * For known math functions, read return from xmm0.
-                         * Otherwise, read from rax (integer). */
-                        bool ret_float = false;
-                        /* Check if VR0 is used by a float operation */
-                        for (size_t ni = i + 1; ni < prog->n; ni++) {
-                            const wubu_mir_instr_t *next = &prog->ins[ni];
-                            /* Check direct use of VR0 */
-                            if (next->a == 0 || next->b == 0) {
-                                switch (next->op) {
-                                    case MIR_DADD: case MIR_DSUB: case MIR_DMUL: case MIR_DDIV:
-                                    case MIR_DNEG: case MIR_DITOF: case MIR_DITOF_U:
-                                    case MIR_DEQ: case MIR_DNE: case MIR_DGT: case MIR_DLT:
-                                    case MIR_DGE: case MIR_DLE:
-                                    case MIR_DTOI: case MIR_DTOI_U:
-                                        ret_float = true;
-                                        break;
-                                    default:
-                                        break;
-                                }
-                            }
-                            /* Also check if VR0 is copied to another VR (MOV dst = v0)
-                             * and that VR is used by a float op */
-                            if (!ret_float && next->op == MIR_MOV && next->a == 0) {
-                                wubu_vr_t copied_vr = next->dst;
-                                for (size_t nj = ni + 1; nj < prog->n; nj++) {
-                                    const wubu_mir_instr_t *n2 = &prog->ins[nj];
-                                    if (n2->a == copied_vr || n2->b == copied_vr) {
-                                        switch (n2->op) {
-                                            case MIR_DADD: case MIR_DSUB: case MIR_DMUL: case MIR_DDIV:
-                                            case MIR_DNEG: case MIR_DITOF: case MIR_DITOF_U:
-                                            case MIR_DEQ: case MIR_DNE: case MIR_DGT: case MIR_DLT:
-                                            case MIR_DGE: case MIR_DLE:
-                                            case MIR_DTOI: case MIR_DTOI_U:
-                                                ret_float = true;
-                                                break;
-                                            default:
-                                                break;
-                                        }
-                                    }
-                                    if (ret_float) break;
-                                    if (n2->op == MIR_CALL || n2->op == MIR_RET) break;
-                                }
-                            }
-                            if (ret_float) break;
-                            /* Stop at the next call or return */
-                            if (next->op == MIR_CALL || next->op == MIR_RET) break;
-                        }
-                        if (ret_float) {
-                            /* Read return value from xmm0 */
-                            /* movq rax, xmm0: 66 48 0F 7E C0 */
-                            e8(&e, 0x66); e8(&e, 0x48); e8(&e, 0x0F); e8(&e, 0x7E); e8(&e, 0xC0);
-                        }
                         /* mov VR0_home, rax (save return value) */
                         if (vr0_enc >= 0) emit_mov_reg(&e, vr0_enc, 0);
                         /* If VR0 is spilled, store rax to its stack slot */

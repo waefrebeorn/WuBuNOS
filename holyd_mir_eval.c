@@ -3398,16 +3398,7 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
              * Forward declarations have no body and are collected first;
              * the actual definition comes later and has a body. */
             for (int i = g->prog->n_funcs - 1; i >= 0; i--)
-                if (strcmp(g->prog->funcs[i].name, n->callee->ident) == 0) {
-                    /* Check if this is a forward declaration (no body) */
-                    if (g->func_ast[i] && !g->func_ast[i]->body) {
-                        /* Forward declaration — treat as external call */
-                        fid = -1;
-                        break;
-                    }
-                    fid = i;
-                    break;
-                }
+                if (strcmp(g->prog->funcs[i].name, n->callee->ident) == 0) { fid = i; break; }
         }
         /* Function pointer member call: s.fn(args) where callee is a DOT/MEMBER expr.
          * The function pointer was previously stored as a func_id in the var.
