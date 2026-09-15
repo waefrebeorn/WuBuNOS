@@ -839,7 +839,16 @@ static wubu_vr_t mir_address_of(HDMirGen *g, const HDASTNode *n) {
             base_node = idx_node;
             idx_node = tmp;
         }
-        wubu_vr_t base = mir_address_of(g, base_node);
+        /* For base that is INDEX/DEREF/CALL (yields pointer value), use mir_gen_expr */
+        wubu_vr_t base;
+        if (base_node && (base_node->kind == HD_AST_INDEX ||
+                          base_node->kind == HD_AST_DEREF ||
+                          base_node->kind == HD_AST_CALL ||
+                          base_node->kind == HD_AST_FUNC_CALL)) {
+            base = mir_gen_expr(g, base_node);
+        } else {
+            base = mir_address_of(g, base_node);
+        }
         wubu_vr_t idx  = mir_gen_expr(g, idx_node);
         int stride = mir_index_stride(g, n);
         if (stride > 1) {
@@ -962,7 +971,15 @@ static wubu_vr_t mir_lvalue_addr(HDMirGen *g, const HDASTNode *n) {
     if (n->kind == HD_AST_DEREF)
         return mir_gen_expr(g, n->child);      /* *p: address == p's value */
     if (n->kind == HD_AST_INDEX) {
-        wubu_vr_t base = mir_address_of(g, n->left);
+        wubu_vr_t base;
+        if (n->left && (n->left->kind == HD_AST_INDEX ||
+                        n->left->kind == HD_AST_DEREF ||
+                        n->left->kind == HD_AST_CALL ||
+                        n->left->kind == HD_AST_FUNC_CALL)) {
+            base = mir_gen_expr(g, n->left);
+        } else {
+            base = mir_address_of(g, n->left);
+        }
         wubu_vr_t idx = mir_gen_expr(g, n->right);
         int stride = mir_index_stride(g, n);
         if (stride > 1) {
@@ -3484,13 +3501,77 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             base_node = idx_node;
             idx_node = tmp;
         }
-        wubu_vr_t base = mir_address_of(g, base_node);
+        /* For base that is an INDEX, DEREF, or other expr yielding a pointer value,
+         * use mir_gen_expr to get the pointer value (not address_of which gives &var).
+         * For IDENT (array/var), use mir_address_of to get the base address. */
+        wubu_vr_t base;
+        if (base_node && (base_node->kind == HD_AST_INDEX ||
+                          base_node->kind == HD_AST_DEREF ||
+                          base_node->kind == HD_AST_CALL ||
+                          base_node->kind == HD_AST_FUNC_CALL)) {
+            base = mir_gen_expr(g, base_node);  /* yields pointer value */
+        } else {
+            base = mir_address_of(g, base_node);  /* yields base address */
+        }
         wubu_vr_t idx = mir_gen_expr(g, idx_node);
         int stride = mir_index_stride(g, n);
         if (stride > 1) {
             idx = wubu_mir_binop(g->prog, MIR_MUL, idx, wubu_mir_const(g->prog, (int64_t)stride));
         }
         wubu_vr_t addr = wubu_mir_binop(g->prog, MIR_ADD, base, idx);
+        /* For multi-dimensional arrays, intermediate dimensions yield addresses
+         * (arrays that decay to pointers), not values. Only load for the innermost
+         * dimension. Count total INDEX levels in the chain and total array dims,
+         * then determine if this is the innermost index. */
+        if (base_node && base_node->kind == HD_AST_IDENT && base_node->ident[0]) {
+            for (int i = 0; i < g->n_vars; i++) {
+                if (strcmp(g->vars[i].name, base_node->ident) == 0 && g->vars[i].is_array &&
+                    g->vars[i].type && g->vars[i].type->kind == HD_TYPE_ARRAY) {
+                    /* Count total array dimensions */
+                    int total_dims = 0;
+                    HDType *t = g->vars[i].type;
+                    while (t && t->kind == HD_TYPE_ARRAY) { total_dims++; t = t->base; }
+                    /* Count total INDEX levels in the chain (including this node) */
+                    int index_levels = 1;
+                    const HDASTNode *p = n;
+                    while (p && p->left && p->left->kind == HD_AST_INDEX) { index_levels++; p = p->left; }
+                    /* If this is NOT the innermost index, return address */
+                    if (index_levels < total_dims) {
+                        return addr;
+                    }
+                }
+            }
+        } else if (base_node && base_node->kind == HD_AST_INDEX) {
+            /* Base is an INDEX: this is an intermediate dimension.
+             * But we need to check if there are more INDEX levels above.
+             * The base INDEX already returned an address, but if this is the
+             * last INDEX (innermost), we should load instead. */
+            /* Count total INDEX levels in the chain */
+            int index_levels = 1;
+            const HDASTNode *p = n;
+            while (p && p->left && p->left->kind == HD_AST_INDEX) { index_levels++; p = p->left; }
+            /* Find the root variable and its dimensionality */
+            const HDASTNode *root = n;
+            while (root && root->kind == HD_AST_INDEX) root = root->left;
+            if (root && root->kind == HD_AST_IDENT && root->ident[0]) {
+                for (int i = 0; i < g->n_vars; i++) {
+                    if (strcmp(g->vars[i].name, root->ident) == 0 && g->vars[i].is_array &&
+                        g->vars[i].type && g->vars[i].type->kind == HD_TYPE_ARRAY) {
+                        int total_dims = 0;
+                        HDType *t = g->vars[i].type;
+                        while (t && t->kind == HD_TYPE_ARRAY) { total_dims++; t = t->base; }
+                        if (index_levels < total_dims) {
+                            return addr;
+                        }
+                        break;  /* found the var, stop searching */
+                    }
+                }
+            } else {
+                /* Not from an array variable — must be from a pointer dereference chain.
+                 * In this case, intermediate dimensions always return addresses. */
+                return addr;
+            }
+        }
         return wubu_mir_load(g->prog, addr);
     }
     case HD_AST_ADDR: {
