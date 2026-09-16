@@ -3785,11 +3785,16 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         /* Resolve callee name -> func_id via the collected func table. */
         int fid = -1;
         if (n->callee && n->callee->kind == HD_AST_IDENT) {
-            /* Search from end to find the most recent definition (not forward decl).
-             * Forward declarations have no body and are collected first;
-             * the actual definition comes later and has a body. */
+            /* Search from end to find the most recent DEFINITION (with body).
+             * Forward declarations have no body and are skipped;
+             * if only a forward declaration exists, treat as external. */
             for (int i = g->prog->n_funcs - 1; i >= 0; i--)
-                if (strcmp(g->prog->funcs[i].name, n->callee->ident) == 0) { fid = i; break; }
+                if (strcmp(g->prog->funcs[i].name, n->callee->ident) == 0) {
+                    /* Check if this is a definition (has body) */
+                    if (g->func_ast[i] && g->func_ast[i]->body) {
+                        fid = i; break;
+                    }
+                }
         }
         /* Function pointer member call: s.fn(args) where callee is a DOT/MEMBER expr.
          * The function pointer was previously stored as a func_id in the var.
