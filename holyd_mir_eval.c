@@ -393,6 +393,8 @@ static void mir_collect_funcs(HDMirGen *g, const HDASTNode *ast) {
         for (uint32_t i = 0; i < ast->n_stmts; i++) {
             const HDASTNode *s = ast->stmts[i];
             if (s && s->kind == HD_AST_FUNC_DECL && g->n_funcs < MIR_MAX_FUNCTIONS) {
+                /* Skip forward declarations (no body) — they are external funcs */
+                if (!s->body) continue;
                 int id = g->n_funcs++;
                 g->func_ast[id] = s;
                 strncpy(g->prog->funcs[id].name, s->ident, HD_MAX_IDENT_LEN - 1);
@@ -402,6 +404,8 @@ static void mir_collect_funcs(HDMirGen *g, const HDASTNode *ast) {
             }
         }
     } else if (ast->kind == HD_AST_FUNC_DECL && g->n_funcs < MIR_MAX_FUNCTIONS) {
+        /* Skip forward declarations (no body) */
+        if (!ast->body) return;
         int id = g->n_funcs++;
         g->func_ast[id] = ast;
         strncpy(g->prog->funcs[id].name, ast->ident, HD_MAX_IDENT_LEN - 1);
