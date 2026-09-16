@@ -1432,28 +1432,12 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
                             int xmm_reg = 0;
                             if (vr1 >= 0) {
                                 emit_load_vr_to_xmm(&e, 1, assign, assign_count, prog, i, xmm_reg++);
-                            } else {
-                                /* Spilled: load from stack into rax, then movq xmm, rax */
-                                emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, 1));
-                                e8(&e, 0x66); e8(&e, 0x48); e8(&e, 0x0F); e8(&e, 0x6E);
-                                e8(&e, (uint8_t)(0xC0 + (xmm_reg << 3)));
-                                xmm_reg++;
                             }
                             if (vr2 >= 0) {
                                 emit_load_vr_to_xmm(&e, 2, assign, assign_count, prog, i, xmm_reg++);
-                            } else {
-                                emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, 2));
-                                e8(&e, 0x66); e8(&e, 0x48); e8(&e, 0x0F); e8(&e, 0x6E);
-                                e8(&e, (uint8_t)(0xC0 + (xmm_reg << 3)));
-                                xmm_reg++;
                             }
                             if (vr3 >= 0) {
                                 emit_load_vr_to_xmm(&e, 3, assign, assign_count, prog, i, xmm_reg++);
-                            } else {
-                                emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, 3));
-                                e8(&e, 0x66); e8(&e, 0x48); e8(&e, 0x0F); e8(&e, 0x6E);
-                                e8(&e, (uint8_t)(0xC0 + (xmm_reg << 3)));
-                                xmm_reg++;
                             }
                             /* Set al = number of vector registers used */
                             e8(&e, 0xB0); e8(&e, (uint8_t)xmm_reg);
