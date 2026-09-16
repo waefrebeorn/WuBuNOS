@@ -1889,7 +1889,7 @@ done_params:
 
     /* Array declarator: name[N][M]... or name[expr]... (VLA) */
     int dims[8], n_dims = 0;
-    int vla_dims[8]; /* 1 if this dim is VLA (runtime expr) */
+    int vla_dims[8] = {0}; /* 1 if this dim is VLA (runtime expr) */
     HDASTNode *vla_exprs[8]; /* expression nodes for VLA dims */
     memset(vla_exprs, 0, sizeof(vla_exprs));
     while (peek(p) == HD_TOK_LBRACKET) {

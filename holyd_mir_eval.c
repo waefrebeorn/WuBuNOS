@@ -790,21 +790,29 @@ static int mir_index_stride(HDMirGen *g, const HDASTNode *n) {
     if (!root || root->kind != HD_AST_IDENT) return 8; /* default: 8 bytes */
     /* Look up the variable in the symbol table */
     for (int i = 0; i < g->n_vars; i++) {
-        if (strcmp(g->vars[i].name, root->ident) == 0) {
-            if (g->vars[i].is_array) {
-                if (depth <= 1) {
-                    /* Outermost index: use array_stride * 8 */
-                    int stride = g->vars[i].array_stride * 8;
-                    if (stride < 8) stride = 8;
-                    return stride;
-                } else {
-                    /* Inner index: each element is 1 cell = 8 bytes */
-                    return 8;
+        if (strcmp(g->vars[i].name, root->ident) == 0 && g->vars[i].type) {
+            HDType *vt = g->vars[i].type;
+            if (vt->kind == HD_TYPE_ARRAY) {
+                /* Collect all array sizes from outermost to innermost */
+                int sizes[8], nsz = 0;
+                HDType *t = vt;
+                while (t && t->kind == HD_TYPE_ARRAY && nsz < 8) {
+                    sizes[nsz++] = (int)t->array_size;
+                    t = t->base;
                 }
-            } else if (g->vars[i].type && g->vars[i].type->kind == HD_TYPE_PTR &&
-                       g->vars[i].type->base && g->vars[i].type->base->kind == HD_TYPE_ARRAY) {
-                /* Pointer to array (e.g., int (*a)[3]): stride = array_size * 8 */
-                return g->vars[i].type->base->array_size * 8;
+                /* depth is the number of INDEX levels (1 = outermost).
+                 * For depth=d, stride = product of sizes[d..nsz-1] * 8 */
+                if (depth >= 1 && depth <= nsz) {
+                    int stride = 8;
+                    for (int d = depth; d < nsz; d++) {
+                        stride *= sizes[d];
+                    }
+                    return stride;
+                }
+                return 8;
+            } else if (vt->kind == HD_TYPE_PTR && vt->base && vt->base->kind == HD_TYPE_ARRAY) {
+                /* Pointer to array: stride = array_size * 8 */
+                return vt->base->array_size * 8;
             }
             break;
         }
@@ -1433,6 +1441,28 @@ extern_done:
                         for (int s = 0; s < n_scalars; s++) {
                             int sub_off = offset + (int)s * 8;
                             wubu_vr_t sub_ev = mir_gen_expr(g, scalars[s]);
+                            /* Convert initializer value to element type */
+                            if (!is_struct_var && n->type && n->type->kind == HD_TYPE_ARRAY && n->type->base) {
+                                /* Find the scalar base type (strip array layers) */
+                                HDType *scalar_type = n->type->base;
+                                while (scalar_type && scalar_type->kind == HD_TYPE_ARRAY && scalar_type->base)
+                                    scalar_type = scalar_type->base;
+                                HDTypeKind elem_k = scalar_type ? scalar_type->kind : HD_TYPE_I64;
+                                int init_is_float = mir_is_float_node(g, scalars[s]);
+                                if (init_is_float && (elem_k == HD_TYPE_I64 || elem_k == HD_TYPE_U64 ||
+                                                      elem_k == HD_TYPE_I32 || elem_k == HD_TYPE_U32 ||
+                                                      elem_k == HD_TYPE_I16 || elem_k == HD_TYPE_U16 ||
+                                                      elem_k == HD_TYPE_I8 || elem_k == HD_TYPE_U8)) {
+                                    if (elem_k == HD_TYPE_U64 || elem_k == HD_TYPE_U32 ||
+                                        elem_k == HD_TYPE_U16 || elem_k == HD_TYPE_U8)
+                                        sub_ev = wubu_mir_unop(g->prog, MIR_DTOI_U, sub_ev);
+                                    else
+                                        sub_ev = wubu_mir_unop(g->prog, MIR_DTOI, sub_ev);
+                                }
+                                if (!init_is_float && elem_k == HD_TYPE_F64) {
+                                    sub_ev = wubu_mir_unop(g->prog, MIR_DITOF, sub_ev);
+                                }
+                            }
                             wubu_vr_t sub_addr = wubu_mir_binop(g->prog, MIR_ADD, addr,
                                 wubu_mir_const(g->prog, (int64_t)sub_off));
                             wubu_mir_store(g->prog, sub_addr, sub_ev);
@@ -1470,13 +1500,15 @@ extern_done:
                             }
                         }
                         ev = mir_gen_expr(g, elem);
-                        /* Convert initializer value to element type for arrays.
-                         * For arrays of integer types, convert float initializers. */
+                        /* Convert initializer value to element type for arrays. */
                         if (!is_struct_var && n->type && n->type->kind == HD_TYPE_ARRAY && n->type->base) {
-                            HDType *elem_type = n->type->base;
-                            HDTypeKind elem_k = elem_type->kind;
-                            /* Check if the initializer is a float */
+                            /* Find the scalar base type (strip array layers) */
+                            HDType *scalar_type = n->type->base;
+                            while (scalar_type && scalar_type->kind == HD_TYPE_ARRAY && scalar_type->base)
+                                scalar_type = scalar_type->base;
+                            HDTypeKind elem_k = scalar_type ? scalar_type->kind : HD_TYPE_I64;
                             int init_is_float = mir_is_float_node(g, elem);
+                            /* float -> int conversion */
                             if (init_is_float && (elem_k == HD_TYPE_I64 || elem_k == HD_TYPE_U64 ||
                                                   elem_k == HD_TYPE_I32 || elem_k == HD_TYPE_U32 ||
                                                   elem_k == HD_TYPE_I16 || elem_k == HD_TYPE_U16 ||
@@ -1486,6 +1518,10 @@ extern_done:
                                     ev = wubu_mir_unop(g->prog, MIR_DTOI_U, ev);
                                 else
                                     ev = wubu_mir_unop(g->prog, MIR_DTOI, ev);
+                            }
+                            /* int -> float conversion */
+                            if (!init_is_float && elem_k == HD_TYPE_F64) {
+                                ev = wubu_mir_unop(g->prog, MIR_DITOF, ev);
                             }
                         }
                         /* Convert initializer value to member type */
@@ -2790,22 +2826,24 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
  }
  /* String literal - integer */
  if (ptr_scale == 0 && n->left && n->left->kind == HD_AST_STRING_LIT) {
- ptr_scale = 8;
+     ptr_scale = 8;
  }
-        if (ptr_scale > 1)
-            b = wubu_mir_binop(g->prog, MIR_MUL, b, wubu_mir_const(g->prog, (int64_t)ptr_scale));
-        int is_float = (n->left && n->left->type && n->left->type->kind == HD_TYPE_F64) ||
-                       (n->right && n->right->type && n->right->type->kind == HD_TYPE_F64) ||
-                       (n->left && n->left->kind == HD_AST_IDENT && mir_find_var_is_float(g, n->left->ident)) ||
-                       (n->right && n->right->kind == HD_AST_IDENT && mir_find_var_is_float(g, n->right->ident)) ||
-                       mir_is_float_node(g, n->left) ||
-                       mir_is_float_node(g, n->right);
-        /* Promote integer operands to float for mixed-type operations */
-        if (is_float) {
-            a = mir_promote_to_float(g, a, n->left);
-            b = mir_promote_to_float(g, b, n->right);
-        }
-        wubu_vr_t r = wubu_mir_binop(g->prog, is_float ? MIR_DSUB : MIR_SUB, a, b);
+ int is_float = (n->left && n->left->type && n->left->type->kind == HD_TYPE_F64) ||
+                (n->right && n->right->type && n->right->type->kind == HD_TYPE_F64) ||
+                (n->left && n->left->kind == HD_AST_IDENT && mir_find_var_is_float(g, n->left->ident)) ||
+                (n->right && n->right->kind == HD_AST_IDENT && mir_find_var_is_float(g, n->right->ident)) ||
+                mir_is_float_node(g, n->left) ||
+                mir_is_float_node(g, n->right);
+ /* Promote integer operands to float for mixed-type operations */
+ if (is_float) {
+     a = mir_promote_to_float(g, a, n->left);
+     b = mir_promote_to_float(g, b, n->right);
+ }
+ wubu_vr_t r = wubu_mir_binop(g->prog, is_float ? MIR_DSUB : MIR_SUB, a, b);
+ if (!is_float && ptr_scale > 1) {
+     /* Pointer subtraction: divide by element size to get element count */
+     r = wubu_mir_binop(g->prog, MIR_DIV, r, wubu_mir_const(g->prog, (int64_t)ptr_scale));
+ }
         if (!is_float) { HDType *rt = mir_binop_result_type(g, n->left, n->right);
             if (rt && (rt->kind == HD_TYPE_I32 || rt->kind == HD_TYPE_U32)) r = mir_truncate_to_type(g, r, rt); }
         return r;
