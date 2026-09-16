@@ -804,7 +804,73 @@ static int mir_index_stride(HDMirGen *g, const HDASTNode *n) {
     }
     return 8; /* default: 1 cell = 8 bytes */
 }
-static wubu_vr_t mir_lvalue_addr(HDMirGen *g, const HDASTNode *n); /* forward decl */
+/* Determine the effective type of an expression node.
+ * Returns the type, or NULL if unknown.
+ * Handles IDENT (var table lookup), ARRAY (element type), PTR (pointee type),
+ * and INDEX/DEREF (follow the chain to the root variable). */
+static HDType *mir_effective_type(HDMirGen *g, const HDASTNode *n) {
+    if (!n) return NULL;
+    if (n->type) return n->type;
+    if (n->kind == HD_AST_IDENT && n->ident[0])
+        return mir_find_var_type(g, n->ident);
+    if (n->kind == HD_AST_INDEX) {
+        /* arr[i]: effective type is the element type of the array */
+        const HDASTNode *root = n;
+        while (root && root->kind == HD_AST_INDEX) root = root->left;
+        if (root && root->kind == HD_AST_IDENT && root->ident[0]) {
+            HDType *rt = mir_find_var_type(g, root->ident);
+            /* Count INDEX levels to determine how many dimensions to strip */
+            int idx_depth = 0;
+            const HDASTNode *p = n;
+            while (p && p->kind == HD_AST_INDEX) { idx_depth++; p = p->left; }
+            HDType *t = rt;
+            for (int d = 0; d < idx_depth && t; d++) {
+                if (t->kind == HD_TYPE_ARRAY && t->base) t = t->base;
+                else break;
+            }
+            return t;
+        }
+    }
+    if (n->kind == HD_AST_DEREF) {
+        /* *p: effective type is the pointee type */
+        HDType *child_type = mir_effective_type(g, n->child);
+        if (child_type && child_type->kind == HD_TYPE_PTR && child_type->base)
+            return child_type->base;
+        return child_type;
+    }
+    if (n->kind == HD_AST_ADD || n->kind == HD_AST_SUB) {
+        /* For pointer arithmetic, the result type is the pointer type.
+         * If one side is a pointer/array and the other is an integer,
+         * the result is a pointer (not an array — arrays decay to pointers
+         * in arithmetic expressions). */
+        HDType *lt = mir_effective_type(g, n->left);
+        HDType *rt = mir_effective_type(g, n->right);
+        int lt_is_ptr = (lt && (lt->kind == HD_TYPE_ARRAY || lt->kind == HD_TYPE_PTR));
+        int rt_is_ptr = (rt && (rt->kind == HD_TYPE_ARRAY || rt->kind == HD_TYPE_PTR));
+        if (lt_is_ptr && rt_is_ptr) {
+            /* ptr - ptr: result is an integer (ptrdiff_t) */
+            return NULL;
+        }
+        if (lt_is_ptr) {
+            /* ptr + int: result is a pointer to the element type */
+            if (lt->kind == HD_TYPE_ARRAY && lt->base)
+                return lt->base;  /* element type, not array */
+            if (lt->kind == HD_TYPE_PTR && lt->base)
+                return lt->base;
+            return lt;
+        }
+        if (rt_is_ptr) {
+            /* int + ptr: result is a pointer to the element type */
+            if (rt->kind == HD_TYPE_ARRAY && rt->base)
+                return rt->base;
+            if (rt->kind == HD_TYPE_PTR && rt->base)
+                return rt->base;
+            return rt;
+        }
+        return lt ? lt : rt;
+    }
+    return NULL;
+}
 
 static wubu_vr_t mir_address_of(HDMirGen *g, const HDASTNode *n) {
     if (!n) return 0;
@@ -2513,45 +2579,48 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
          * Handle both ptr + int and int + ptr cases. */
         int ptr_scale = 0;
         bool left_is_ptr = true;
-        /* Check array types first (arrays decay to pointers) */
-        if (n->left && n->left->type && n->left->type->kind == HD_TYPE_ARRAY) {
-            if (n->left->type->base && n->left->type->base->kind == HD_TYPE_ARRAY) {
+        /* Check array types first (arrays decay to pointers).
+         * Use mir_effective_type to handle DEREF/INDEX results. */
+        HDType *left_eff_type = mir_effective_type(g, n->left);
+        if (left_eff_type && left_eff_type->kind == HD_TYPE_ARRAY) {
+            if (left_eff_type->base && left_eff_type->base->kind == HD_TYPE_ARRAY) {
                 /* Multi-dimensional array: scale by inner array size * 8 */
-                ptr_scale = n->left->type->base->array_size * 8;
-            } else if (n->left->type->base) {
+                ptr_scale = left_eff_type->base->array_size * 8;
+            } else if (left_eff_type->base) {
                 /* 1D array: scale by element size (8 bytes per cell) */
                 ptr_scale = 8;
             }
-        } else if (n->left && n->left->type && n->left->type->kind == HD_TYPE_PTR) {
-            if (n->left->type->base && n->left->type->base->kind == HD_TYPE_STRUCT) {
-                mir_struct_t *st = mir_find_struct(g, n->left->type->base->name);
+        } else if (left_eff_type && left_eff_type->kind == HD_TYPE_PTR) {
+            if (left_eff_type->base && left_eff_type->base->kind == HD_TYPE_STRUCT) {
+                mir_struct_t *st = mir_find_struct(g, left_eff_type->base->name);
                 if (st && st->total_size > 0) ptr_scale = st->total_size * 8;
-            } else if (n->left->type->base && n->left->type->base->kind == HD_TYPE_ARRAY) {
+            } else if (left_eff_type->base && left_eff_type->base->kind == HD_TYPE_ARRAY) {
                 /* Pointer to array: scale by array_size * cell_size (8 bytes per cell) */
-                ptr_scale = n->left->type->base->array_size * 8;
-            } else if (n->left->type->base) {
+                ptr_scale = left_eff_type->base->array_size * 8;
+            } else if (left_eff_type->base) {
                 ptr_scale = 8;
             }
         }
         /* Check for int + ptr case (right side is pointer/array) */
-        if (ptr_scale == 0 && n->right && n->right->type) {
-            HDTypeKind right_kind = n->right->type->kind;
+        HDType *right_eff_type = mir_effective_type(g, n->right);
+        if (ptr_scale == 0 && right_eff_type) {
+            HDTypeKind right_kind = right_eff_type->kind;
             if (right_kind == HD_TYPE_ARRAY) {
-                if (n->right->type->base && n->right->type->base->kind == HD_TYPE_ARRAY) {
-                    ptr_scale = n->right->type->base->array_size * 8;
-                } else if (n->right->type->base) {
+                if (right_eff_type->base && right_eff_type->base->kind == HD_TYPE_ARRAY) {
+                    ptr_scale = right_eff_type->base->array_size * 8;
+                } else if (right_eff_type->base) {
                     ptr_scale = 8;
                 }
                 left_is_ptr = false;
             } else if (right_kind == HD_TYPE_PTR) {
-                if (n->right->type->base && n->right->type->base->kind == HD_TYPE_STRUCT) {
-                    mir_struct_t *st = mir_find_struct(g, n->right->type->base->name);
+                if (right_eff_type->base && right_eff_type->base->kind == HD_TYPE_STRUCT) {
+                    mir_struct_t *st = mir_find_struct(g, right_eff_type->base->name);
                     if (st && st->total_size > 0) ptr_scale = st->total_size * 8;
                     left_is_ptr = false;
-                } else if (n->right->type->base && n->right->type->base->kind == HD_TYPE_ARRAY) {
-                    ptr_scale = n->right->type->base->array_size * 8;
+                } else if (right_eff_type->base && right_eff_type->base->kind == HD_TYPE_ARRAY) {
+                    ptr_scale = right_eff_type->base->array_size * 8;
                     left_is_ptr = false;
-                } else if (n->right->type->base) {
+                } else if (right_eff_type->base) {
                     ptr_scale = 8;
                     left_is_ptr = false;
                 }
@@ -2561,22 +2630,39 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         if (ptr_scale == 0 && n->left && n->left->kind == HD_AST_STRING_LIT) {
             ptr_scale = 8;
         }
-        /* Also check var table for pointer/array types */
-        if (ptr_scale == 0 && n->left && n->left->kind == HD_AST_IDENT && n->left->ident[0]) {
-            for (int i = 0; i < g->n_vars; i++) {
-                if (strcmp(g->vars[i].name, n->left->ident) == 0) {
-                    if (g->vars[i].is_ptr_struct) {
-                        mir_struct_t *st = mir_find_struct(g, g->vars[i].struct_name);
-                        if (st && st->total_size > 0) ptr_scale = st->total_size * 8;
-                    } else if (g->vars[i].type && g->vars[i].type->kind == HD_TYPE_PTR) {
-                        ptr_scale = 8;
-                    } else if (g->vars[i].is_array && g->vars[i].type) {
-                        if (g->vars[i].type->base && g->vars[i].type->base->kind == HD_TYPE_ARRAY)
-                            ptr_scale = g->vars[i].type->base->array_size * 8;
-                        else
+        /* Also check var table for pointer/array types.
+         * Use mir_effective_type to handle DEREF/INDEX results.
+         * Only apply scaling if the effective type is actually a pointer/array. */
+        if (ptr_scale == 0 && n->left) {
+            const char *root_name = NULL;
+            if (n->left->kind == HD_AST_IDENT && n->left->ident[0])
+                root_name = n->left->ident;
+            else if (n->left->kind == HD_AST_INDEX) {
+                const HDASTNode *root = n->left;
+                while (root && root->kind == HD_AST_INDEX) root = root->left;
+                if (root && root->kind == HD_AST_IDENT && root->ident[0])
+                    root_name = root->ident;
+            }
+            if (root_name) {
+                for (int i = 0; i < g->n_vars; i++) {
+                    if (strcmp(g->vars[i].name, root_name) == 0) {
+                        if (g->vars[i].is_ptr_struct) {
+                            mir_struct_t *st = mir_find_struct(g, g->vars[i].struct_name);
+                            if (st && st->total_size > 0) ptr_scale = st->total_size * 8;
+                        } else if (g->vars[i].type && g->vars[i].type->kind == HD_TYPE_PTR) {
                             ptr_scale = 8;
+                        } else if (g->vars[i].is_array && g->vars[i].type &&
+                                   g->vars[i].type->kind == HD_TYPE_ARRAY &&
+                                   g->vars[i].type->base && g->vars[i].type->base->kind == HD_TYPE_ARRAY) {
+                            /* Multi-dimensional array: only scale if the expression
+                             * result is still an array (not fully indexed) */
+                            HDType *eff = mir_effective_type(g, n->left);
+                            if (eff && eff->kind == HD_TYPE_ARRAY) {
+                                ptr_scale = g->vars[i].type->base->array_size * 8;
+                            }
+                        }
+                        break;
                     }
-                    break;
                 }
             }
         }
@@ -3613,8 +3699,16 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         return mir_address_of(g, n->child);
     }
     case HD_AST_DEREF: {
-        /* *p -> load from address held in p */
+        /* *p -> load from address held in p.
+         * Exception: if the inner expression yields an array type,
+         * the array decays to a pointer (its address IS the value),
+         * so we should NOT load — just return the address. */
         wubu_vr_t addr = mir_gen_expr(g, n->child);
+        HDType *inner_type = mir_effective_type(g, n->child);
+        if (inner_type && inner_type->kind == HD_TYPE_ARRAY) {
+            /* Array decays to pointer: return address, don't load */
+            return addr;
+        }
         return wubu_mir_load(g->prog, addr);
     }
     case HD_AST_CALL:
