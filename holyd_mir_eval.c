@@ -3329,6 +3329,13 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             if (n->child->kind == HD_AST_CHAR_LIT) {
                 /* In C, char literals have type int, so sizeof 'a' == 4 */
                 size = 4;
+            } else if (n->child->kind == HD_AST_STRING_LIT) {
+                /* sizeof("string") returns array length including null terminator */
+                if (n->child->str_val[0]) {
+                    size = (int)strlen(n->child->str_val) + 1;
+                } else {
+                    size = 1; /* empty string "" = 1 byte (null terminator) */
+                }
             } else if (n->child->kind == HD_AST_TERNARY) {
                 /* sizeof(cond ? a : b): result type is common type of a and b */
                 /* For integer literals, result is int (4 bytes) */
