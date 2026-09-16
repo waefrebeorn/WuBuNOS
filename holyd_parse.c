@@ -1727,10 +1727,15 @@ done_extern_params:
                         if (peek(p) == HD_TOK_IDENT) advance(p); /* named dim */
                         expect(p, HD_TOK_RBRACKET);
                     }
-                    /* C standard: array parameters are adjusted to pointers */
+                    /* C standard: array parameters are adjusted to pointers.
+                     * Strip the outermost array dimension and wrap in pointer.
+                     * e.g. int a[2][3] -> int (*a)[3], int a[5] -> int *a */
+                    HDType *ptr_base = pt;
+                    if (pt && pt->kind == HD_TYPE_ARRAY && pt->base)
+                        ptr_base = pt->base; /* strip outermost dimension */
                     HDType *ptr = (HDType *)calloc(1, sizeof(HDType));
                     ptr->kind = HD_TYPE_PTR;
-                    ptr->base = pt;
+                    ptr->base = ptr_base;
                     ptr->size = 8;
                     pt = ptr;
                 }

@@ -790,16 +790,23 @@ static int mir_index_stride(HDMirGen *g, const HDASTNode *n) {
     if (!root || root->kind != HD_AST_IDENT) return 8; /* default: 8 bytes */
     /* Look up the variable in the symbol table */
     for (int i = 0; i < g->n_vars; i++) {
-        if (strcmp(g->vars[i].name, root->ident) == 0 && g->vars[i].is_array) {
-            if (depth <= 1) {
-                /* Outermost index: use array_stride * 8 */
-                int stride = g->vars[i].array_stride * 8;
-                if (stride < 8) stride = 8;
-                return stride;
-            } else {
-                /* Inner index: each element is 1 cell = 8 bytes */
-                return 8;
+        if (strcmp(g->vars[i].name, root->ident) == 0) {
+            if (g->vars[i].is_array) {
+                if (depth <= 1) {
+                    /* Outermost index: use array_stride * 8 */
+                    int stride = g->vars[i].array_stride * 8;
+                    if (stride < 8) stride = 8;
+                    return stride;
+                } else {
+                    /* Inner index: each element is 1 cell = 8 bytes */
+                    return 8;
+                }
+            } else if (g->vars[i].type && g->vars[i].type->kind == HD_TYPE_PTR &&
+                       g->vars[i].type->base && g->vars[i].type->base->kind == HD_TYPE_ARRAY) {
+                /* Pointer to array (e.g., int (*a)[3]): stride = array_size * 8 */
+                return g->vars[i].type->base->array_size * 8;
             }
+            break;
         }
     }
     return 8; /* default: 1 cell = 8 bytes */
