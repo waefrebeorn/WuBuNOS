@@ -1384,11 +1384,18 @@ extern_done:
                 int n_array_elems = g->array_elements_pending > 0 ? g->array_elements_pending : arr_size;
                 for (uint32_t e = 0; e < n->init->n_args && e < (uint32_t)n_array_elems; e++) {
                     int elem_sz = 8; /* default: 1 cell */
-                    if (n->type && n->type->kind == HD_TYPE_ARRAY && n->type->base
-                        && n->type->base->kind == HD_TYPE_ARRAY) {
-                        /* Multi-dimensional: element size = inner array size in cells * 8 bytes.
-                         * Each element occupies 1 cell (8 bytes) regardless of logical type size. */
-                        elem_sz = (int)(n->type->base->array_size * 8);
+                    if (n->type && n->type->kind == HD_TYPE_ARRAY && n->type->base) {
+                        /* Element size = total size of sub-array in bytes.
+                         * For int[2][3][4], each element is int[3][4] = 12 cells = 96 bytes. */
+                        int total_cells = 1;
+                        HDType *t = n->type->base;
+                        while (t && t->kind == HD_TYPE_ARRAY) {
+                            total_cells *= (int)t->array_size;
+                            t = t->base;
+                        }
+                        /* t is now the scalar base type (e.g., I32) */
+                        total_cells *= 1; /* scalar is 1 cell */
+                        elem_sz = total_cells * 8;
                     }
                     int offset = (int)e * elem_sz;
                     /* For structs, use the actual member byte offset, not sequential. */
@@ -1405,10 +1412,27 @@ extern_done:
                     HDASTNode *elem = n->init->args[e];
                     wubu_vr_t ev;
                     if (elem->kind == HD_AST_BRACE_INIT) {
-                        /* Nested brace-init (multi-dimensional array): flatten */
-                        for (uint32_t se = 0; se < elem->n_args; se++) {
-                            int sub_off = offset + (int)se * 8;
-                            wubu_vr_t sub_ev = mir_gen_expr(g, elem->args[se]);
+                        /* Nested brace-init (multi-dimensional array): flatten recursively */
+                        /* Use a stack-based approach to collect all scalar values */
+                        HDASTNode *stack[256];
+                        int stack_top = 0;
+                        stack[stack_top++] = elem;
+                        int n_scalars = 0;
+                        HDASTNode *scalars[256];
+                        while (stack_top > 0 && n_scalars < 256) {
+                            HDASTNode *cur = stack[--stack_top];
+                            if (cur->kind == HD_AST_BRACE_INIT) {
+                                /* Push args in reverse order so they're processed in order */
+                                for (int s = (int)cur->n_args - 1; s >= 0; s--) {
+                                    if (stack_top < 256) stack[stack_top++] = cur->args[s];
+                                }
+                            } else {
+                                scalars[n_scalars++] = cur;
+                            }
+                        }
+                        for (int s = 0; s < n_scalars; s++) {
+                            int sub_off = offset + (int)s * 8;
+                            wubu_vr_t sub_ev = mir_gen_expr(g, scalars[s]);
                             wubu_vr_t sub_addr = wubu_mir_binop(g->prog, MIR_ADD, addr,
                                 wubu_mir_const(g->prog, (int64_t)sub_off));
                             wubu_mir_store(g->prog, sub_addr, sub_ev);
