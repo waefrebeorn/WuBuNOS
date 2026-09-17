@@ -2422,36 +2422,103 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         return val;
     }
     case HD_AST_POST_INC:
-    case HD_AST_POST_DEC: {
-        /* tmp = v; v = v +/- 1; return tmp */
-        if (n->child && (n->child->kind == HD_AST_IDENT || n->child->kind == HD_AST_INDEX)) {
-            wubu_vr_t addr;
-            if (n->child->kind == HD_AST_IDENT) {
-                addr = mir_find_var_addr(g, n->child->ident);
-            } else {
-                /* HD_AST_INDEX: compute address of array element */
-                addr = mir_address_of(g, n->child);
+        case HD_AST_POST_DEC: {
+            /* tmp = v; v = v +/- 1; return tmp */
+            if (n->child && (n->child->kind == HD_AST_IDENT || n->child->kind == HD_AST_INDEX)) {
+                /* ... existing IDENT/INDEX handling ... */
+                wubu_vr_t addr;
+                if (n->child->kind == HD_AST_IDENT) {
+                    addr = mir_find_var_addr(g, n->child->ident);
+                } else {
+                    addr = mir_address_of(g, n->child);
+                }
+                if (addr) {
+                    const char *var_name = (n->child->kind == HD_AST_IDENT)
+                        ? n->child->ident
+                        : (n->child->left && n->child->left->kind == HD_AST_IDENT)
+                            ? n->child->left->ident : NULL;
+                    int is_float_var = 0;
+                    if (var_name) {
+                        for (int i = 0; i < g->n_vars; i++) {
+                            if (strcmp(g->vars[i].name, var_name) == 0 && g->vars[i].is_float) {
+                                is_float_var = 1; break;
+                            }
+                        }
+                    }
+                    wubu_vr_t tmp = mir_new_vr(g);
+                    wubu_vr_t v = wubu_mir_load(g->prog, addr);
+                    wubu_mir_mov_to(g->prog, tmp, v);
+                    wubu_vr_t upd;
+                    if (is_float_var) {
+                        union { double d; int64_t i; } u;
+                        u.d = 1.0;
+                        wubu_vr_t one_d = wubu_mir_const(g->prog, u.i);
+                        upd = (n->kind == HD_AST_POST_INC)
+                            ? wubu_mir_binop(g->prog, MIR_DADD, tmp, one_d)
+                            : wubu_mir_binop(g->prog, MIR_DSUB, tmp, one_d);
+                    } else {
+                        int inc_val = 1;
+                        if (var_name) {
+                            for (int i = 0; i < g->n_vars; i++) {
+                                if (strcmp(g->vars[i].name, var_name) == 0 && g->vars[i].type
+                                    && g->vars[i].type->kind == HD_TYPE_PTR) {
+                                    inc_val = 8; break;
+                                }
+                            }
+                        }
+                        wubu_vr_t one = wubu_mir_const(g->prog, (int64_t)inc_val);
+                        upd = (n->kind == HD_AST_POST_INC)
+                            ? wubu_mir_binop(g->prog, MIR_ADD, tmp, one)
+                            : wubu_mir_binop(g->prog, MIR_SUB, tmp, one);
+                        if (var_name) {
+                            for (int i = 0; i < g->n_vars; i++) {
+                                if (strcmp(g->vars[i].name, var_name) == 0 && g->vars[i].type &&
+                                    (g->vars[i].type->kind == HD_TYPE_I8 || g->vars[i].type->kind == HD_TYPE_U8 ||
+                                     g->vars[i].type->kind == HD_TYPE_I16 || g->vars[i].type->kind == HD_TYPE_U16 ||
+                                     g->vars[i].type->kind == HD_TYPE_I32 || g->vars[i].type->kind == HD_TYPE_U32 ||
+                                     g->vars[i].type->kind == HD_TYPE_I64 || g->vars[i].type->kind == HD_TYPE_U64 ||
+                                     (g->vars[i].type->kind == HD_TYPE_ARRAY &&
+                                      (g->vars[i].type->base->kind == HD_TYPE_I8 ||
+                                       g->vars[i].type->base->kind == HD_TYPE_U8 ||
+                                       g->vars[i].type->base->kind == HD_TYPE_I16 ||
+                                       g->vars[i].type->base->kind == HD_TYPE_U16 ||
+                                       g->vars[i].type->base->kind == HD_TYPE_I32 ||
+                                       g->vars[i].type->base->kind == HD_TYPE_U32 ||
+                                       g->vars[i].type->base->kind == HD_TYPE_I64 ||
+                                       g->vars[i].type->base->kind == HD_TYPE_U64)))) {
+                                    upd = mir_truncate_to_type(g, upd, g->vars[i].type); break;
+                                }
+                            }
+                        }
+                    }
+                    wubu_mir_store(g->prog, addr, upd);
+                    return tmp;
+                }
             }
-            if (addr) {
-                /* Determine variable name for type lookup */
-                const char *var_name = (n->child->kind == HD_AST_IDENT)
-                    ? n->child->ident
-                    : (n->child->left && n->child->left->kind == HD_AST_IDENT)
-                        ? n->child->left->ident : NULL;
-                /* Check if this is a float variable */
-                int is_float_var = 0;
-                if (var_name) {
+            /* Handle DEREF: (*p)++ / (*p)-- */
+            if (n->child && n->child->kind == HD_AST_DEREF) {
+                /* Compute the address from the pointer */
+                wubu_vr_t ptr_val = mir_gen_expr(g, n->child->child);
+                wubu_vr_t tmp = mir_new_vr(g);
+                wubu_vr_t v = wubu_mir_load(g->prog, ptr_val);
+                wubu_mir_mov_to(g->prog, tmp, v);
+                /* Check if this is a float/double pointer */
+                int is_float_ptr = 0;
+                if (n->child->child && n->child->child->type &&
+                    n->child->child->type->base &&
+                    n->child->child->type->base->kind == HD_TYPE_F64) {
+                    is_float_ptr = 1;
+                }
+                if (!is_float_ptr && n->child->child && n->child->child->kind == HD_AST_IDENT) {
                     for (int i = 0; i < g->n_vars; i++) {
-                        if (strcmp(g->vars[i].name, var_name) == 0 && g->vars[i].is_float) {
-                            is_float_var = 1; break;
+                        if (strcmp(g->vars[i].name, n->child->child->ident) == 0 &&
+                            g->vars[i].is_float) {
+                            is_float_ptr = 1; break;
                         }
                     }
                 }
-                wubu_vr_t tmp = mir_new_vr(g);
-                wubu_vr_t v = wubu_mir_load(g->prog, addr);
-                wubu_mir_mov_to(g->prog, tmp, v);
                 wubu_vr_t upd;
-                if (is_float_var) {
+                if (is_float_ptr) {
                     union { double d; int64_t i; } u;
                     u.d = 1.0;
                     wubu_vr_t one_d = wubu_mir_const(g->prog, u.i);
@@ -2459,48 +2526,16 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                         ? wubu_mir_binop(g->prog, MIR_DADD, tmp, one_d)
                         : wubu_mir_binop(g->prog, MIR_DSUB, tmp, one_d);
                 } else {
-                    /* For pointer variables, scale increment by element size (cell-based: 8) */
-                    int inc_val = 1;
-                    if (var_name) {
-                        for (int i = 0; i < g->n_vars; i++) {
-                            if (strcmp(g->vars[i].name, var_name) == 0 && g->vars[i].type
-                                && g->vars[i].type->kind == HD_TYPE_PTR) {
-                                inc_val = 8; break;
-                            }
-                        }
-                    }
-                    wubu_vr_t one = wubu_mir_const(g->prog, (int64_t)inc_val);
+                    wubu_vr_t one = wubu_mir_const(g->prog, (int64_t)1);
                     upd = (n->kind == HD_AST_POST_INC)
                         ? wubu_mir_binop(g->prog, MIR_ADD, tmp, one)
                         : wubu_mir_binop(g->prog, MIR_SUB, tmp, one);
-                    /* Truncate updated value to variable type width */
-                    if (var_name) {
-                        for (int i = 0; i < g->n_vars; i++) {
-                            if (strcmp(g->vars[i].name, var_name) == 0 && g->vars[i].type &&
-                                (g->vars[i].type->kind == HD_TYPE_I8 || g->vars[i].type->kind == HD_TYPE_U8 ||
-                                 g->vars[i].type->kind == HD_TYPE_I16 || g->vars[i].type->kind == HD_TYPE_U16 ||
-                                 g->vars[i].type->kind == HD_TYPE_I32 || g->vars[i].type->kind == HD_TYPE_U32 ||
-                                 g->vars[i].type->kind == HD_TYPE_I64 || g->vars[i].type->kind == HD_TYPE_U64 ||
-                                 (g->vars[i].type->kind == HD_TYPE_ARRAY &&
-                                  (g->vars[i].type->base->kind == HD_TYPE_I8 ||
-                                   g->vars[i].type->base->kind == HD_TYPE_U8 ||
-                                   g->vars[i].type->base->kind == HD_TYPE_I16 ||
-                                   g->vars[i].type->base->kind == HD_TYPE_U16 ||
-                                   g->vars[i].type->base->kind == HD_TYPE_I32 ||
-                                   g->vars[i].type->base->kind == HD_TYPE_U32 ||
-                                   g->vars[i].type->base->kind == HD_TYPE_I64 ||
-                                   g->vars[i].type->base->kind == HD_TYPE_U64)))) {
-                                upd = mir_truncate_to_type(g, upd, g->vars[i].type); break;
-                            }
-                        }
-                    }
                 }
-                wubu_mir_store(g->prog, addr, upd);
+                wubu_mir_store(g->prog, ptr_val, upd);
                 return tmp;
             }
+            return mir_gen_expr(g, n->child);
         }
-        return mir_gen_expr(g, n->child);
-    }
     case HD_AST_PRE_INC:
     case HD_AST_PRE_DEC: {
         /* v = v +/- 1; return v */
@@ -2576,6 +2611,44 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 wubu_mir_store(g->prog, addr, upd);
                 return upd;
             }
+        }
+        /* Handle DEREF: ++(*p) / --(*p) */
+        if (n->child && n->child->kind == HD_AST_DEREF) {
+            wubu_vr_t ptr_val = mir_gen_expr(g, n->child->child);
+            wubu_vr_t v = wubu_mir_load(g->prog, ptr_val);
+            /* Check if this is a float/double pointer */
+            int is_float_ptr = 0;
+            if (n->child->child && n->child->child->type &&
+                n->child->child->type->base &&
+                n->child->child->type->base->kind == HD_TYPE_F64) {
+                is_float_ptr = 1;
+            }
+            /* Also check var table for pointer-to-float */
+            if (!is_float_ptr && n->child->child && n->child->child->kind == HD_AST_IDENT) {
+                for (int i = 0; i < g->n_vars; i++) {
+                    if (strcmp(g->vars[i].name, n->child->child->ident) == 0 &&
+                        g->vars[i].type && g->vars[i].type->base &&
+                        g->vars[i].type->base->kind == HD_TYPE_F64) {
+                        is_float_ptr = 1; break;
+                    }
+                }
+            }
+            wubu_vr_t upd;
+            if (is_float_ptr) {
+                union { double d; int64_t i; } u;
+                u.d = 1.0;
+                wubu_vr_t one_d = wubu_mir_const(g->prog, u.i);
+                upd = (n->kind == HD_AST_PRE_INC)
+                    ? wubu_mir_binop(g->prog, MIR_DADD, v, one_d)
+                    : wubu_mir_binop(g->prog, MIR_DSUB, v, one_d);
+            } else {
+                wubu_vr_t one = wubu_mir_const(g->prog, (int64_t)1);
+                upd = (n->kind == HD_AST_PRE_INC)
+                    ? wubu_mir_binop(g->prog, MIR_ADD, v, one)
+                    : wubu_mir_binop(g->prog, MIR_SUB, v, one);
+            }
+            wubu_mir_store(g->prog, ptr_val, upd);
+            return upd;
         }
         return mir_gen_expr(g, n->child);
     }
