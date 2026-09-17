@@ -1727,15 +1727,10 @@ done_extern_params:
                         if (peek(p) == HD_TOK_IDENT) advance(p); /* named dim */
                         expect(p, HD_TOK_RBRACKET);
                     }
-                    /* C standard: array parameters are adjusted to pointers.
-                     * Strip the outermost array dimension and wrap in pointer.
-                     * e.g. int a[2][3] -> int (*a)[3], int a[5] -> int *a */
-                    HDType *ptr_base = pt;
-                    if (pt && pt->kind == HD_TYPE_ARRAY && pt->base)
-                        ptr_base = pt->base; /* strip outermost dimension */
+                    /* C standard: array parameters are adjusted to pointers */
                     HDType *ptr = (HDType *)calloc(1, sizeof(HDType));
                     ptr->kind = HD_TYPE_PTR;
-                    ptr->base = ptr_base;
+                    ptr->base = pt;
                     ptr->size = 8;
                     pt = ptr;
                 }
@@ -1889,7 +1884,7 @@ done_params:
 
     /* Array declarator: name[N][M]... or name[expr]... (VLA) */
     int dims[8], n_dims = 0;
-    int vla_dims[8] = {0}; /* 1 if this dim is VLA (runtime expr) */
+    int vla_dims[8]; /* 1 if this dim is VLA (runtime expr) */
     HDASTNode *vla_exprs[8]; /* expression nodes for VLA dims */
     memset(vla_exprs, 0, sizeof(vla_exprs));
     while (peek(p) == HD_TOK_LBRACKET) {

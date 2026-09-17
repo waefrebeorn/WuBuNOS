@@ -626,10 +626,7 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n);
  * Returns the (possibly truncated) VR. */
 static wubu_vr_t mir_truncate_to_type(HDMirGen *g, wubu_vr_t val, const HDType *type) {
     if (!type) return val;
-    /* For arrays, get the element type */
-    const HDType *t = type;
-    if (t->kind == HD_TYPE_ARRAY && t->base) t = t->base;
-    switch (t->kind) {
+    switch (type->kind) {
     case HD_TYPE_I8:
         val = wubu_mir_binop(g->prog, MIR_AND, val, wubu_mir_const(g->prog, 0xFF));
         return wubu_mir_unop(g->prog, MIR_SEXT8, val);
@@ -790,102 +787,21 @@ static int mir_index_stride(HDMirGen *g, const HDASTNode *n) {
     if (!root || root->kind != HD_AST_IDENT) return 8; /* default: 8 bytes */
     /* Look up the variable in the symbol table */
     for (int i = 0; i < g->n_vars; i++) {
-        if (strcmp(g->vars[i].name, root->ident) == 0 && g->vars[i].type) {
-            HDType *vt = g->vars[i].type;
-            if (vt->kind == HD_TYPE_ARRAY) {
-                /* Collect all array sizes from outermost to innermost */
-                int sizes[8], nsz = 0;
-                HDType *t = vt;
-                while (t && t->kind == HD_TYPE_ARRAY && nsz < 8) {
-                    sizes[nsz++] = (int)t->array_size;
-                    t = t->base;
-                }
-                /* depth is the number of INDEX levels (1 = outermost).
-                 * For depth=d, stride = product of sizes[d..nsz-1] * 8 */
-                if (depth >= 1 && depth <= nsz) {
-                    int stride = 8;
-                    for (int d = depth; d < nsz; d++) {
-                        stride *= sizes[d];
-                    }
-                    return stride;
-                }
+        if (strcmp(g->vars[i].name, root->ident) == 0 && g->vars[i].is_array) {
+            if (depth <= 1) {
+                /* Outermost index: use array_stride * 8 */
+                int stride = g->vars[i].array_stride * 8;
+                if (stride < 8) stride = 8;
+                return stride;
+            } else {
+                /* Inner index: each element is 1 cell = 8 bytes */
                 return 8;
-            } else if (vt->kind == HD_TYPE_PTR && vt->base && vt->base->kind == HD_TYPE_ARRAY) {
-                /* Pointer to array: stride = array_size * 8 */
-                return vt->base->array_size * 8;
             }
-            break;
         }
     }
     return 8; /* default: 1 cell = 8 bytes */
 }
-/* Determine the effective type of an expression node.
- * Returns the type, or NULL if unknown.
- * Handles IDENT (var table lookup), ARRAY (element type), PTR (pointee type),
- * and INDEX/DEREF (follow the chain to the root variable). */
-static HDType *mir_effective_type(HDMirGen *g, const HDASTNode *n) {
-    if (!n) return NULL;
-    if (n->type) return n->type;
-    if (n->kind == HD_AST_IDENT && n->ident[0])
-        return mir_find_var_type(g, n->ident);
-    if (n->kind == HD_AST_INDEX) {
-        /* arr[i]: effective type is the element type of the array */
-        const HDASTNode *root = n;
-        while (root && root->kind == HD_AST_INDEX) root = root->left;
-        if (root && root->kind == HD_AST_IDENT && root->ident[0]) {
-            HDType *rt = mir_find_var_type(g, root->ident);
-            /* Count INDEX levels to determine how many dimensions to strip */
-            int idx_depth = 0;
-            const HDASTNode *p = n;
-            while (p && p->kind == HD_AST_INDEX) { idx_depth++; p = p->left; }
-            HDType *t = rt;
-            for (int d = 0; d < idx_depth && t; d++) {
-                if (t->kind == HD_TYPE_ARRAY && t->base) t = t->base;
-                else break;
-            }
-            return t;
-        }
-    }
-    if (n->kind == HD_AST_DEREF) {
-        /* *p: effective type is the pointee type */
-        HDType *child_type = mir_effective_type(g, n->child);
-        if (child_type && child_type->kind == HD_TYPE_PTR && child_type->base)
-            return child_type->base;
-        return child_type;
-    }
-    if (n->kind == HD_AST_ADD || n->kind == HD_AST_SUB) {
-        /* For pointer arithmetic, the result type is the pointer type.
-         * If one side is a pointer/array and the other is an integer,
-         * the result is a pointer (not an array — arrays decay to pointers
-         * in arithmetic expressions). */
-        HDType *lt = mir_effective_type(g, n->left);
-        HDType *rt = mir_effective_type(g, n->right);
-        int lt_is_ptr = (lt && (lt->kind == HD_TYPE_ARRAY || lt->kind == HD_TYPE_PTR));
-        int rt_is_ptr = (rt && (rt->kind == HD_TYPE_ARRAY || rt->kind == HD_TYPE_PTR));
-        if (lt_is_ptr && rt_is_ptr) {
-            /* ptr - ptr: result is an integer (ptrdiff_t) */
-            return NULL;
-        }
-        if (lt_is_ptr) {
-            /* ptr + int: result is a pointer to the element type */
-            if (lt->kind == HD_TYPE_ARRAY && lt->base)
-                return lt->base;  /* element type, not array */
-            if (lt->kind == HD_TYPE_PTR && lt->base)
-                return lt->base;
-            return lt;
-        }
-        if (rt_is_ptr) {
-            /* int + ptr: result is a pointer to the element type */
-            if (rt->kind == HD_TYPE_ARRAY && rt->base)
-                return rt->base;
-            if (rt->kind == HD_TYPE_PTR && rt->base)
-                return rt->base;
-            return rt;
-        }
-        return lt ? lt : rt;
-    }
-    return NULL;
-}
+static wubu_vr_t mir_lvalue_addr(HDMirGen *g, const HDASTNode *n); /* forward decl */
 
 static wubu_vr_t mir_address_of(HDMirGen *g, const HDASTNode *n) {
     if (!n) return 0;
@@ -920,16 +836,7 @@ static wubu_vr_t mir_address_of(HDMirGen *g, const HDASTNode *n) {
             base_node = idx_node;
             idx_node = tmp;
         }
-        /* For base that is INDEX/DEREF/CALL (yields pointer value), use mir_gen_expr */
-        wubu_vr_t base;
-        if (base_node && (base_node->kind == HD_AST_INDEX ||
-                          base_node->kind == HD_AST_DEREF ||
-                          base_node->kind == HD_AST_CALL ||
-                          base_node->kind == HD_AST_FUNC_CALL)) {
-            base = mir_gen_expr(g, base_node);
-        } else {
-            base = mir_address_of(g, base_node);
-        }
+        wubu_vr_t base = mir_address_of(g, base_node);
         wubu_vr_t idx  = mir_gen_expr(g, idx_node);
         int stride = mir_index_stride(g, n);
         if (stride > 1) {
@@ -1052,15 +959,7 @@ static wubu_vr_t mir_lvalue_addr(HDMirGen *g, const HDASTNode *n) {
     if (n->kind == HD_AST_DEREF)
         return mir_gen_expr(g, n->child);      /* *p: address == p's value */
     if (n->kind == HD_AST_INDEX) {
-        wubu_vr_t base;
-        if (n->left && (n->left->kind == HD_AST_INDEX ||
-                        n->left->kind == HD_AST_DEREF ||
-                        n->left->kind == HD_AST_CALL ||
-                        n->left->kind == HD_AST_FUNC_CALL)) {
-            base = mir_gen_expr(g, n->left);
-        } else {
-            base = mir_address_of(g, n->left);
-        }
+        wubu_vr_t base = mir_address_of(g, n->left);
         wubu_vr_t idx = mir_gen_expr(g, n->right);
         int stride = mir_index_stride(g, n);
         if (stride > 1) {
@@ -1272,50 +1171,6 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
                 }
             }
         }
-        /* Handle static redeclaration WITH initializer: reuse existing variable address */
-        if (n->is_static && n->init) {
-            for (int i = g->n_vars - 1; i >= 0; i--) {
-                if (strcmp(g->vars[i].name, n->ident) == 0 && g->vars[i].addr != 0 && g->vars[i].is_static) {
-                    /* Static variable already exists — reuse its address */
-                    wubu_vr_t addr = g->vars[i].addr;
-                    /* Fall through to initialize the existing variable */
-                    if (n->type && n->type->kind == HD_TYPE_F64)
-                        vr = mir_decl_var_float(g, n->ident);
-                    else
-                        vr = mir_decl_var_unsigned(g, n->ident, is_uns);
-                    for (int j = g->n_vars - 1; j >= 0; j--)
-                        if (strcmp(g->vars[j].name, n->ident) == 0) {
-                            g->vars[j].type = n->type;
-                            g->vars[j].is_static = 1;
-                            g->vars[j].addr = addr;
-                            break;
-                        }
-                    /* Skip the allocation below — we reused the address */
-                    goto skip_alloc;
-                }
-            }
-        }
-        /* Handle file-scope redeclaration WITH initializer (non-static).
-         * At file scope, `int x; int x = 5;` should reuse the same variable. */
-        if (!g->in_function_body && !n->is_static && !n->is_extern && n->init) {
-            for (int i = 0; i < g->n_vars; i++) {
-                if (strcmp(g->vars[i].name, n->ident) == 0 && g->vars[i].addr != 0) {
-                    /* Variable already exists at file scope — reuse its address */
-                    wubu_vr_t addr = g->vars[i].addr;
-                    if (n->type && n->type->kind == HD_TYPE_F64)
-                        vr = mir_decl_var_float(g, n->ident);
-                    else
-                        vr = mir_decl_var_unsigned(g, n->ident, is_uns);
-                    for (int j = g->n_vars - 1; j >= 0; j--)
-                        if (strcmp(g->vars[j].name, n->ident) == 0) {
-                            g->vars[j].type = n->type;
-                            g->vars[j].addr = addr;
-                            break;
-                        }
-                    goto skip_alloc;
-                }
-            }
-        }
         if (n->type && n->type->kind == HD_TYPE_F64)
             vr = mir_decl_var_float(g, n->ident);
         else
@@ -1380,7 +1235,6 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
                 }
             }
         }
-skip_alloc:
 extern_done:
         if (n->init) {
             if (n->is_static && g->in_function_body) {
@@ -1437,18 +1291,11 @@ extern_done:
                 int n_array_elems = g->array_elements_pending > 0 ? g->array_elements_pending : arr_size;
                 for (uint32_t e = 0; e < n->init->n_args && e < (uint32_t)n_array_elems; e++) {
                     int elem_sz = 8; /* default: 1 cell */
-                    if (n->type && n->type->kind == HD_TYPE_ARRAY && n->type->base) {
-                        /* Element size = total size of sub-array in bytes.
-                         * For int[2][3][4], each element is int[3][4] = 12 cells = 96 bytes. */
-                        int total_cells = 1;
-                        HDType *t = n->type->base;
-                        while (t && t->kind == HD_TYPE_ARRAY) {
-                            total_cells *= (int)t->array_size;
-                            t = t->base;
-                        }
-                        /* t is now the scalar base type (e.g., I32) */
-                        total_cells *= 1; /* scalar is 1 cell */
-                        elem_sz = total_cells * 8;
+                    if (n->type && n->type->kind == HD_TYPE_ARRAY && n->type->base
+                        && n->type->base->kind == HD_TYPE_ARRAY) {
+                        /* Multi-dimensional: element size = inner array size in cells * 8 bytes.
+                         * Each element occupies 1 cell (8 bytes) regardless of logical type size. */
+                        elem_sz = (int)(n->type->base->array_size * 8);
                     }
                     int offset = (int)e * elem_sz;
                     /* For structs, use the actual member byte offset, not sequential. */
@@ -1465,49 +1312,10 @@ extern_done:
                     HDASTNode *elem = n->init->args[e];
                     wubu_vr_t ev;
                     if (elem->kind == HD_AST_BRACE_INIT) {
-                        /* Nested brace-init (multi-dimensional array): flatten recursively */
-                        /* Use a stack-based approach to collect all scalar values */
-                        HDASTNode *stack[256];
-                        int stack_top = 0;
-                        stack[stack_top++] = elem;
-                        int n_scalars = 0;
-                        HDASTNode *scalars[256];
-                        while (stack_top > 0 && n_scalars < 256) {
-                            HDASTNode *cur = stack[--stack_top];
-                            if (cur->kind == HD_AST_BRACE_INIT) {
-                                /* Push args in reverse order so they're processed in order */
-                                for (int s = (int)cur->n_args - 1; s >= 0; s--) {
-                                    if (stack_top < 256) stack[stack_top++] = cur->args[s];
-                                }
-                            } else {
-                                scalars[n_scalars++] = cur;
-                            }
-                        }
-                        for (int s = 0; s < n_scalars; s++) {
-                            int sub_off = offset + (int)s * 8;
-                            wubu_vr_t sub_ev = mir_gen_expr(g, scalars[s]);
-                            /* Convert initializer value to element type */
-                            if (!is_struct_var && n->type && n->type->kind == HD_TYPE_ARRAY && n->type->base) {
-                                /* Find the scalar base type (strip array layers) */
-                                HDType *scalar_type = n->type->base;
-                                while (scalar_type && scalar_type->kind == HD_TYPE_ARRAY && scalar_type->base)
-                                    scalar_type = scalar_type->base;
-                                HDTypeKind elem_k = scalar_type ? scalar_type->kind : HD_TYPE_I64;
-                                int init_is_float = mir_is_float_node(g, scalars[s]);
-                                if (init_is_float && (elem_k == HD_TYPE_I64 || elem_k == HD_TYPE_U64 ||
-                                                      elem_k == HD_TYPE_I32 || elem_k == HD_TYPE_U32 ||
-                                                      elem_k == HD_TYPE_I16 || elem_k == HD_TYPE_U16 ||
-                                                      elem_k == HD_TYPE_I8 || elem_k == HD_TYPE_U8)) {
-                                    if (elem_k == HD_TYPE_U64 || elem_k == HD_TYPE_U32 ||
-                                        elem_k == HD_TYPE_U16 || elem_k == HD_TYPE_U8)
-                                        sub_ev = wubu_mir_unop(g->prog, MIR_DTOI_U, sub_ev);
-                                    else
-                                        sub_ev = wubu_mir_unop(g->prog, MIR_DTOI, sub_ev);
-                                }
-                                if (!init_is_float && elem_k == HD_TYPE_F64) {
-                                    sub_ev = wubu_mir_unop(g->prog, MIR_DITOF, sub_ev);
-                                }
-                            }
+                        /* Nested brace-init (multi-dimensional array): flatten */
+                        for (uint32_t se = 0; se < elem->n_args; se++) {
+                            int sub_off = offset + (int)se * 8;
+                            wubu_vr_t sub_ev = mir_gen_expr(g, elem->args[se]);
                             wubu_vr_t sub_addr = wubu_mir_binop(g->prog, MIR_ADD, addr,
                                 wubu_mir_const(g->prog, (int64_t)sub_off));
                             wubu_mir_store(g->prog, sub_addr, sub_ev);
@@ -1545,30 +1353,6 @@ extern_done:
                             }
                         }
                         ev = mir_gen_expr(g, elem);
-                        /* Convert initializer value to element type for arrays. */
-                        if (!is_struct_var && n->type && n->type->kind == HD_TYPE_ARRAY && n->type->base) {
-                            /* Find the scalar base type (strip array layers) */
-                            HDType *scalar_type = n->type->base;
-                            while (scalar_type && scalar_type->kind == HD_TYPE_ARRAY && scalar_type->base)
-                                scalar_type = scalar_type->base;
-                            HDTypeKind elem_k = scalar_type ? scalar_type->kind : HD_TYPE_I64;
-                            int init_is_float = mir_is_float_node(g, elem);
-                            /* float -> int conversion */
-                            if (init_is_float && (elem_k == HD_TYPE_I64 || elem_k == HD_TYPE_U64 ||
-                                                  elem_k == HD_TYPE_I32 || elem_k == HD_TYPE_U32 ||
-                                                  elem_k == HD_TYPE_I16 || elem_k == HD_TYPE_U16 ||
-                                                  elem_k == HD_TYPE_I8 || elem_k == HD_TYPE_U8)) {
-                                if (elem_k == HD_TYPE_U64 || elem_k == HD_TYPE_U32 ||
-                                    elem_k == HD_TYPE_U16 || elem_k == HD_TYPE_U8)
-                                    ev = wubu_mir_unop(g->prog, MIR_DTOI_U, ev);
-                                else
-                                    ev = wubu_mir_unop(g->prog, MIR_DTOI, ev);
-                            }
-                            /* int -> float conversion */
-                            if (!init_is_float && elem_k == HD_TYPE_F64) {
-                                ev = wubu_mir_unop(g->prog, MIR_DITOF, ev);
-                            }
-                        }
                         /* Convert initializer value to member type */
                         if (is_struct_var && n->type && n->type->kind == HD_TYPE_STRUCT
                             && e < (uint32_t)n->type->n_members) {
@@ -2366,17 +2150,6 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             if (!lhs_type && n->left->kind == HD_AST_IDENT) {
                 lhs_type = mir_find_var_type(g, n->left->ident);
             }
-            if (!lhs_type && n->left->kind == HD_AST_INDEX) {
-                /* For INDEX (arr[i]), look up the root variable type */
-                const HDASTNode *root = n->left;
-                while (root && root->kind == HD_AST_INDEX) root = root->left;
-                if (root && root->kind == HD_AST_IDENT) {
-                    lhs_type = mir_find_var_type(g, root->ident);
-                    /* For arrays, get the element type */
-                    if (lhs_type && lhs_type->kind == HD_TYPE_ARRAY && lhs_type->base)
-                        lhs_type = lhs_type->base;
-                }
-            }
             if (lhs_type) {
             HDTypeKind k = lhs_type->kind;
             /* Determine RHS type — check AST node type first, then var table, then function call */
@@ -2422,103 +2195,24 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         return val;
     }
     case HD_AST_POST_INC:
-        case HD_AST_POST_DEC: {
-            /* tmp = v; v = v +/- 1; return tmp */
-            if (n->child && (n->child->kind == HD_AST_IDENT || n->child->kind == HD_AST_INDEX)) {
-                /* ... existing IDENT/INDEX handling ... */
-                wubu_vr_t addr;
-                if (n->child->kind == HD_AST_IDENT) {
-                    addr = mir_find_var_addr(g, n->child->ident);
-                } else {
-                    addr = mir_address_of(g, n->child);
-                }
-                if (addr) {
-                    const char *var_name = (n->child->kind == HD_AST_IDENT)
-                        ? n->child->ident
-                        : (n->child->left && n->child->left->kind == HD_AST_IDENT)
-                            ? n->child->left->ident : NULL;
-                    int is_float_var = 0;
-                    if (var_name) {
-                        for (int i = 0; i < g->n_vars; i++) {
-                            if (strcmp(g->vars[i].name, var_name) == 0 && g->vars[i].is_float) {
-                                is_float_var = 1; break;
-                            }
-                        }
+    case HD_AST_POST_DEC: {
+        /* tmp = v; v = v +/- 1; return tmp */
+        if (n->child && n->child->kind == HD_AST_IDENT) {
+            wubu_vr_t addr = mir_find_var_addr(g, n->child->ident);
+            if (addr) {
+                /* Check if this is a float variable */
+                int is_float_var = 0;
+                for (int i = 0; i < g->n_vars; i++) {
+                    if (strcmp(g->vars[i].name, n->child->ident) == 0 && g->vars[i].is_float) {
+                        is_float_var = 1;
+                        break;
                     }
-                    wubu_vr_t tmp = mir_new_vr(g);
-                    wubu_vr_t v = wubu_mir_load(g->prog, addr);
-                    wubu_mir_mov_to(g->prog, tmp, v);
-                    wubu_vr_t upd;
-                    if (is_float_var) {
-                        union { double d; int64_t i; } u;
-                        u.d = 1.0;
-                        wubu_vr_t one_d = wubu_mir_const(g->prog, u.i);
-                        upd = (n->kind == HD_AST_POST_INC)
-                            ? wubu_mir_binop(g->prog, MIR_DADD, tmp, one_d)
-                            : wubu_mir_binop(g->prog, MIR_DSUB, tmp, one_d);
-                    } else {
-                        int inc_val = 1;
-                        if (var_name) {
-                            for (int i = 0; i < g->n_vars; i++) {
-                                if (strcmp(g->vars[i].name, var_name) == 0 && g->vars[i].type
-                                    && g->vars[i].type->kind == HD_TYPE_PTR) {
-                                    inc_val = 8; break;
-                                }
-                            }
-                        }
-                        wubu_vr_t one = wubu_mir_const(g->prog, (int64_t)inc_val);
-                        upd = (n->kind == HD_AST_POST_INC)
-                            ? wubu_mir_binop(g->prog, MIR_ADD, tmp, one)
-                            : wubu_mir_binop(g->prog, MIR_SUB, tmp, one);
-                        if (var_name) {
-                            for (int i = 0; i < g->n_vars; i++) {
-                                if (strcmp(g->vars[i].name, var_name) == 0 && g->vars[i].type &&
-                                    (g->vars[i].type->kind == HD_TYPE_I8 || g->vars[i].type->kind == HD_TYPE_U8 ||
-                                     g->vars[i].type->kind == HD_TYPE_I16 || g->vars[i].type->kind == HD_TYPE_U16 ||
-                                     g->vars[i].type->kind == HD_TYPE_I32 || g->vars[i].type->kind == HD_TYPE_U32 ||
-                                     g->vars[i].type->kind == HD_TYPE_I64 || g->vars[i].type->kind == HD_TYPE_U64 ||
-                                     (g->vars[i].type->kind == HD_TYPE_ARRAY &&
-                                      (g->vars[i].type->base->kind == HD_TYPE_I8 ||
-                                       g->vars[i].type->base->kind == HD_TYPE_U8 ||
-                                       g->vars[i].type->base->kind == HD_TYPE_I16 ||
-                                       g->vars[i].type->base->kind == HD_TYPE_U16 ||
-                                       g->vars[i].type->base->kind == HD_TYPE_I32 ||
-                                       g->vars[i].type->base->kind == HD_TYPE_U32 ||
-                                       g->vars[i].type->base->kind == HD_TYPE_I64 ||
-                                       g->vars[i].type->base->kind == HD_TYPE_U64)))) {
-                                    upd = mir_truncate_to_type(g, upd, g->vars[i].type); break;
-                                }
-                            }
-                        }
-                    }
-                    wubu_mir_store(g->prog, addr, upd);
-                    return tmp;
                 }
-            }
-            /* Handle DEREF: (*p)++ / (*p)-- */
-            if (n->child && n->child->kind == HD_AST_DEREF) {
-                /* Compute the address from the pointer */
-                wubu_vr_t ptr_val = mir_gen_expr(g, n->child->child);
                 wubu_vr_t tmp = mir_new_vr(g);
-                wubu_vr_t v = wubu_mir_load(g->prog, ptr_val);
+                wubu_vr_t v = wubu_mir_load(g->prog, addr);
                 wubu_mir_mov_to(g->prog, tmp, v);
-                /* Check if this is a float/double pointer */
-                int is_float_ptr = 0;
-                if (n->child->child && n->child->child->type &&
-                    n->child->child->type->base &&
-                    n->child->child->type->base->kind == HD_TYPE_F64) {
-                    is_float_ptr = 1;
-                }
-                if (!is_float_ptr && n->child->child && n->child->child->kind == HD_AST_IDENT) {
-                    for (int i = 0; i < g->n_vars; i++) {
-                        if (strcmp(g->vars[i].name, n->child->child->ident) == 0 &&
-                            g->vars[i].is_float) {
-                            is_float_ptr = 1; break;
-                        }
-                    }
-                }
                 wubu_vr_t upd;
-                if (is_float_ptr) {
+                if (is_float_var) {
                     union { double d; int64_t i; } u;
                     u.d = 1.0;
                     wubu_vr_t one_d = wubu_mir_const(g->prog, u.i);
@@ -2526,40 +2220,49 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                         ? wubu_mir_binop(g->prog, MIR_DADD, tmp, one_d)
                         : wubu_mir_binop(g->prog, MIR_DSUB, tmp, one_d);
                 } else {
-                    wubu_vr_t one = wubu_mir_const(g->prog, (int64_t)1);
+                    /* For pointer variables, scale increment by element size (cell-based: 8) */
+                    int inc_val = 1;
+                    for (int i = 0; i < g->n_vars; i++) {
+                        if (strcmp(g->vars[i].name, n->child->ident) == 0 && g->vars[i].type
+                            && g->vars[i].type->kind == HD_TYPE_PTR) {
+                            inc_val = 8;
+                            break;
+                        }
+                    }
+                    wubu_vr_t one = wubu_mir_const(g->prog, (int64_t)inc_val);
                     upd = (n->kind == HD_AST_POST_INC)
                         ? wubu_mir_binop(g->prog, MIR_ADD, tmp, one)
                         : wubu_mir_binop(g->prog, MIR_SUB, tmp, one);
+                    /* Truncate updated value to variable type width */
+                    for (int i = 0; i < g->n_vars; i++) {
+                        if (strcmp(g->vars[i].name, n->child->ident) == 0 && g->vars[i].type &&
+                            (g->vars[i].type->kind == HD_TYPE_I8 || g->vars[i].type->kind == HD_TYPE_U8 ||
+                             g->vars[i].type->kind == HD_TYPE_I16 || g->vars[i].type->kind == HD_TYPE_U16 ||
+                             g->vars[i].type->kind == HD_TYPE_I32 || g->vars[i].type->kind == HD_TYPE_U32 ||
+                             g->vars[i].type->kind == HD_TYPE_I64 || g->vars[i].type->kind == HD_TYPE_U64)) {
+                            upd = mir_truncate_to_type(g, upd, g->vars[i].type);
+                            break;
+                        }
+                    }
                 }
-                wubu_mir_store(g->prog, ptr_val, upd);
+                wubu_mir_store(g->prog, addr, upd);
                 return tmp;
             }
-            return mir_gen_expr(g, n->child);
         }
+        return mir_gen_expr(g, n->child);
+    }
     case HD_AST_PRE_INC:
     case HD_AST_PRE_DEC: {
         /* v = v +/- 1; return v */
-        if (n->child && (n->child->kind == HD_AST_IDENT || n->child->kind == HD_AST_INDEX)) {
-            wubu_vr_t addr;
-            if (n->child->kind == HD_AST_IDENT) {
-                addr = mir_find_var_addr(g, n->child->ident);
-            } else {
-                /* HD_AST_INDEX: compute address of array element */
-                addr = mir_address_of(g, n->child);
-            }
+        if (n->child && n->child->kind == HD_AST_IDENT) {
+            wubu_vr_t addr = mir_find_var_addr(g, n->child->ident);
             if (addr) {
-                /* Determine variable name for type lookup */
-                const char *var_name = (n->child->kind == HD_AST_IDENT)
-                    ? n->child->ident
-                    : (n->child->left && n->child->left->kind == HD_AST_IDENT)
-                        ? n->child->left->ident : NULL;
                 /* Check if this is a float variable */
                 int is_float_var = 0;
-                if (var_name) {
-                    for (int i = 0; i < g->n_vars; i++) {
-                        if (strcmp(g->vars[i].name, var_name) == 0 && g->vars[i].is_float) {
-                            is_float_var = 1; break;
-                        }
+                for (int i = 0; i < g->n_vars; i++) {
+                    if (strcmp(g->vars[i].name, n->child->ident) == 0 && g->vars[i].is_float) {
+                        is_float_var = 1;
+                        break;
                     }
                 }
                 wubu_vr_t v = wubu_mir_load(g->prog, addr);
@@ -2574,12 +2277,11 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 } else {
                     /* For pointer variables, scale increment by element size (cell-based: 8) */
                     int inc_val = 1;
-                    if (var_name) {
-                        for (int i = 0; i < g->n_vars; i++) {
-                            if (strcmp(g->vars[i].name, var_name) == 0 && g->vars[i].type
-                                && g->vars[i].type->kind == HD_TYPE_PTR) {
-                                inc_val = 8; break;
-                            }
+                    for (int i = 0; i < g->n_vars; i++) {
+                        if (strcmp(g->vars[i].name, n->child->ident) == 0 && g->vars[i].type
+                            && g->vars[i].type->kind == HD_TYPE_PTR) {
+                            inc_val = 8;
+                            break;
                         }
                     }
                     wubu_vr_t one = wubu_mir_const(g->prog, (int64_t)inc_val);
@@ -2587,68 +2289,20 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                         ? wubu_mir_binop(g->prog, MIR_ADD, v, one)
                         : wubu_mir_binop(g->prog, MIR_SUB, v, one);
                     /* Truncate updated value to variable type width */
-                    if (var_name) {
-                        for (int i = 0; i < g->n_vars; i++) {
-                            if (strcmp(g->vars[i].name, var_name) == 0 && g->vars[i].type &&
-                                (g->vars[i].type->kind == HD_TYPE_I8 || g->vars[i].type->kind == HD_TYPE_U8 ||
-                                 g->vars[i].type->kind == HD_TYPE_I16 || g->vars[i].type->kind == HD_TYPE_U16 ||
-                                 g->vars[i].type->kind == HD_TYPE_I32 || g->vars[i].type->kind == HD_TYPE_U32 ||
-                                 g->vars[i].type->kind == HD_TYPE_I64 || g->vars[i].type->kind == HD_TYPE_U64 ||
-                                 (g->vars[i].type->kind == HD_TYPE_ARRAY &&
-                                  (g->vars[i].type->base->kind == HD_TYPE_I8 ||
-                                   g->vars[i].type->base->kind == HD_TYPE_U8 ||
-                                   g->vars[i].type->base->kind == HD_TYPE_I16 ||
-                                   g->vars[i].type->base->kind == HD_TYPE_U16 ||
-                                   g->vars[i].type->base->kind == HD_TYPE_I32 ||
-                                   g->vars[i].type->base->kind == HD_TYPE_U32 ||
-                                   g->vars[i].type->base->kind == HD_TYPE_I64 ||
-                                   g->vars[i].type->base->kind == HD_TYPE_U64)))) {
-                                upd = mir_truncate_to_type(g, upd, g->vars[i].type); break;
-                            }
+                    for (int i = 0; i < g->n_vars; i++) {
+                        if (strcmp(g->vars[i].name, n->child->ident) == 0 && g->vars[i].type &&
+                            (g->vars[i].type->kind == HD_TYPE_I8 || g->vars[i].type->kind == HD_TYPE_U8 ||
+                             g->vars[i].type->kind == HD_TYPE_I16 || g->vars[i].type->kind == HD_TYPE_U16 ||
+                             g->vars[i].type->kind == HD_TYPE_I32 || g->vars[i].type->kind == HD_TYPE_U32 ||
+                             g->vars[i].type->kind == HD_TYPE_I64 || g->vars[i].type->kind == HD_TYPE_U64)) {
+                            upd = mir_truncate_to_type(g, upd, g->vars[i].type);
+                            break;
                         }
                     }
                 }
                 wubu_mir_store(g->prog, addr, upd);
                 return upd;
             }
-        }
-        /* Handle DEREF: ++(*p) / --(*p) */
-        if (n->child && n->child->kind == HD_AST_DEREF) {
-            wubu_vr_t ptr_val = mir_gen_expr(g, n->child->child);
-            wubu_vr_t v = wubu_mir_load(g->prog, ptr_val);
-            /* Check if this is a float/double pointer */
-            int is_float_ptr = 0;
-            if (n->child->child && n->child->child->type &&
-                n->child->child->type->base &&
-                n->child->child->type->base->kind == HD_TYPE_F64) {
-                is_float_ptr = 1;
-            }
-            /* Also check var table for pointer-to-float */
-            if (!is_float_ptr && n->child->child && n->child->child->kind == HD_AST_IDENT) {
-                for (int i = 0; i < g->n_vars; i++) {
-                    if (strcmp(g->vars[i].name, n->child->child->ident) == 0 &&
-                        g->vars[i].type && g->vars[i].type->base &&
-                        g->vars[i].type->base->kind == HD_TYPE_F64) {
-                        is_float_ptr = 1; break;
-                    }
-                }
-            }
-            wubu_vr_t upd;
-            if (is_float_ptr) {
-                union { double d; int64_t i; } u;
-                u.d = 1.0;
-                wubu_vr_t one_d = wubu_mir_const(g->prog, u.i);
-                upd = (n->kind == HD_AST_PRE_INC)
-                    ? wubu_mir_binop(g->prog, MIR_DADD, v, one_d)
-                    : wubu_mir_binop(g->prog, MIR_DSUB, v, one_d);
-            } else {
-                wubu_vr_t one = wubu_mir_const(g->prog, (int64_t)1);
-                upd = (n->kind == HD_AST_PRE_INC)
-                    ? wubu_mir_binop(g->prog, MIR_ADD, v, one)
-                    : wubu_mir_binop(g->prog, MIR_SUB, v, one);
-            }
-            wubu_mir_store(g->prog, ptr_val, upd);
-            return upd;
         }
         return mir_gen_expr(g, n->child);
     }
@@ -2674,11 +2328,6 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                            (n->right && n->right->kind == HD_AST_IDENT && mir_find_var_is_float(g, n->right->ident)) ||
                            (n->left && n->left->kind == HD_AST_FLOAT_LIT) ||
                            (n->right && n->right->kind == HD_AST_FLOAT_LIT);
-            /* Also check effective type for DEREF/INDEX (e.g., *d_ptr *= 1000u) */
-            if (!is_float) {
-                HDType *eff = mir_effective_type(g, n->left);
-                if (eff && eff->kind == HD_TYPE_F64) is_float = 1;
-            }
             wubu_mir_op_t op = MIR_ADD;
             switch (n->kind) {
                 case HD_AST_ADD_ASSIGN: op = is_float ? MIR_DADD : MIR_ADD; break;
@@ -2769,48 +2418,45 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
          * Handle both ptr + int and int + ptr cases. */
         int ptr_scale = 0;
         bool left_is_ptr = true;
-        /* Check array types first (arrays decay to pointers).
-         * Use mir_effective_type to handle DEREF/INDEX results. */
-        HDType *left_eff_type = mir_effective_type(g, n->left);
-        if (left_eff_type && left_eff_type->kind == HD_TYPE_ARRAY) {
-            if (left_eff_type->base && left_eff_type->base->kind == HD_TYPE_ARRAY) {
+        /* Check array types first (arrays decay to pointers) */
+        if (n->left && n->left->type && n->left->type->kind == HD_TYPE_ARRAY) {
+            if (n->left->type->base && n->left->type->base->kind == HD_TYPE_ARRAY) {
                 /* Multi-dimensional array: scale by inner array size * 8 */
-                ptr_scale = left_eff_type->base->array_size * 8;
-            } else if (left_eff_type->base) {
+                ptr_scale = n->left->type->base->array_size * 8;
+            } else if (n->left->type->base) {
                 /* 1D array: scale by element size (8 bytes per cell) */
                 ptr_scale = 8;
             }
-        } else if (left_eff_type && left_eff_type->kind == HD_TYPE_PTR) {
-            if (left_eff_type->base && left_eff_type->base->kind == HD_TYPE_STRUCT) {
-                mir_struct_t *st = mir_find_struct(g, left_eff_type->base->name);
+        } else if (n->left && n->left->type && n->left->type->kind == HD_TYPE_PTR) {
+            if (n->left->type->base && n->left->type->base->kind == HD_TYPE_STRUCT) {
+                mir_struct_t *st = mir_find_struct(g, n->left->type->base->name);
                 if (st && st->total_size > 0) ptr_scale = st->total_size * 8;
-            } else if (left_eff_type->base && left_eff_type->base->kind == HD_TYPE_ARRAY) {
+            } else if (n->left->type->base && n->left->type->base->kind == HD_TYPE_ARRAY) {
                 /* Pointer to array: scale by array_size * cell_size (8 bytes per cell) */
-                ptr_scale = left_eff_type->base->array_size * 8;
-            } else if (left_eff_type->base) {
+                ptr_scale = n->left->type->base->array_size * 8;
+            } else if (n->left->type->base) {
                 ptr_scale = 8;
             }
         }
         /* Check for int + ptr case (right side is pointer/array) */
-        HDType *right_eff_type = mir_effective_type(g, n->right);
-        if (ptr_scale == 0 && right_eff_type) {
-            HDTypeKind right_kind = right_eff_type->kind;
+        if (ptr_scale == 0 && n->right && n->right->type) {
+            HDTypeKind right_kind = n->right->type->kind;
             if (right_kind == HD_TYPE_ARRAY) {
-                if (right_eff_type->base && right_eff_type->base->kind == HD_TYPE_ARRAY) {
-                    ptr_scale = right_eff_type->base->array_size * 8;
-                } else if (right_eff_type->base) {
+                if (n->right->type->base && n->right->type->base->kind == HD_TYPE_ARRAY) {
+                    ptr_scale = n->right->type->base->array_size * 8;
+                } else if (n->right->type->base) {
                     ptr_scale = 8;
                 }
                 left_is_ptr = false;
             } else if (right_kind == HD_TYPE_PTR) {
-                if (right_eff_type->base && right_eff_type->base->kind == HD_TYPE_STRUCT) {
-                    mir_struct_t *st = mir_find_struct(g, right_eff_type->base->name);
+                if (n->right->type->base && n->right->type->base->kind == HD_TYPE_STRUCT) {
+                    mir_struct_t *st = mir_find_struct(g, n->right->type->base->name);
                     if (st && st->total_size > 0) ptr_scale = st->total_size * 8;
                     left_is_ptr = false;
-                } else if (right_eff_type->base && right_eff_type->base->kind == HD_TYPE_ARRAY) {
-                    ptr_scale = right_eff_type->base->array_size * 8;
+                } else if (n->right->type->base && n->right->type->base->kind == HD_TYPE_ARRAY) {
+                    ptr_scale = n->right->type->base->array_size * 8;
                     left_is_ptr = false;
-                } else if (right_eff_type->base) {
+                } else if (n->right->type->base) {
                     ptr_scale = 8;
                     left_is_ptr = false;
                 }
@@ -2820,39 +2466,22 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         if (ptr_scale == 0 && n->left && n->left->kind == HD_AST_STRING_LIT) {
             ptr_scale = 8;
         }
-        /* Also check var table for pointer/array types.
-         * Use mir_effective_type to handle DEREF/INDEX results.
-         * Only apply scaling if the effective type is actually a pointer/array. */
-        if (ptr_scale == 0 && n->left) {
-            const char *root_name = NULL;
-            if (n->left->kind == HD_AST_IDENT && n->left->ident[0])
-                root_name = n->left->ident;
-            else if (n->left->kind == HD_AST_INDEX) {
-                const HDASTNode *root = n->left;
-                while (root && root->kind == HD_AST_INDEX) root = root->left;
-                if (root && root->kind == HD_AST_IDENT && root->ident[0])
-                    root_name = root->ident;
-            }
-            if (root_name) {
-                for (int i = 0; i < g->n_vars; i++) {
-                    if (strcmp(g->vars[i].name, root_name) == 0) {
-                        if (g->vars[i].is_ptr_struct) {
-                            mir_struct_t *st = mir_find_struct(g, g->vars[i].struct_name);
-                            if (st && st->total_size > 0) ptr_scale = st->total_size * 8;
-                        } else if (g->vars[i].type && g->vars[i].type->kind == HD_TYPE_PTR) {
+        /* Also check var table for pointer/array types */
+        if (ptr_scale == 0 && n->left && n->left->kind == HD_AST_IDENT && n->left->ident[0]) {
+            for (int i = 0; i < g->n_vars; i++) {
+                if (strcmp(g->vars[i].name, n->left->ident) == 0) {
+                    if (g->vars[i].is_ptr_struct) {
+                        mir_struct_t *st = mir_find_struct(g, g->vars[i].struct_name);
+                        if (st && st->total_size > 0) ptr_scale = st->total_size * 8;
+                    } else if (g->vars[i].type && g->vars[i].type->kind == HD_TYPE_PTR) {
+                        ptr_scale = 8;
+                    } else if (g->vars[i].is_array && g->vars[i].type) {
+                        if (g->vars[i].type->base && g->vars[i].type->base->kind == HD_TYPE_ARRAY)
+                            ptr_scale = g->vars[i].type->base->array_size * 8;
+                        else
                             ptr_scale = 8;
-                        } else if (g->vars[i].is_array && g->vars[i].type &&
-                                   g->vars[i].type->kind == HD_TYPE_ARRAY &&
-                                   g->vars[i].type->base && g->vars[i].type->base->kind == HD_TYPE_ARRAY) {
-                            /* Multi-dimensional array: only scale if the expression
-                             * result is still an array (not fully indexed) */
-                            HDType *eff = mir_effective_type(g, n->left);
-                            if (eff && eff->kind == HD_TYPE_ARRAY) {
-                                ptr_scale = g->vars[i].type->base->array_size * 8;
-                            }
-                        }
-                        break;
                     }
+                    break;
                 }
             }
         }
@@ -2904,13 +2533,6 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             if (rt && (rt->kind == HD_TYPE_I32 || rt->kind == HD_TYPE_U32))
                 r = mir_truncate_to_type(g, r, rt);
         }
-        /* Propagate unsigned type for sizeof arithmetic chains */
-        if (!is_float && n->left && n->left->type && n->left->type->kind == HD_TYPE_U64) {
-            static HDType u64_type;
-            u64_type.kind = HD_TYPE_U64;
-            u64_type.size = 8;
-            *(HDType **)&n->type = &u64_type;
-        }
         return r;
     }
     case HD_AST_SUB: {
@@ -2919,34 +2541,6 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         /* Pointer subtraction: scale by pointee size in bytes */
         int ptr_scale = 0;
         bool left_is_ptr = true;
-        /* For ADDR nodes (&x), determine pointer type from the child */
-        if (n->left && n->left->kind == HD_AST_ADDR && n->left->child) {
-            const HDASTNode *child = n->left->child;
-            if (child->kind == HD_AST_IDENT && child->ident[0]) {
-                /* Look up the variable's type */
-                for (int i = 0; i < g->n_vars; i++) {
-                    if (strcmp(g->vars[i].name, child->ident) == 0) {
-                        if (g->vars[i].is_array) {
-                            /* &array → pointer to array, stride = 8 (cell size) */
-                            ptr_scale = 8;
-                        } else if (g->vars[i].is_struct) {
-                            /* &struct → pointer to struct, stride = total_size * 8 */
-                            mir_struct_t *st = mir_find_struct(g, g->vars[i].struct_name);
-                            ptr_scale = st ? st->total_size * 8 : 8;
-                        } else {
-                            /* &scalar → pointer to scalar, stride = 8 (cell size) */
-                            ptr_scale = 8;
-                        }
-                        break;
-                    }
-                }
-            } else if (child->kind == HD_AST_DOT || child->kind == HD_AST_MEMBER) {
-                /* &s.member → pointer to member type, stride = 8 (cell size in 8-byte model) */
-                ptr_scale = 8;
-            } else {
-                ptr_scale = 8;
-            }
-        }
         if (n->left && n->left->type && n->left->type->kind == HD_TYPE_ARRAY) {
             if (n->left->type->base && n->left->type->base->kind == HD_TYPE_ARRAY) {
                 ptr_scale = n->left->type->base->array_size * 8;
@@ -2984,33 +2578,24 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
  }
  /* String literal - integer */
  if (ptr_scale == 0 && n->left && n->left->kind == HD_AST_STRING_LIT) {
-     ptr_scale = 8;
+ ptr_scale = 8;
  }
- int is_float = (n->left && n->left->type && n->left->type->kind == HD_TYPE_F64) ||
-                (n->right && n->right->type && n->right->type->kind == HD_TYPE_F64) ||
-                (n->left && n->left->kind == HD_AST_IDENT && mir_find_var_is_float(g, n->left->ident)) ||
-                (n->right && n->right->kind == HD_AST_IDENT && mir_find_var_is_float(g, n->right->ident)) ||
-                mir_is_float_node(g, n->left) ||
-                mir_is_float_node(g, n->right);
- /* Promote integer operands to float for mixed-type operations */
- if (is_float) {
-     a = mir_promote_to_float(g, a, n->left);
-     b = mir_promote_to_float(g, b, n->right);
- }
- wubu_vr_t r = wubu_mir_binop(g->prog, is_float ? MIR_DSUB : MIR_SUB, a, b);
- if (!is_float && ptr_scale > 1) {
-     /* Pointer subtraction: divide by element size to get element count */
-     r = wubu_mir_binop(g->prog, MIR_DIV, r, wubu_mir_const(g->prog, (int64_t)ptr_scale));
- }
+        if (ptr_scale > 1)
+            b = wubu_mir_binop(g->prog, MIR_MUL, b, wubu_mir_const(g->prog, (int64_t)ptr_scale));
+        int is_float = (n->left && n->left->type && n->left->type->kind == HD_TYPE_F64) ||
+                       (n->right && n->right->type && n->right->type->kind == HD_TYPE_F64) ||
+                       (n->left && n->left->kind == HD_AST_IDENT && mir_find_var_is_float(g, n->left->ident)) ||
+                       (n->right && n->right->kind == HD_AST_IDENT && mir_find_var_is_float(g, n->right->ident)) ||
+                       mir_is_float_node(g, n->left) ||
+                       mir_is_float_node(g, n->right);
+        /* Promote integer operands to float for mixed-type operations */
+        if (is_float) {
+            a = mir_promote_to_float(g, a, n->left);
+            b = mir_promote_to_float(g, b, n->right);
+        }
+        wubu_vr_t r = wubu_mir_binop(g->prog, is_float ? MIR_DSUB : MIR_SUB, a, b);
         if (!is_float) { HDType *rt = mir_binop_result_type(g, n->left, n->right);
             if (rt && (rt->kind == HD_TYPE_I32 || rt->kind == HD_TYPE_U32)) r = mir_truncate_to_type(g, r, rt); }
-        /* Propagate unsigned type for sizeof arithmetic chains */
-        if (!is_float && n->left && n->left->type && n->left->type->kind == HD_TYPE_U64) {
-            static HDType u64_type;
-            u64_type.kind = HD_TYPE_U64;
-            u64_type.size = 8;
-            *(HDType **)&n->type = &u64_type;
-        }
         return r;
     }
     case HD_AST_MUL: {
@@ -3494,13 +3079,6 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             if (n->child->kind == HD_AST_CHAR_LIT) {
                 /* In C, char literals have type int, so sizeof 'a' == 4 */
                 size = 4;
-            } else if (n->child->kind == HD_AST_STRING_LIT) {
-                /* sizeof("string") returns array length including null terminator */
-                if (n->child->str_val[0]) {
-                    size = (int)strlen(n->child->str_val) + 1;
-                } else {
-                    size = 1; /* empty string "" = 1 byte (null terminator) */
-                }
             } else if (n->child->kind == HD_AST_TERNARY) {
                 /* sizeof(cond ? a : b): result type is common type of a and b */
                 /* For integer literals, result is int (4 bytes) */
@@ -3831,13 +3409,6 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             default:             size = 8; break;
             }
         }
-        /* sizeof returns size_t (unsigned long / U64) per C standard. */
-        if (!n->type) {
-            HDType *t = (HDType *)calloc(1, sizeof(HDType));
-            t->kind = HD_TYPE_U64;
-            t->size = 8;
-            *(HDType **)&n->type = t;
-        }
         return wubu_mir_const(g->prog, (int64_t)size);
     }
     case HD_AST_STRING_LIT: {
@@ -3864,77 +3435,13 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             base_node = idx_node;
             idx_node = tmp;
         }
-        /* For base that is an INDEX, DEREF, or other expr yielding a pointer value,
-         * use mir_gen_expr to get the pointer value (not address_of which gives &var).
-         * For IDENT (array/var), use mir_address_of to get the base address. */
-        wubu_vr_t base;
-        if (base_node && (base_node->kind == HD_AST_INDEX ||
-                          base_node->kind == HD_AST_DEREF ||
-                          base_node->kind == HD_AST_CALL ||
-                          base_node->kind == HD_AST_FUNC_CALL)) {
-            base = mir_gen_expr(g, base_node);  /* yields pointer value */
-        } else {
-            base = mir_address_of(g, base_node);  /* yields base address */
-        }
+        wubu_vr_t base = mir_address_of(g, base_node);
         wubu_vr_t idx = mir_gen_expr(g, idx_node);
         int stride = mir_index_stride(g, n);
         if (stride > 1) {
             idx = wubu_mir_binop(g->prog, MIR_MUL, idx, wubu_mir_const(g->prog, (int64_t)stride));
         }
         wubu_vr_t addr = wubu_mir_binop(g->prog, MIR_ADD, base, idx);
-        /* For multi-dimensional arrays, intermediate dimensions yield addresses
-         * (arrays that decay to pointers), not values. Only load for the innermost
-         * dimension. Count total INDEX levels in the chain and total array dims,
-         * then determine if this is the innermost index. */
-        if (base_node && base_node->kind == HD_AST_IDENT && base_node->ident[0]) {
-            for (int i = 0; i < g->n_vars; i++) {
-                if (strcmp(g->vars[i].name, base_node->ident) == 0 && g->vars[i].is_array &&
-                    g->vars[i].type && g->vars[i].type->kind == HD_TYPE_ARRAY) {
-                    /* Count total array dimensions */
-                    int total_dims = 0;
-                    HDType *t = g->vars[i].type;
-                    while (t && t->kind == HD_TYPE_ARRAY) { total_dims++; t = t->base; }
-                    /* Count total INDEX levels in the chain (including this node) */
-                    int index_levels = 1;
-                    const HDASTNode *p = n;
-                    while (p && p->left && p->left->kind == HD_AST_INDEX) { index_levels++; p = p->left; }
-                    /* If this is NOT the innermost index, return address */
-                    if (index_levels < total_dims) {
-                        return addr;
-                    }
-                }
-            }
-        } else if (base_node && base_node->kind == HD_AST_INDEX) {
-            /* Base is an INDEX: this is an intermediate dimension.
-             * But we need to check if there are more INDEX levels above.
-             * The base INDEX already returned an address, but if this is the
-             * last INDEX (innermost), we should load instead. */
-            /* Count total INDEX levels in the chain */
-            int index_levels = 1;
-            const HDASTNode *p = n;
-            while (p && p->left && p->left->kind == HD_AST_INDEX) { index_levels++; p = p->left; }
-            /* Find the root variable and its dimensionality */
-            const HDASTNode *root = n;
-            while (root && root->kind == HD_AST_INDEX) root = root->left;
-            if (root && root->kind == HD_AST_IDENT && root->ident[0]) {
-                for (int i = 0; i < g->n_vars; i++) {
-                    if (strcmp(g->vars[i].name, root->ident) == 0 && g->vars[i].is_array &&
-                        g->vars[i].type && g->vars[i].type->kind == HD_TYPE_ARRAY) {
-                        int total_dims = 0;
-                        HDType *t = g->vars[i].type;
-                        while (t && t->kind == HD_TYPE_ARRAY) { total_dims++; t = t->base; }
-                        if (index_levels < total_dims) {
-                            return addr;
-                        }
-                        break;  /* found the var, stop searching */
-                    }
-                }
-            } else {
-                /* Not from an array variable — must be from a pointer dereference chain.
-                 * In this case, intermediate dimensions always return addresses. */
-                return addr;
-            }
-        }
         return wubu_mir_load(g->prog, addr);
     }
     case HD_AST_ADDR: {
@@ -3947,16 +3454,8 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         return mir_address_of(g, n->child);
     }
     case HD_AST_DEREF: {
-        /* *p -> load from address held in p.
-         * Exception: if the inner expression yields an array type,
-         * the array decays to a pointer (its address IS the value),
-         * so we should NOT load — just return the address. */
+        /* *p -> load from address held in p */
         wubu_vr_t addr = mir_gen_expr(g, n->child);
-        HDType *inner_type = mir_effective_type(g, n->child);
-        if (inner_type && inner_type->kind == HD_TYPE_ARRAY) {
-            /* Array decays to pointer: return address, don't load */
-            return addr;
-        }
         return wubu_mir_load(g->prog, addr);
     }
     case HD_AST_CALL:
@@ -3964,16 +3463,11 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         /* Resolve callee name -> func_id via the collected func table. */
         int fid = -1;
         if (n->callee && n->callee->kind == HD_AST_IDENT) {
-            /* Search from end to find the most recent DEFINITION (with body).
-             * Forward declarations have no body and are skipped;
-             * if only a forward declaration exists, treat as external. */
+            /* Search from end to find the most recent definition (not forward decl).
+             * Forward declarations have no body and are collected first;
+             * the actual definition comes later and has a body. */
             for (int i = g->prog->n_funcs - 1; i >= 0; i--)
-                if (strcmp(g->prog->funcs[i].name, n->callee->ident) == 0) {
-                    /* Check if this is a definition (has body) */
-                    if (g->func_ast[i] && g->func_ast[i]->body) {
-                        fid = i; break;
-                    }
-                }
+                if (strcmp(g->prog->funcs[i].name, n->callee->ident) == 0) { fid = i; break; }
         }
         /* Function pointer member call: s.fn(args) where callee is a DOT/MEMBER expr.
          * The function pointer was previously stored as a func_id in the var.
