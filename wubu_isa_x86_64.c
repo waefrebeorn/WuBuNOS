@@ -1426,13 +1426,21 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
                             else { e8(&e,0x50+r); }
                         }
                         if (use_float_cc) {
-                            /* Pass float args in XMM registers per x86-64 SysV ABI */
+                            /* Pass float args in XMM registers per x86-64 SysV ABI.
+                             * For ldexp(double, int), first arg goes XMM0, second in RDI. */
+                            bool is_ldexp = (strcmp(in->func_name, "ldexp") == 0);
                             int xmm_reg = 0;
                             if (vr1 >= 0) {
                                 emit_load_vr_to_xmm(&e, 1, assign, assign_count, prog, i, xmm_reg++);
                             }
                             if (vr2 >= 0) {
-                                emit_load_vr_to_xmm(&e, 2, assign, assign_count, prog, i, xmm_reg++);
+                                if (is_ldexp) {
+                                    /* ldexp's second arg (int n) goes in RDI */
+                                    if (vr2 >= 0) emit_mov_reg(&e, 7, vr2);
+                                    else emit_load_rbp(&e, 7, spill_off(assign, assign_count, &e, 2));
+                                } else {
+                                    emit_load_vr_to_xmm(&e, 2, assign, assign_count, prog, i, xmm_reg++);
+                                }
                             }
                             if (vr3 >= 0) {
                                 emit_load_vr_to_xmm(&e, 3, assign, assign_count, prog, i, xmm_reg++);

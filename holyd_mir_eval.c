@@ -4072,10 +4072,33 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
          * Without this, unknown func calls resolve to main (func_id 0),
          * causing infinite recursion or crashes.
          * Pass the function name so the JIT can emit a real libc call. */
-        uint32_t call_fid = (fid >= 0) ? (uint32_t)fid : 0xFFFF;
+        /* Check if this is truly an external call (function has no body).
+         * Functions added by mir_collect_funcs have start=end=0 if no body.
+         * Also treat known libc functions as external even if they appear in the table. */
+        uint32_t call_fid;
         const char *ext_name = "";
-        if (fid < 0 && n->callee && n->callee->kind == HD_AST_IDENT && n->callee->ident[0]) {
-            ext_name = n->callee->ident;
+        bool is_external_call = false;
+        /* List of known external libc functions */
+        static const char *ext_funcs[] = {"ldexp", NULL};
+        if (fid >= 0 && (int)fid < g->prog->n_funcs) {
+            const char *fname = g->prog->funcs[fid].name;
+            for (int ei = 0; ext_funcs[ei]; ei++) {
+                if (strcmp(fname, ext_funcs[ei]) == 0) {
+                    is_external_call = true;
+                    call_fid = 0xFFFF;
+                    ext_name = fname;
+                    break;
+                }
+            }
+        }
+        if (!is_external_call && fid >= 0) {
+            call_fid = (uint32_t)fid;
+        } else if (fid < 0) {
+            call_fid = 0xFFFF;
+            if (n->callee && n->callee->kind == HD_AST_IDENT)
+                ext_name = n->callee->ident;
+        } else {
+            call_fid = 0xFFFF;
         }
         wubu_mir_call_ext(g->prog, call_fid, ext_name);
         /* Callee returns in vr0; capture it into a fresh vr for the caller. */
