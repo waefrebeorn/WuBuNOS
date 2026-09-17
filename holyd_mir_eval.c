@@ -1272,6 +1272,50 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
                 }
             }
         }
+        /* Handle static redeclaration WITH initializer: reuse existing variable address */
+        if (n->is_static && n->init) {
+            for (int i = g->n_vars - 1; i >= 0; i--) {
+                if (strcmp(g->vars[i].name, n->ident) == 0 && g->vars[i].addr != 0 && g->vars[i].is_static) {
+                    /* Static variable already exists — reuse its address */
+                    wubu_vr_t addr = g->vars[i].addr;
+                    /* Fall through to initialize the existing variable */
+                    if (n->type && n->type->kind == HD_TYPE_F64)
+                        vr = mir_decl_var_float(g, n->ident);
+                    else
+                        vr = mir_decl_var_unsigned(g, n->ident, is_uns);
+                    for (int j = g->n_vars - 1; j >= 0; j--)
+                        if (strcmp(g->vars[j].name, n->ident) == 0) {
+                            g->vars[j].type = n->type;
+                            g->vars[j].is_static = 1;
+                            g->vars[j].addr = addr;
+                            break;
+                        }
+                    /* Skip the allocation below — we reused the address */
+                    goto skip_alloc;
+                }
+            }
+        }
+        /* Handle file-scope redeclaration WITH initializer (non-static).
+         * At file scope, `int x; int x = 5;` should reuse the same variable. */
+        if (!g->in_function_body && !n->is_static && !n->is_extern && n->init) {
+            for (int i = 0; i < g->n_vars; i++) {
+                if (strcmp(g->vars[i].name, n->ident) == 0 && g->vars[i].addr != 0) {
+                    /* Variable already exists at file scope — reuse its address */
+                    wubu_vr_t addr = g->vars[i].addr;
+                    if (n->type && n->type->kind == HD_TYPE_F64)
+                        vr = mir_decl_var_float(g, n->ident);
+                    else
+                        vr = mir_decl_var_unsigned(g, n->ident, is_uns);
+                    for (int j = g->n_vars - 1; j >= 0; j--)
+                        if (strcmp(g->vars[j].name, n->ident) == 0) {
+                            g->vars[j].type = n->type;
+                            g->vars[j].addr = addr;
+                            break;
+                        }
+                    goto skip_alloc;
+                }
+            }
+        }
         if (n->type && n->type->kind == HD_TYPE_F64)
             vr = mir_decl_var_float(g, n->ident);
         else
@@ -1336,6 +1380,7 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
                 }
             }
         }
+skip_alloc:
 extern_done:
         if (n->init) {
             if (n->is_static && g->in_function_body) {
