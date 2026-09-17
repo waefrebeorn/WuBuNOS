@@ -2919,6 +2919,34 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         /* Pointer subtraction: scale by pointee size in bytes */
         int ptr_scale = 0;
         bool left_is_ptr = true;
+        /* For ADDR nodes (&x), determine pointer type from the child */
+        if (n->left && n->left->kind == HD_AST_ADDR && n->left->child) {
+            const HDASTNode *child = n->left->child;
+            if (child->kind == HD_AST_IDENT && child->ident[0]) {
+                /* Look up the variable's type */
+                for (int i = 0; i < g->n_vars; i++) {
+                    if (strcmp(g->vars[i].name, child->ident) == 0) {
+                        if (g->vars[i].is_array) {
+                            /* &array → pointer to array, stride = 8 (cell size) */
+                            ptr_scale = 8;
+                        } else if (g->vars[i].is_struct) {
+                            /* &struct → pointer to struct, stride = total_size * 8 */
+                            mir_struct_t *st = mir_find_struct(g, g->vars[i].struct_name);
+                            ptr_scale = st ? st->total_size * 8 : 8;
+                        } else {
+                            /* &scalar → pointer to scalar, stride = 8 (cell size) */
+                            ptr_scale = 8;
+                        }
+                        break;
+                    }
+                }
+            } else if (child->kind == HD_AST_DOT || child->kind == HD_AST_MEMBER) {
+                /* &s.member → pointer to member type, stride = 8 (cell size in 8-byte model) */
+                ptr_scale = 8;
+            } else {
+                ptr_scale = 8;
+            }
+        }
         if (n->left && n->left->type && n->left->type->kind == HD_TYPE_ARRAY) {
             if (n->left->type->base && n->left->type->base->kind == HD_TYPE_ARRAY) {
                 ptr_scale = n->left->type->base->array_size * 8;
