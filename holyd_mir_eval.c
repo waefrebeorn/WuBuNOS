@@ -1179,11 +1179,37 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
                 }
             }
         }
-        /* Handle static redeclarations: reuse existing variable if already declared */
-        if (n->is_static && !n->init) {
-            for (int i = g->n_vars - 1; i >= 0; i--) {
+        /* Handle file-scope redeclarations: at file scope, all variables
+         * have static storage duration. If a variable with this name already
+         * exists at file scope, reuse it instead of allocating a new one. */
+        if (!g->in_function_body && !n->is_extern) {
+            for (int i = 0; i < g->n_vars; i++) {
+                if (strcmp(g->vars[i].name, n->ident) == 0 && g->vars[i].addr != 0) {
+                    /* File-scope variable already exists — reuse it */
+                    if (n->init) {
+                        wubu_vr_t init_val = mir_gen_expr(g, n->init);
+                        wubu_vr_t addr = g->vars[i].addr;
+                        wubu_mir_store(g->prog, addr, init_val);
+                    }
+                    goto extern_done;
+                }
+            }
+        }
+        /* Handle static redeclarations: reuse existing variable if already declared.
+         * For file-scope statics (not in function body), always reuse if a
+         * static var with this name already exists. For function-scope statics
+         * with an initializer, also reuse (the init will be handled below). */
+        if (n->is_static) {
+            /* Search from beginning to find the original static variable,
+             * not an extern copy that might have been added later */
+            for (int i = 0; i < g->n_vars; i++) {
                 if (strcmp(g->vars[i].name, n->ident) == 0 && g->vars[i].addr != 0 && g->vars[i].is_static) {
-                    /* Static variable already exists — skip allocation but update type */
+                    /* Static variable already exists — skip allocation */
+                    if (n->init && !g->in_function_body) {
+                        wubu_vr_t init_val = mir_gen_expr(g, n->init);
+                        wubu_vr_t addr = g->vars[i].addr;
+                        wubu_mir_store(g->prog, addr, init_val);
+                    }
                     goto extern_done;
                 }
             }
