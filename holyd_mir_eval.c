@@ -4149,7 +4149,15 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         const char *ext_name = "";
         bool is_external_call = false;
         /* List of known external libc functions */
-        static const char *ext_funcs[] = {"ldexp", NULL};
+        static const char *ext_funcs[] = {
+            "ldexp", "fma", "sqrt", "cbrt", "pow", "exp", "log", "log2", "log10",
+            "sin", "cos", "tan", "asin", "acos", "atan", "atan2",
+            "sinh", "cosh", "tanh", "floor", "ceil", "trunc", "round",
+            "fabs", "fmod", "remainder", "fdim", "fmax", "fmin",
+            "copysign", "nextafter", "hypot",
+            "isnan", "double_isnan",
+            NULL
+        };
         if (fid >= 0 && (int)fid < g->prog->n_funcs) {
             const char *fname = g->prog->funcs[fid].name;
             for (int ei = 0; ext_funcs[ei]; ei++) {
