@@ -3140,6 +3140,9 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         /* sizeof(sizeof(anything)) == sizeof(unsigned long) == 8 */
         if (n->child && n->child->kind == HD_AST_SIZEOF) {
             size = 8;
+        } else if (n->child && n->child->kind == HD_AST_STRING_LIT) {
+            /* sizeof("string") returns array length including null terminator */
+            size = (int)strlen(n->child->str_val) + 1;
         } else if (!n->type && n->child) {
             if (n->child->kind == HD_AST_CHAR_LIT) {
                 /* In C, char literals have type int, so sizeof 'a' == 4 */
