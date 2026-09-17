@@ -234,6 +234,27 @@ void wubu_mir_store(wubu_mir_prog_t *p, wubu_vr_t addr, wubu_vr_t val)
     i->b = val;
 }
 
+wubu_vr_t wubu_mir_load_sized(wubu_mir_prog_t *p, wubu_vr_t addr, int size)
+{
+    wubu_mir_instr_t *i = emit(p);
+    if (!i) return 0;
+    i->op = MIR_LOAD;
+    i->dst = (wubu_vr_t)p->n;
+    i->a = addr;
+    i->imm = size;
+    return i->dst;
+}
+
+void wubu_mir_store_sized(wubu_mir_prog_t *p, wubu_vr_t addr, wubu_vr_t val, int size)
+{
+    wubu_mir_instr_t *i = emit(p);
+    if (!i) return;
+    i->op = MIR_STORE;
+    i->a = addr;
+    i->b = val;
+    i->imm = size;
+}
+
 void wubu_mir_set_n_args(wubu_mir_prog_t *p, uint32_t n_args)
 {
     if (p) p->n_args = n_args;
