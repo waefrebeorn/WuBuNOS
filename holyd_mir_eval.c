@@ -2899,6 +2899,13 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             if (rt && (rt->kind == HD_TYPE_I32 || rt->kind == HD_TYPE_U32))
                 r = mir_truncate_to_type(g, r, rt);
         }
+        /* Propagate unsigned type for sizeof arithmetic chains */
+        if (!is_float && n->left && n->left->type && n->left->type->kind == HD_TYPE_U64) {
+            static HDType u64_type;
+            u64_type.kind = HD_TYPE_U64;
+            u64_type.size = 8;
+            *(HDType **)&n->type = &u64_type;
+        }
         return r;
     }
     case HD_AST_SUB: {
@@ -2964,6 +2971,13 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
  }
         if (!is_float) { HDType *rt = mir_binop_result_type(g, n->left, n->right);
             if (rt && (rt->kind == HD_TYPE_I32 || rt->kind == HD_TYPE_U32)) r = mir_truncate_to_type(g, r, rt); }
+        /* Propagate unsigned type for sizeof arithmetic chains */
+        if (!is_float && n->left && n->left->type && n->left->type->kind == HD_TYPE_U64) {
+            static HDType u64_type;
+            u64_type.kind = HD_TYPE_U64;
+            u64_type.size = 8;
+            *(HDType **)&n->type = &u64_type;
+        }
         return r;
     }
     case HD_AST_MUL: {
@@ -3783,6 +3797,13 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 break;
             default:             size = 8; break;
             }
+        }
+        /* sizeof returns size_t (unsigned long / U64) per C standard. */
+        if (!n->type) {
+            HDType *t = (HDType *)calloc(1, sizeof(HDType));
+            t->kind = HD_TYPE_U64;
+            t->size = 8;
+            *(HDType **)&n->type = t;
         }
         return wubu_mir_const(g->prog, (int64_t)size);
     }
