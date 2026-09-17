@@ -2172,6 +2172,21 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             if (!lhs_type && n->left->kind == HD_AST_IDENT) {
                 lhs_type = mir_find_var_type(g, n->left->ident);
             }
+            /* For INDEX nodes (array element access), look up element type */
+            if (!lhs_type && n->left->kind == HD_AST_INDEX) {
+                /* Walk left spine to find root IDENT */
+                const HDASTNode *root = n->left;
+                while (root && root->kind == HD_AST_INDEX) root = root->left;
+                if (root && root->kind == HD_AST_IDENT) {
+                    for (int i = 0; i < g->n_vars; i++) {
+                        if (strcmp(g->vars[i].name, root->ident) == 0 && g->vars[i].is_array) {
+                            lhs_type = g->vars[i].type;
+                            if (lhs_type && lhs_type->base) lhs_type = lhs_type->base;
+                            break;
+                        }
+                    }
+                }
+            }
             if (lhs_type) {
             HDTypeKind k = lhs_type->kind;
             /* Determine RHS type — check AST node type first, then var table, then function call */
@@ -2190,11 +2205,18 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                     }
                 }
             }
+            /* Determine if RHS is a float expression (even if rhs_type is NULL) */
+            int rhs_is_float = (rhs_type && rhs_type->kind == HD_TYPE_F64);
+            if (!rhs_is_float && !rhs_type && n->right) {
+                const HDASTNode *rhs = n->right;
+                if (rhs->kind == HD_AST_NEG) rhs = rhs->child;
+                if (rhs && rhs->kind == HD_AST_FLOAT_LIT) rhs_is_float = 1;
+            }
             if (k == HD_TYPE_I8 || k == HD_TYPE_U8 || k == HD_TYPE_I16 ||
                 k == HD_TYPE_U16 || k == HD_TYPE_I32 || k == HD_TYPE_U32 ||
                 k == HD_TYPE_I64 || k == HD_TYPE_U64) {
                 /* If RHS is a float, convert to int first */
-                if (rhs_type && rhs_type->kind == HD_TYPE_F64) {
+                if (rhs_is_float) {
                     if (k == HD_TYPE_U64)
                         val = wubu_mir_unop(g->prog, MIR_DTOI_U, val);
                     else
