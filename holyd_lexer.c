@@ -384,7 +384,12 @@ static HDTokenType hd_scan_string(HDLexer *lex) {
         }
     }
     lex->tok.str_val[i] = '\0';
-    return hd_make_token(lex, quote == '\"' ? HD_TOK_STRING : HD_TOK_CHAR);
+    /* Set int_val for char tokens so array dimensions and other contexts
+     * that read tok.int_val get the correct character value */
+    if (quote != '"') {
+        lex->tok.int_val = (int64_t)(unsigned char)lex->tok.str_val[0];
+    }
+    return hd_make_token(lex, quote == '"' ? HD_TOK_STRING : HD_TOK_CHAR);
 }
 
 static HDTokenType hd_scan_identifier(HDLexer *lex) {

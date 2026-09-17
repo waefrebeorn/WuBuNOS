@@ -1316,6 +1316,16 @@ extern_done:
                         for (uint32_t se = 0; se < elem->n_args; se++) {
                             int sub_off = offset + (int)se * 8;
                             wubu_vr_t sub_ev = mir_gen_expr(g, elem->args[se]);
+                            /* Truncate float values to element type */
+                            if (n->type && n->type->base && n->type->base->kind != HD_TYPE_F64 &&
+                                n->type->base->kind != HD_TYPE_PTR && n->type->base->kind != HD_TYPE_VOID) {
+                                /* If the init expr is a float, convert to int first */
+                                if (elem->args[se] && elem->args[se]->type &&
+                                    elem->args[se]->type->kind == HD_TYPE_F64) {
+                                    sub_ev = wubu_mir_unop(g->prog, MIR_DTOI, sub_ev);
+                                }
+                                sub_ev = mir_truncate_to_type(g, sub_ev, n->type->base);
+                            }
                             wubu_vr_t sub_addr = wubu_mir_binop(g->prog, MIR_ADD, addr,
                                 wubu_mir_const(g->prog, (int64_t)sub_off));
                             wubu_mir_store(g->prog, sub_addr, sub_ev);
@@ -1353,6 +1363,18 @@ extern_done:
                             }
                         }
                         ev = mir_gen_expr(g, elem);
+                        /* Convert initializer value to element type for arrays */
+                        if (n->type && n->type->kind == HD_TYPE_ARRAY && n->type->base) {
+                            HDType *base = n->type->base;
+                            if (base->kind != HD_TYPE_F64 && base->kind != HD_TYPE_PTR &&
+                                base->kind != HD_TYPE_VOID && base->kind != HD_TYPE_ARRAY &&
+                                base->kind != HD_TYPE_STRUCT && base->kind != HD_TYPE_UNION) {
+                                if (elem->type && elem->type->kind == HD_TYPE_F64) {
+                                    ev = wubu_mir_unop(g->prog, MIR_DTOI, ev);
+                                }
+                                ev = mir_truncate_to_type(g, ev, base);
+                            }
+                        }
                         /* Convert initializer value to member type */
                         if (is_struct_var && n->type && n->type->kind == HD_TYPE_STRUCT
                             && e < (uint32_t)n->type->n_members) {
