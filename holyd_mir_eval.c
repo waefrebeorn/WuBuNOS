@@ -733,6 +733,23 @@ static HDTypeKind mir_common_cmp_type(HDMirGen *g, const HDASTNode *left, const 
     HDType *lt = NULL, *rt = NULL;
     if (left && left->type) lt = left->type;
     if (right && right->type) rt = right->type;
+    /* Check for sizeof in binary expression chains (e.g., sizeof 4 - sizeof 4 - 1) */
+    if (!lt && left && (left->kind == HD_AST_SUB || left->kind == HD_AST_ADD)) {
+        const HDASTNode *ll = left->left;
+        while (ll && (ll->kind == HD_AST_SUB || ll->kind == HD_AST_ADD)) ll = ll->left;
+        if (ll && ll->kind == HD_AST_SIZEOF) {
+            static HDType u64 = {.kind = HD_TYPE_U64, .size = 8};
+            lt = &u64;
+        }
+    }
+    if (!rt && right && (right->kind == HD_AST_SUB || right->kind == HD_AST_ADD)) {
+        const HDASTNode *rl = right->left;
+        while (rl && (rl->kind == HD_AST_SUB || rl->kind == HD_AST_ADD)) rl = rl->left;
+        if (rl && rl->kind == HD_AST_SIZEOF) {
+            static HDType u64 = {.kind = HD_TYPE_U64, .size = 8};
+            rt = &u64;
+        }
+    }
     if (!lt && left && left->kind == HD_AST_IDENT && left->ident[0]) {
         for (int i = 0; i < g->n_vars; i++)
             if (strcmp(g->vars[i].name, left->ident) == 0) { lt = g->vars[i].type; break; }
@@ -2661,6 +2678,12 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         if (do_divide) r = wubu_mir_binop(g->prog, MIR_DIV, r, wubu_mir_const(g->prog, (int64_t)ptr_scale));
         if (!is_float) { HDType *rt = mir_binop_result_type(g, n->left, n->right);
             if (rt && (rt->kind == HD_TYPE_I32 || rt->kind == HD_TYPE_U32)) r = mir_truncate_to_type(g, r, rt); }
+        /* If left operand is sizeof, result is unsigned long (size_t) */
+        if (!is_float && n->left && (n->left->kind == HD_AST_SIZEOF ||
+            (n->left->type && n->left->type->kind == HD_TYPE_U64))) {
+            /* Zero-extend to ensure unsigned interpretation */
+            r = wubu_mir_binop(g->prog, MIR_AND, r, wubu_mir_const(g->prog, 0xFFFFFFFFFFFFFFFFULL));
+        }
         return r;
     }
     case HD_AST_MUL: {
