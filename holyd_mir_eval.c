@@ -2540,7 +2540,9 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         wubu_vr_t b = mir_gen_expr(g, n->right);
         /* Pointer subtraction: scale by pointee size in bytes */
         int ptr_scale = 0;
-        bool left_is_ptr = true;
+        /* For ADDR nodes (&x), the pointee is always in the cell model */
+        if (n->left && n->left->kind == HD_AST_ADDR)
+            ptr_scale = 8;
         if (n->left && n->left->type && n->left->type->kind == HD_TYPE_ARRAY) {
             if (n->left->type->base && n->left->type->base->kind == HD_TYPE_ARRAY) {
                 ptr_scale = n->left->type->base->array_size * 8;
@@ -2580,8 +2582,26 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
  if (ptr_scale == 0 && n->left && n->left->kind == HD_AST_STRING_LIT) {
  ptr_scale = 8;
  }
-        if (ptr_scale > 1)
+        /* For pointer subtraction (ptr - ptr): compute (a - b) / ptr_scale */
+        /* For pointer-subtract-int (ptr - n): compute a - (b * ptr_scale) */
+        bool b_is_pointer = false;
+        if (n->right && n->right->kind == HD_AST_ADDR)
+            b_is_pointer = true;
+        else if (n->right && n->right->kind == HD_AST_IDENT && n->right->ident[0]) {
+            for (int i = 0; i < g->n_vars; i++) {
+                if (strcmp(g->vars[i].name, n->right->ident) == 0) {
+                    if (g->vars[i].type && g->vars[i].type->kind == HD_TYPE_PTR)
+                        b_is_pointer = true;
+                    break;
+                }
+            }
+        }
+        if (ptr_scale > 1 && !b_is_pointer) {
+            /* ptr - int: scale the integer operand */
             b = wubu_mir_binop(g->prog, MIR_MUL, b, wubu_mir_const(g->prog, (int64_t)ptr_scale));
+        }
+        /* For pointer subtraction (ptr - ptr), divide the result by ptr_scale */
+        bool do_divide = b_is_pointer && (ptr_scale > 1);
         int is_float = (n->left && n->left->type && n->left->type->kind == HD_TYPE_F64) ||
                        (n->right && n->right->type && n->right->type->kind == HD_TYPE_F64) ||
                        (n->left && n->left->kind == HD_AST_IDENT && mir_find_var_is_float(g, n->left->ident)) ||
@@ -2594,6 +2614,7 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             b = mir_promote_to_float(g, b, n->right);
         }
         wubu_vr_t r = wubu_mir_binop(g->prog, is_float ? MIR_DSUB : MIR_SUB, a, b);
+        if (do_divide) r = wubu_mir_binop(g->prog, MIR_DIV, r, wubu_mir_const(g->prog, (int64_t)ptr_scale));
         if (!is_float) { HDType *rt = mir_binop_result_type(g, n->left, n->right);
             if (rt && (rt->kind == HD_TYPE_I32 || rt->kind == HD_TYPE_U32)) r = mir_truncate_to_type(g, r, rt); }
         return r;
