@@ -1720,17 +1720,40 @@ done_extern_params:
                     advance(p);
                 }
                 /* Parse optional array dimensions: int a[5] -> adjust to pointer */
+                /* For multi-dimensional: int a[2][3] -> int (*a)[3] */
                 if (peek(p) == HD_TOK_LBRACKET) {
-                    while (peek(p) == HD_TOK_LBRACKET) {
+                    /* Collect all dimension tokens first */
+                    int dims[8];
+                    int ndims = 0;
+                    while (peek(p) == HD_TOK_LBRACKET && ndims < 8) {
                         advance(p); /* [ */
-                        if (peek(p) == HD_TOK_INT) advance(p); /* dimension */
-                        if (peek(p) == HD_TOK_IDENT) advance(p); /* named dim */
+                        if (peek(p) == HD_TOK_INT) {
+                            dims[ndims++] = p->lex->tok.int_val;
+                            advance(p);
+                        } else if (peek(p) == HD_TOK_IDENT) {
+                            dims[ndims++] = 0; /* variable-length, treat as 0 */
+                            advance(p);
+                        } else {
+                            dims[ndims++] = 0; /* empty [] */
+                        }
                         expect(p, HD_TOK_RBRACKET);
                     }
-                    /* C standard: array parameters are adjusted to pointers */
+                    /* Build type from innermost dimension outward.
+                     * int a[2][3] -> PTR(ARRAY(I32, 3))
+                     * int a[5] -> PTR(I32) */
+                    HDType *inner = pt;
+                    for (int di = ndims - 1; di >= 1; di--) {
+                        HDType *arr = (HDType *)calloc(1, sizeof(HDType));
+                        arr->kind = HD_TYPE_ARRAY;
+                        arr->base = inner;
+                        arr->array_size = dims[di];
+                        arr->size = hd_type_size(inner) * dims[di];
+                        inner = arr;
+                    }
+                    /* Outermost dimension becomes pointer */
                     HDType *ptr = (HDType *)calloc(1, sizeof(HDType));
                     ptr->kind = HD_TYPE_PTR;
-                    ptr->base = pt;
+                    ptr->base = inner;
                     ptr->size = 8;
                     pt = ptr;
                 }

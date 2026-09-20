@@ -33,6 +33,7 @@ typedef struct {
     int array_stride;      /* inner dimension for 2D+ arrays (1 for 1D) */
     int is_struct;         /* 1 if this variable is a struct instance */
     int is_ptr_struct;     /* 1 if this variable is a pointer to a struct */
+    int is_ptr_array;      /* 1 if this variable is a pointer to an array (e.g., int (*a)[3]) */
     int is_vla_ptr;        /* 1 if this variable is a VLA (heap-allocated pointer) */
     char struct_name[HD_MAX_IDENT_LEN]; /* struct type name */
     int fn_ptr_func_id;    /* func_id this pointer var points to, or -1 */
@@ -338,6 +339,7 @@ static wubu_vr_t mir_decl_var_unsigned(HDMirGen *g, const char *name, int is_uns
         g->vars[g->n_vars].is_unsigned = is_unsigned;
         g->vars[g->n_vars].is_float = 0;
         g->vars[g->n_vars].is_array = 0;
+        g->vars[g->n_vars].is_ptr_array = 0;
         g->vars[g->n_vars].array_size = 0;
         g->vars[g->n_vars].fn_ptr_func_id = -1;
         g->vars[g->n_vars].type = NULL;
@@ -377,6 +379,7 @@ static void mir_bind_var(HDMirGen *g, const char *name, wubu_vr_t vr, wubu_vr_t 
         g->vars[g->n_vars].is_unsigned = is_unsigned;
         g->vars[g->n_vars].is_float = 0;
         g->vars[g->n_vars].is_array = 0;
+        g->vars[g->n_vars].is_ptr_array = 0;
         g->vars[g->n_vars].array_size = 0;
         g->vars[g->n_vars].fn_ptr_func_id = -1;
         g->vars[g->n_vars].type = NULL;
@@ -812,7 +815,8 @@ static int mir_index_stride(HDMirGen *g, const HDASTNode *n) {
     if (!root || root->kind != HD_AST_IDENT) return 8; /* default: 8 bytes */
     /* Look up the variable in the symbol table */
     for (int i = 0; i < g->n_vars; i++) {
-        if (strcmp(g->vars[i].name, root->ident) == 0 && g->vars[i].is_array) {
+        if (strcmp(g->vars[i].name, root->ident) == 0 &&
+            (g->vars[i].is_array || g->vars[i].is_ptr_array)) {
             if (depth <= 1) {
                 /* Outermost index: use array_stride * 8 */
                 int stride = g->vars[i].array_stride * 8;
@@ -3587,6 +3591,15 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             idx = wubu_mir_binop(g->prog, MIR_MUL, idx, wubu_mir_const(g->prog, (int64_t)stride));
         }
         wubu_vr_t addr = wubu_mir_binop(g->prog, MIR_ADD, base, idx);
+        /* For pointer-to-array bases, a[i] yields a sub-array that decays to
+         * a pointer (address), NOT a value. Don't load. */
+        if (base_node && base_node->kind == HD_AST_IDENT) {
+            for (int vi = 0; vi < g->n_vars; vi++) {
+                if (strcmp(g->vars[vi].name, base_node->ident) == 0 && g->vars[vi].is_ptr_array) {
+                    return addr; /* sub-array decays to pointer */
+                }
+            }
+        }
         return wubu_mir_load(g->prog, addr);
     }
     case HD_AST_ADDR: {
@@ -4664,6 +4677,21 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
                         g.vars[i].type = fn->param_types[pi];
                         if (fn->param_types[pi]->kind == HD_TYPE_F64)
                             g.vars[i].is_float = 1;
+                        /* For pointer-to-array parameters (e.g., int a[2][3] -> int (*a)[3]),
+                         * set is_ptr_array and array_stride so mir_index_stride computes correctly.
+                         * First clear is_ptr_array for ALL entries with this name (params from
+                         * other functions may persist in the var table), then set it. */
+                        for (int j = 0; j < g.n_vars; j++) {
+                            if (strcmp(g.vars[j].name, fn->param_names[pi]) == 0) {
+                                g.vars[j].is_ptr_array = 0;
+                            }
+                        }
+                        if (fn->param_types[pi]->kind == HD_TYPE_PTR &&
+                            fn->param_types[pi]->base &&
+                            fn->param_types[pi]->base->kind == HD_TYPE_ARRAY) {
+                            g.vars[i].is_ptr_array = 1;
+                            g.vars[i].array_stride = fn->param_types[pi]->base->array_size;
+                        }
                         break;
                     }
                 }
