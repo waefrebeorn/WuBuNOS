@@ -286,7 +286,28 @@ static HDTokenType hd_scan_number(HDLexer *lex) {
         }
         lex->tok.float_val = strtod(buf, NULL);
         return hd_make_token(lex, HD_TOK_FLOAT);
-    } else if (is_hex) {
+    }
+
+    /* Check for exponent without decimal point: 4e12, 1E-3, etc.
+     * In C, an integer with an exponent is a floating-point literal. */
+    if (!hd_is_at_end(lex)) {
+        char c = hd_peek(lex);
+        if (c == 'e' || c == 'E') {
+            buf[i++] = hd_advance(lex);
+            if (!hd_is_at_end(lex) && (hd_peek(lex) == '+' || hd_peek(lex) == '-')) {
+                buf[i++] = hd_advance(lex);
+            }
+            while (!hd_is_at_end(lex) && i < HD_MAX_TOKEN_LEN - 1
+                   && isdigit((unsigned char)hd_peek(lex))) {
+                buf[i++] = hd_advance(lex);
+            }
+            buf[i] = '\0';
+            lex->tok.float_val = strtod(buf, NULL);
+            return hd_make_token(lex, HD_TOK_FLOAT);
+        }
+    }
+
+    if (is_hex) {
         /* Scan suffix to detect unsigned and long */
         int is_unsigned = 0, is_long = 0;
         while (!hd_is_at_end(lex)) {
