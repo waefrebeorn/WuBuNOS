@@ -1876,7 +1876,6 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
     }
     case HD_AST_IDENT: {
         wubu_vr_t addr = mir_find_var_addr(g, n->ident);
-        if (n->ident[0] == 'x' && n->ident[1] == 0) fprintf(stderr, "[MIR_DEBUG] IDENT x addr=0x%llx\n", (unsigned long long)addr);
         if (addr == 0) {
             /* Check if it's an enum constant */
             for (int i = 0; i < g->n_enum_consts; i++) {
