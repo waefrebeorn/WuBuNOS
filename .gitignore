@@ -31,3 +31,4 @@ test_gauntlet/depot/incremental/upstream/
 test_gauntlet/depot/8cc/upstream/
 test_gauntlet/depot/compcert/upstream/
 test_gauntlet/depot/csmith/upstream/
+test_isa_driver
