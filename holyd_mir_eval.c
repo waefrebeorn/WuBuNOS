@@ -393,6 +393,12 @@ static void mir_collect_funcs(HDMirGen *g, const HDASTNode *ast) {
         for (uint32_t i = 0; i < ast->n_stmts; i++) {
             const HDASTNode *s = ast->stmts[i];
             if (s && s->kind == HD_AST_FUNC_DECL && g->n_funcs < MIR_MAX_FUNCTIONS) {
+                /* Skip function prototypes (declarations without a body).
+                 * Prototypes for libc functions like malloc, calloc, etc.
+                 * must NOT be collected — they need to go through the
+                 * external dlsym path (fid = 0xFFFF) so the JIT can
+                 * resolve them at runtime. */
+                if (!s->body) continue;
                 int id = g->n_funcs++;
                 g->func_ast[id] = s;
                 strncpy(g->prog->funcs[id].name, s->ident, HD_MAX_IDENT_LEN - 1);
@@ -402,6 +408,8 @@ static void mir_collect_funcs(HDMirGen *g, const HDASTNode *ast) {
             }
         }
     } else if (ast->kind == HD_AST_FUNC_DECL && g->n_funcs < MIR_MAX_FUNCTIONS) {
+        /* Skip function prototypes (declarations without a body) */
+        if (!ast->body) return;
         int id = g->n_funcs++;
         g->func_ast[id] = ast;
         strncpy(g->prog->funcs[id].name, ast->ident, HD_MAX_IDENT_LEN - 1);
@@ -1868,6 +1876,7 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
     }
     case HD_AST_IDENT: {
         wubu_vr_t addr = mir_find_var_addr(g, n->ident);
+        if (n->ident[0] == 'x' && n->ident[1] == 0) fprintf(stderr, "[MIR_DEBUG] IDENT x addr=0x%llx\n", (unsigned long long)addr);
         if (addr == 0) {
             /* Check if it's an enum constant */
             for (int i = 0; i < g->n_enum_consts; i++) {
