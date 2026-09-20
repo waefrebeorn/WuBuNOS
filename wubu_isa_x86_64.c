@@ -1660,34 +1660,6 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             rex(&e,1,0,0,0); e8(&e, 0x89); e8(&e, 0x3E);   /* mov [rsi], rdi */
             break;
         }
-        case MIR_LOAD_BYTE: {
-            /* dst = mem[a] (1-byte load, zero-extended) */
-            int sa = VR_ENC_SAFE(in->a);
-            if (sa >= 0) emit_mov_rax_from_vr(&e, sa);
-            else emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
-            rex(&e,1,0,0,0); e8(&e, 0x89); e8(&e, 0xDE);   /* mov rsi, rbx */
-            rex(&e,1,0,0,0); e8(&e, 0x01); e8(&e, 0xC6);   /* add rsi, rax */
-            e8(&e, 0x0F); e8(&e, 0xB6); e8(&e, 0x06);       /* movzx rax, byte [rsi] */
-            int sd = VR_ENC_SAFE(in->dst);
-            if (sd >= 0) emit_mov_vr_from_rax(&e, sd);
-            else emit_store_rbp(&e, spill_off(assign, assign_count, &e, in->dst), 0);
-            break;
-        }
-        case MIR_STORE_BYTE: {
-            /* mem[a] = b & 0xFF (1-byte store) */
-            int sa = VR_ENC_SAFE(in->a);
-            if (sa >= 0) emit_mov_rax_from_vr(&e, sa);
-            else emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
-            int sb = VR_ENC_SAFE(in->b);
-            if (sb >= 0) emit_mov_rdi_from_vr(&e, sb);
-            else emit_load_rbp(&e, 7, spill_off(assign, assign_count, &e, in->b));
-            rex(&e,1,0,0,0); e8(&e, 0x89); e8(&e, 0xDE);   /* mov rsi, rbx */
-            rex(&e,1,0,0,0); e8(&e, 0x01); e8(&e, 0xC6);   /* add rsi, rax */
-            /* mov [rsi], dil — store low byte of rdi */
-            /* x86-64 encoding: 40 88 3E (REX prefix + mov [rsi], dil) */
-            e8(&e, 0x40); e8(&e, 0x88); e8(&e, 0x3E);
-            break;
-        }
         case MIR_TO_PTR: {
             /* dst = mem_base + a (a is already a byte offset) */
             int sa = VR_ENC_SAFE(in->a);

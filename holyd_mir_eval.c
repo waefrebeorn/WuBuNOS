@@ -1909,10 +1909,8 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             for (int i = 0; i < g->n_vars; i++) {
                 if (strcmp(g->vars[i].name, n->ident) == 0) {
                     HDType *vt = g->vars[i].type;
-                    if (vt && (vt->kind == HD_TYPE_I8 || vt->kind == HD_TYPE_U8)) {
-                        return wubu_mir_load_byte(g->prog, addr);
-                    }
-                    if (vt && (vt->kind == HD_TYPE_I16 || vt->kind == HD_TYPE_U16 ||
+                    if (vt && (vt->kind == HD_TYPE_I8 || vt->kind == HD_TYPE_U8 ||
+                                vt->kind == HD_TYPE_I16 || vt->kind == HD_TYPE_U16 ||
                                 vt->kind == HD_TYPE_I32 || vt->kind == HD_TYPE_U32)) {
                         return wubu_mir_load(g->prog, addr);
                     }
@@ -1920,10 +1918,8 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 }
             }
         }
-        if (n->type && (n->type->kind == HD_TYPE_I8 || n->type->kind == HD_TYPE_U8)) {
-            return wubu_mir_load_byte(g->prog, addr);
-        }
-        if (n->type && (n->type->kind == HD_TYPE_I16 || n->type->kind == HD_TYPE_U16 ||
+        if (n->type && (n->type->kind == HD_TYPE_I8 || n->type->kind == HD_TYPE_U8 ||
+                        n->type->kind == HD_TYPE_I16 || n->type->kind == HD_TYPE_U16 ||
                         n->type->kind == HD_TYPE_I32 || n->type->kind == HD_TYPE_U32)) {
             return wubu_mir_load(g->prog, addr);
         }
@@ -3654,23 +3650,6 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 }
             }
         }
-        /* For char pointers, use byte load */
-        if (n->type && (n->type->kind == HD_TYPE_I8 || n->type->kind == HD_TYPE_U8)) {
-            return wubu_mir_load_byte(g->prog, addr);
-        }
-        /* Check base pointer element type for char */
-        if (base_node && base_node->kind == HD_AST_IDENT) {
-            for (int vi = 0; vi < g->n_vars; vi++) {
-                if (strcmp(g->vars[vi].name, base_node->ident) == 0 && g->vars[vi].type) {
-                    HDType *t = g->vars[vi].type;
-                    if (t->kind == HD_TYPE_PTR && t->base &&
-                        (t->base->kind == HD_TYPE_I8 || t->base->kind == HD_TYPE_U8)) {
-                        return wubu_mir_load_byte(g->prog, addr);
-                    }
-                    break;
-                }
-            }
-        }
         return wubu_mir_load(g->prog, addr);
     }
     case HD_AST_ADDR: {
@@ -3698,10 +3677,6 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                     }
                 }
             }
-        }
-        /* For char pointers, use byte load */
-        if (n->type && (n->type->kind == HD_TYPE_I8 || n->type->kind == HD_TYPE_U8)) {
-            return wubu_mir_load_byte(g->prog, addr);
         }
         return wubu_mir_load(g->prog, addr);
     }

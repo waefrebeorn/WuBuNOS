@@ -67,10 +67,8 @@ typedef enum {
     MIR_FRET,          /* return float vr 0 (bits reinterpreted as f32, returned low-32) */
     /* Memory model (arrays + pointers live in a flat int64 memory array) */
     MIR_ALLOC,         /* dst = base_addr; imm = n_elements (reserves memory) */
-    MIR_LOAD,          /* dst = mem[a] (8-byte load) */
-    MIR_STORE,         /* mem[a] = b (8-byte store) */
-    MIR_LOAD_BYTE,     /* dst = mem[a] (1-byte load, zero-extended to 64-bit) */
-    MIR_STORE_BYTE,    /* mem[a] = b & 0xFF (1-byte store) */
+    MIR_LOAD,          /* dst = mem[a] */
+    MIR_STORE,         /* mem[a] = b */
     MIR_CALL,          /* call function func_id (args already in v1..vN) */
     MIR_TO_PTR,        /* dst = mem_base + a (convert offset to pointer for external calls) */
     /* Soft-float ops: f32 values travel as IEEE-754 bit patterns inside the
@@ -294,9 +292,7 @@ void wubu_mir_place_label(wubu_mir_prog_t *p, uint32_t label);
 wubu_vr_t wubu_mir_alloc(wubu_mir_prog_t *p, int64_t n_elements);
 /* load/store through an address held in a vr */
 wubu_vr_t wubu_mir_load(wubu_mir_prog_t *p, wubu_vr_t addr);
-wubu_vr_t wubu_mir_load_byte(wubu_mir_prog_t *p, wubu_vr_t addr);
 void wubu_mir_store(wubu_mir_prog_t *p, wubu_vr_t addr, wubu_vr_t val);
-void wubu_mir_store_byte(wubu_mir_prog_t *p, wubu_vr_t addr, wubu_vr_t val);
 void wubu_mir_ret(wubu_mir_prog_t *p, wubu_vr_t v);
 /* Emit MIR_T_GEMM: mem[dst] += A[i*N+k]*B[k*N+j] accumulation.
  * a=Abase, b=Bbase, dst=Cbase, M/N/K are the matrix shapes. */
