@@ -2514,6 +2514,26 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
          * Handle both ptr + int and int + ptr cases. */
         int ptr_scale = 0;
         bool left_is_ptr = true;
+        /* Check if left is DEREF of array ADD: *(arr + i) used as pointer.
+         * The DEREF node has no type, so we detect this pattern explicitly.
+         * After DEREF returns the address of a sub-array, pointer arithmetic
+         * on that address uses the element size (8 bytes per cell), NOT the
+         * array stride. */
+        if (ptr_scale == 0 && n->left && n->left->kind == HD_AST_DEREF) {
+            const HDASTNode *child = n->left->child;
+            if (child && child->kind == HD_AST_ADD && child->left) {
+                const HDASTNode *base = child->left;
+                if (base && base->kind == HD_AST_IDENT && base->ident[0]) {
+                    for (int vi = 0; vi < g->n_vars; vi++) {
+                        if (strcmp(g->vars[vi].name, base->ident) == 0 && g->vars[vi].is_array) {
+                            /* Element size is always 8 bytes per cell */
+                            ptr_scale = 8;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
         /* Check array types first (arrays decay to pointers) */
         if (n->left && n->left->type && n->left->type->kind == HD_TYPE_ARRAY) {
             if (n->left->type->base && n->left->type->base->kind == HD_TYPE_ARRAY) {
@@ -3580,8 +3600,22 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         return mir_address_of(g, n->child);
     }
     case HD_AST_DEREF: {
-        /* *p -> load from address held in p */
+        /* *p -> load from address held in p.
+         * EXCEPTION: *(arr + i) where arr is an array — the result is a
+         * sub-array which decays to a pointer. In our flat memory model,
+         * this is the same address (no load). */
         wubu_vr_t addr = mir_gen_expr(g, n->child);
+        if (n->child && n->child->kind == HD_AST_ADD && n->child->left) {
+            const HDASTNode *base = n->child->left;
+            if (base && base->kind == HD_AST_IDENT && base->ident[0]) {
+                for (int vi = 0; vi < g->n_vars; vi++) {
+                    if (strcmp(g->vars[vi].name, base->ident) == 0 && g->vars[vi].is_array) {
+                        /* *(array + i) — return address, don't load */
+                        return addr;
+                    }
+                }
+            }
+        }
         return wubu_mir_load(g->prog, addr);
     }
     case HD_AST_CALL:
