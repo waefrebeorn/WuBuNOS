@@ -1360,9 +1360,14 @@ extern_done:
                     int elem_sz = 8; /* default: 1 cell */
                     if (n->type && n->type->kind == HD_TYPE_ARRAY && n->type->base
                         && n->type->base->kind == HD_TYPE_ARRAY) {
-                        /* Multi-dimensional: element size = inner array size in cells * 8 bytes.
-                         * Each element occupies 1 cell (8 bytes) regardless of logical type size. */
-                        elem_sz = (int)(n->type->base->array_size * 8);
+                        /* Multi-dimensional: element size = total cells of inner array * 8 bytes. */
+                        int inner_cells = 1;
+                        HDType *t = n->type->base;
+                        while (t && t->kind == HD_TYPE_ARRAY) {
+                            inner_cells *= t->array_size;
+                            t = t->base;
+                        }
+                        elem_sz = inner_cells * 8;
                     }
                     int offset = (int)e * elem_sz;
                     /* For structs, use the actual member byte offset, not sequential. */
