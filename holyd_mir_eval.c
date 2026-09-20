@@ -3584,7 +3584,45 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             base_node = idx_node;
             idx_node = tmp;
         }
-        wubu_vr_t base = mir_address_of(g, base_node);
+        /* For INDEX/DEREF bases: decide whether to use value or address.
+         * - If the inner expression yields a pointer VALUE (e.g. int** → int*),
+         *   use mir_gen_expr to get the loaded pointer.
+         * - If the inner expression yields an array that decays to a pointer
+         *   (e.g. int(*)[3] → int[3] which decays to &a[i][0]),
+         *   use mir_address_of to get the address.
+         * We distinguish by checking the ultimate base variable's type. */
+        wubu_vr_t base;
+        if (base_node && (base_node->kind == HD_AST_INDEX || base_node->kind == HD_AST_DEREF)) {
+            /* Walk to the ultimate base IDENT */
+            HDASTNode *ultimate = base_node;
+            while (ultimate && ultimate->kind == HD_AST_INDEX) ultimate = ultimate->left;
+            if (ultimate && ultimate->kind == HD_AST_DEREF) ultimate = ultimate->child;
+            int use_value = 0;
+            if (ultimate && ultimate->kind == HD_AST_IDENT) {
+                for (int vi = 0; vi < g->n_vars; vi++) {
+                    if (strcmp(g->vars[vi].name, ultimate->ident) == 0 && g->vars[vi].type) {
+                        HDType *t = g->vars[vi].type;
+                        /* Pointer-to-pointer: inner INDEX yields a value */
+                        if (t->kind == HD_TYPE_PTR && t->base && t->base->kind == HD_TYPE_PTR) {
+                            use_value = 1;
+                        }
+                        /* Pointer-to-array: inner INDEX yields an address (sub-array decays) */
+                        /* DEREF of pointer: yields a value */
+                        if (base_node->kind == HD_AST_DEREF && t->kind == HD_TYPE_PTR) {
+                            use_value = 1;
+                        }
+                        break;
+                    }
+                }
+            }
+            if (use_value) {
+                base = mir_gen_expr(g, base_node);
+            } else {
+                base = mir_address_of(g, base_node);
+            }
+        } else {
+            base = mir_address_of(g, base_node);
+        }
         wubu_vr_t idx = mir_gen_expr(g, idx_node);
         int stride = mir_index_stride(g, n);
         if (stride > 1) {
