@@ -22,6 +22,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
+#include <sys/select.h>
 #include <unistd.h>
 #include <signal.h>
 #include <errno.h>
@@ -233,10 +234,34 @@ static int run_isolated(const Probe *probe)
         close(pipefd[1]);
         _exit(0);
     }
-    /* parent: read result + wait */
+    /* parent: read result + wait.
+     * A child that spins forever inside hd_eval (e.g. a mis-generated loop)
+     * must not stall the whole battery -- and `make test` with it. Poll with a
+     * deadline, then kill the child and report it as a CRASH. */
     close(pipefd[1]);
     long long result = 0;
-    int got = (int)read(pipefd[0], &result, sizeof(result));
+    int got = 0;
+    {
+        const int kTimeoutMs = 5000;
+        int waited = 0;
+        fd_set rfds;
+        while (waited < kTimeoutMs) {
+            FD_ZERO(&rfds);
+            FD_SET(pipefd[0], &rfds);
+            struct timeval tv = {0, 20000}; /* 20ms */
+            int n = select(pipefd[0] + 1, &rfds, NULL, NULL, &tv);
+            if (n > 0) {
+                got = (int)read(pipefd[0], &result, sizeof(result));
+                break;
+            }
+            if (n < 0 && errno != EINTR) break;
+            waited += 20;
+        }
+        if (got == 0) {
+            /* timed out: kill the spinning child */
+            kill(pid, SIGKILL);
+        }
+    }
     close(pipefd[0]);
     int status = 0;
     waitpid(pid, &status, 0);
