@@ -577,15 +577,33 @@ op_call:
 op_t_gemm:
     {
         int M = (int)(in->imm >> 22);
-        int N = (int)((in->imm >> 11) & 0x7FFF);
+        /* N occupies bits 11..21 (11 bits, up to 0x7FF) because M starts at
+         * bit 22. Masking with 0x7FFF over-reads into M, so N=2 decoded as
+         * 4098 and every store landed out of range. wubu_isa_x86_64.c:1301
+         * already used 0x7FF -- this now matches the native backend. */
+        int N = (int)((in->imm >> 11) & 0x7FF);
         int K = (int)(in->imm & 0x7FF);
         int64_t a = vr[in->a], b = vr[in->b], c = vr[in->dst];
+        /* Addresses are BYTE offsets, exactly as STORE/LOAD use them
+         * (mem_store64(mem, addr, v)). Indexing the uint8_t *mem as
+         * int64_t* directly read 8x past every address and walked off the
+         * heap. The i*N+j / i*K+k / k*N+j strides count ELEMENTS, so scale
+         * them by the cell width. */
+        int64_t *cmem = (int64_t *)mem;
+        const int64_t cells = mem_size;
         for (int i = 0; i < M; i++)
             for (int j = 0; j < N; j++) {
-                int64_t acc = mem[c + (int64_t)i * N + j];
-                for (int k = 0; k < K; k++)
-                    acc += mem[a + (int64_t)i * K + k] * mem[b + (int64_t)k * N + j];
-                mem[c + (int64_t)i * N + j] = acc;
+                int64_t ci = (c >> 3) + (int64_t)i * N + j;
+                int64_t acc = (ci >= 0 && ci < cells) ? cmem[ci] : 0;
+                for (int k = 0; k < K; k++) {
+                    int64_t ai = (a >> 3) + (int64_t)i * K + k;
+                    int64_t bi = (b >> 3) + (int64_t)k * N + j;
+                    if (ai < 0 || ai >= cells || bi < 0 || bi >= cells)
+                        continue;
+                    acc += cmem[ai] * cmem[bi];
+                }
+                if (ci >= 0 && ci < cells)
+                    cmem[ci] = acc;
             }
     }
     DISPATCH();

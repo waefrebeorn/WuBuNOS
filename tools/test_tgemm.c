@@ -52,7 +52,13 @@ int main(int argc, char **argv){
     int total = 1 + M*K + K*N + M*N;
     wubu_mir_prog_t p; wubu_mir_init(&p);
     wubu_vr_t base = wubu_mir_alloc(&p, total);
-    int offA = 1, offB = offA + M*K, offC = offB + K*N;
+    const int CB = (int)sizeof(int64_t); /* cell width in bytes */
+    int offA = CB, offB = offA + M*K*CB, offC = offB + K*N*CB;
+    /* MIR memory addresses are BYTE offsets (STORE/LOAD go through
+     * mem_store64(mem, addr, v)), so every cell base must be a multiple of 8.
+     * These offsets used to advance by 1, which wrote misaligned int64s and
+     * made every T_GEMM read back 0. total_mem is still a CELL count. */
+    if (total > p.total_mem) p.total_mem = total;
     wubu_vr_t vA = wubu_mir_const(&p, offA);
     wubu_vr_t vB = wubu_mir_const(&p, offB);
     wubu_vr_t vC = wubu_mir_const(&p, offC);
@@ -60,12 +66,12 @@ int main(int argc, char **argv){
     /* store A and B */
     for (int i=0;i<M*K;i++){
         wubu_vr_t c = wubu_mir_const(&p, A[i]);
-        wubu_vr_t addr = wubu_mir_const(&p, offA + i);
+        wubu_vr_t addr = wubu_mir_const(&p, offA + i*CB);
         wubu_mir_store(&p, addr, c);
     }
     for (int i=0;i<K*N;i++){
         wubu_vr_t c = wubu_mir_const(&p, B[i]);
-        wubu_vr_t addr = wubu_mir_const(&p, offB + i);
+        wubu_vr_t addr = wubu_mir_const(&p, offB + i*CB);
         wubu_mir_store(&p, addr, c);
     }
     /* zero C (mem starts as calloc'd in interp, so skip) */
@@ -96,11 +102,18 @@ int main(int argc, char **argv){
         uint8_t *code = NULL; size_t sz = 0;
         if (drv->compile(&p, &code, &sz) == 0) {
             t0 = nowsec();
-            /* Guard: only call run if exec pages are actually mapped.
-             * jit_stub.c (measurement-only) returns plain malloc which is
-             * NOT executable → would SIGSEGV. The real jit.c (OS repo) uses
-             * mmap PROT_EXEC and works. We probe with a tiny guard. */
-            r_jit = drv->run(code, sz, 0);
+            /* run(code, size, mem) -- the third argument is the MEMORY POINTER,
+             * not a flags word. x86_run() does
+             *     wubu_jit_mem_ptr = (int64_t *)arg;
+             * so passing 0 made every generated store/load write through NULL
+             * and the JIT segfaulted on the first memory reference. Hand it a
+             * real cell array, sized from the same total_mem the interpreter
+             * uses. */
+            size_t cells = (size_t)(p.total_mem > 0 ? p.total_mem : total) + 16;
+            int64_t *jmem = (int64_t *)calloc(cells, sizeof(int64_t));
+            if (!jmem) { free(code); return 1; }
+            r_jit = drv->run(code, sz, (int64_t)(intptr_t)jmem);
+            free(jmem);
             t_jit = nowsec() - t0;
             jit_ok = 1;
             /* JIT mem lives inside the compiled frame; cannot read directly.
@@ -129,21 +142,25 @@ int main(int argc, char **argv){
     for (int idx = 0; idx < M*N; idx++){
         wubu_mir_prog_t rp; wubu_mir_init(&rp);
         wubu_vr_t rb = wubu_mir_alloc(&rp, total);
+        /* Same as the first program: size the interpreter's cell array for
+         * the offC+idx reads below. Without this mem_size is register-count
+         * sized and every T_GEMM store is out of range, so C reads back 0. */
+        if (total > rp.total_mem) rp.total_mem = total;
         wubu_vr_t ra = wubu_mir_const(&rp, offA);
         wubu_vr_t rbb = wubu_mir_const(&rp, offB);
         wubu_vr_t rc = wubu_mir_const(&rp, offC);
         for (int i=0;i<M*K;i++){
             wubu_vr_t c = wubu_mir_const(&rp, A[i]);
-            wubu_vr_t addr = wubu_mir_const(&rp, offA+i);
+            wubu_vr_t addr = wubu_mir_const(&rp, offA+i*CB);
             wubu_mir_store(&rp, addr, c);
         }
         for (int i=0;i<K*N;i++){
             wubu_vr_t c = wubu_mir_const(&rp, B[i]);
-            wubu_vr_t addr = wubu_mir_const(&rp, offB+i);
+            wubu_vr_t addr = wubu_mir_const(&rp, offB+i*CB);
             wubu_mir_store(&rp, addr, c);
         }
         wubu_mir_tgemm(&rp, ra, rbb, rc, M, N, K);
-        wubu_vr_t addr = wubu_mir_const(&rp, offC + idx);
+        wubu_vr_t addr = wubu_mir_const(&rp, offC + idx*CB);
         wubu_vr_t val = wubu_mir_load(&rp, addr);
         wubu_mir_ret(&rp, val);
         int64_t got = wubu_mir_interp(&rp);
