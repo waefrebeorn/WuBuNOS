@@ -110,107 +110,123 @@ int64_t wubu_mir_interp(const wubu_mir_prog_t *p)
      * DISPATCH() which increments pc and jumps to the next label — no loop
      * condition check, no switch indirection per iteration.
      */
-    static void *labels[] =
-        { &&op_default,                    /* 0  (MIR_NONE) */
-          &&op_const,                      /* 1  MIR_CONST  */
-          &&op_add,                        /* 2  MIR_ADD    */
-          &&op_sub,                        /* 3  MIR_SUB    */
-          &&op_mul,                        /* 4  MIR_MUL    */
-          &&op_div,                        /* 5  MIR_DIV    */
-          &&op_mod,                        /* 6  MIR_MOD    */
-          &&op_udiv,                       /* 7  MIR_UDIV   */
-          &&op_umod,                       /* 8  MIR_UMOD   */
-          &&op_and,                        /* 7  MIR_AND    */
-          &&op_or,                         /* 8  MIR_OR     */
-          &&op_xor,                        /* 9  MIR_XOR    */
-          &&op_shl,                        /* 10 MIR_SHL    */
-          &&op_shr,                        /* 11 MIR_SHR    */
-          &&op_neg,                        /* 12 MIR_NEG    */
-          &&op_not,                        /* 13 MIR_NOT    */
-          &&op_eq,                         /* 14 MIR_EQ     */
-          &&op_ne,                         /* 15 MIR_NE     */
-          &&op_lt,                         /* 16 MIR_LT     */
-          &&op_le,                         /* 17 MIR_LE     */
-          &&op_gt,                         /* 18 MIR_GT     */
-          &&op_ge,                         /* 19 MIR_GE     */
-          &&op_ult,                        /* 20 MIR_ULT    */
-          &&op_ule,                        /* 21 MIR_ULE    */
-          &&op_ugt,                        /* 22 MIR_UGT    */
-          &&op_uge,                        /* 23 MIR_UGE    */
-          &&op_mov,                        /* 24 MIR_MOV    */
-          &&op_jmp,                        /* 25 MIR_JMP    */
-          &&op_jz,                         /* 26 MIR_JZ     */
-          &&op_jnz,                        /* 27 MIR_JNZ    */
-          &&op_label,                      /* 28 MIR_LABEL  */
-          &&op_break,                      /* 29 MIR_BREAK  */
-          &&op_continue,                   /* 30 MIR_CONTINUE */
-          &&op_ret,                        /* 31 MIR_RET    */
-          &&op_fret,                       /* 32 MIR_FRET   */
-          &&op_alloc,                      /* 33 MIR_ALLOC  */
-          &&op_load,                       /* 34 MIR_LOAD   */
-          &&op_store,                      /* 35 MIR_STORE  */
-          &&op_call,                       /* 36 MIR_CALL   */
-          &&op_fadd,                       /* 37 MIR_FADD   */
-          &&op_fsub,                       /* 38 MIR_FSUB   */
-          &&op_fmul,                       /* 39 MIR_FMUL   */
-          &&op_fdiv,                       /* 40 MIR_FDIV   */
-          &&op_fneg,                       /* 41 MIR_FNEG   */
-          &&op_itof,                       /* 42 MIR_ITOF   */
-          &&op_ftoi,                       /* 43 MIR_FTOI   */
-          &&op_feq,                        /* 44 MIR_FEQ    */
-          &&op_fne,                        /* 45 MIR_FNE    */
-          &&op_flt,                        /* 46 MIR_FLT    */
-          &&op_fle,                        /* 47 MIR_FLE    */
-          &&op_dadd,                       /* 48 MIR_DADD   */
-          &&op_dsub,                       /* 49 MIR_DSUB   */
-          &&op_dmul,                       /* 50 MIR_DMUL   */
-          &&op_ddiv,                       /* 51 MIR_DDIV   */
-          &&op_dgt,                        /* 52 MIR_DGT    */
-          &&op_dlt,                        /* 53 MIR_DLT    */
-          &&op_dge,                        /* 54 MIR_DGE    */
-          &&op_dle,                        /* 55 MIR_DLE    */
-          &&op_deq,                        /* 56 MIR_DEQ    */
-          &&op_dne,                        /* 57 MIR_DNE    */
-          &&op_dneg,                       /* 58 MIR_DNEG   */
-          &&op_ditof,                      /* 59 MIR_DITOF  */
-          &&op_dtoi,                       /* 60 MIR_DTOI   */
-          &&op_dtoi_u,                     /* 61 MIR_DTOI_U */
-          &&op_f32_to_f64,                 /* 61 MIR_F32_TO_F64 */
-          &&op_f64_to_f32,                 /* 62 MIR_F64_TO_F32 */
-          &&op_bf16_to_f32,                /* 63 MIR_BF16_TO_F32 */
-          &&op_f32_to_bf16,                /* 64 MIR_F32_TO_BF16 */
-          &&op_f16_to_f32,                 /* 65 MIR_F16_TO_F32 */
-          &&op_f32_to_f16,                 /* 66 MIR_F32_TO_F16 */
-          &&op_f16_add,                    /* 67 MIR_F16_ADD */
-          &&op_f16_mul,                    /* 68 MIR_F16_MUL */
-          &&op_f16_div,                    /* 69 MIR_F16_DIV */
-          &&op_default,                    /* 70 MIR_QUANTIZE_I8 */
-          &&op_default,                    /* 71 MIR_DEQUANTIZE_I8 */
-          &&op_default,                    /* 72 MIR_T_GEMM_I8 */
-          &&op_t_gemm,                     /* 73 MIR_T_GEMM  */
-          &&op_t_softmax,                  /* 74 MIR_T_SOFTMAX */
-          &&op_t_layernorm,                /* 75 MIR_T_LAYERNORM */
-          &&op_t_attention,                /* 76 MIR_T_ATTENTION */
-          &&op_t_embedding,                /* 77 MIR_T_EMBEDDING */
-          &&op_t_swiglu,                   /* 78 MIR_T_SWIGLU */
-          &&op_t_rms_norm,                 /* 79 MIR_T_RMS_NORM */
-          &&op_t_rope,                     /* 80 MIR_T_ROPE */
-          &&op_t_conv2d,                   /* 81 MIR_T_CONV2D */
-          &&op_t_dropout,                  /* 82 MIR_T_DROPOUT */
-          &&op_t_argmax,                   /* 83 MIR_T_ARGMAX */
-          &&op_t_sum,                      /* 84 MIR_T_SUM */
-          &&op_t_exp,                      /* 85 MIR_T_EXP */
-          &&op_t_sqrt,                     /* 86 MIR_T_SQRT */
-          &&op_t_tanh,                     /* 87 MIR_T_TANH */
-          &&op_t_sigmoid,                  /* 88 MIR_T_SIGMOID */
-          &&op_t_gelu,                     /* 89 MIR_T_GELU */
-          &&op_t_relu,                     /* 90 MIR_T_RELU */
-          &&op_t_clamp,                    /* 91 MIR_T_CLAMP */
-          &&op_default,                    /* 92 MIR_T_GEMM_BIAS */
-          &&op_default,                    /* 93 MIR_FUSED_AFFINE */
-          &&op_default,                    /* 94 MIR_T_LAYERNORM_APPLY */
-          &&op_t_gemm_f32,                /* 95 MIR_T_GEMM_F32 */
-          &&op_ditof_u };                  /* 96 MIR_DITOF_U */
+    /* Opcode -> handler, designated by ENUM NAME rather than by position.
+     *
+     * The old table was positional and had silently fallen 5 entries behind
+     * the enum: it omitted MIR_TO_PTR and the four integer-extend ops, so
+     * every opcode from 39 upward dispatched to the WRONG handler. The
+     * visible symptom was that MIR_SEXT32 (47) ran op_fne, so `127 + 1`
+     * evaluated 128 != 128 == 1 on every interpreted target -- 13 of the 14
+     * gauntlet targets scored an identical 79/247 because they all call
+     * wubu_mir_interp. Naming the enum constant turns a dropped or
+     * reordered opcode into a compile error instead of a silent miscompile. */
+    enum { MIR_LABEL_SLOTS = 105 };
+    static void *labels[MIR_LABEL_SLOTS] = {
+        [MIR_CONST           ] = &&op_const, /* 1 */
+        [MIR_ADD             ] = &&op_add, /* 2 */
+        [MIR_SUB             ] = &&op_sub, /* 3 */
+        [MIR_MUL             ] = &&op_mul, /* 4 */
+        [MIR_DIV             ] = &&op_div, /* 5 */
+        [MIR_MOD             ] = &&op_mod, /* 6 */
+        [MIR_UDIV            ] = &&op_udiv, /* 7 */
+        [MIR_UMOD            ] = &&op_umod, /* 8 */
+        [MIR_AND             ] = &&op_and, /* 9 */
+        [MIR_OR              ] = &&op_or, /* 10 */
+        [MIR_XOR             ] = &&op_xor, /* 11 */
+        [MIR_SHL             ] = &&op_shl, /* 12 */
+        [MIR_SHR             ] = &&op_shr, /* 13 */
+        [MIR_NEG             ] = &&op_neg, /* 14 */
+        [MIR_NOT             ] = &&op_not, /* 15 */
+        [MIR_EQ              ] = &&op_eq, /* 16 */
+        [MIR_NE              ] = &&op_ne, /* 17 */
+        [MIR_LT              ] = &&op_lt, /* 18 */
+        [MIR_LE              ] = &&op_le, /* 19 */
+        [MIR_GT              ] = &&op_gt, /* 20 */
+        [MIR_GE              ] = &&op_ge, /* 21 */
+        [MIR_ULT             ] = &&op_ult, /* 22 */
+        [MIR_ULE             ] = &&op_ule, /* 23 */
+        [MIR_UGT             ] = &&op_ugt, /* 24 */
+        [MIR_UGE             ] = &&op_uge, /* 25 */
+        [MIR_MOV             ] = &&op_mov, /* 26 */
+        [MIR_JMP             ] = &&op_jmp, /* 27 */
+        [MIR_JZ              ] = &&op_jz, /* 28 */
+        [MIR_JNZ             ] = &&op_jnz, /* 29 */
+        [MIR_LABEL           ] = &&op_label, /* 30 */
+        [MIR_BREAK           ] = &&op_break, /* 31 */
+        [MIR_CONTINUE        ] = &&op_continue, /* 32 */
+        [MIR_RET             ] = &&op_ret, /* 33 */
+        [MIR_FRET            ] = &&op_fret, /* 34 */
+        [MIR_ALLOC           ] = &&op_alloc, /* 35 */
+        [MIR_LOAD            ] = &&op_load, /* 36 */
+        [MIR_STORE           ] = &&op_store, /* 37 */
+        [MIR_CALL            ] = &&op_call, /* 38 */
+        [MIR_TO_PTR          ] = &&op_default, /* 39 */
+        [MIR_FADD            ] = &&op_fadd, /* 40 */
+        [MIR_FSUB            ] = &&op_fsub, /* 41 */
+        [MIR_FMUL            ] = &&op_fmul, /* 42 */
+        [MIR_FDIV            ] = &&op_fdiv, /* 43 */
+        [MIR_FNEG            ] = &&op_fneg, /* 44 */
+        [MIR_ITOF            ] = &&op_itof, /* 45 */
+        [MIR_FTOI            ] = &&op_ftoi, /* 46 */
+        [MIR_SEXT32          ] = &&op_sext32, /* 47 */
+        [MIR_SEXT16          ] = &&op_sext16, /* 48 */
+        [MIR_SEXT8           ] = &&op_sext8, /* 49 */
+        [MIR_ZEXT32          ] = &&op_zext32, /* 50 */
+        [MIR_FEQ             ] = &&op_feq, /* 51 */
+        [MIR_FNE             ] = &&op_fne, /* 52 */
+        [MIR_FLT             ] = &&op_flt, /* 53 */
+        [MIR_FLE             ] = &&op_fle, /* 54 */
+        [MIR_DADD            ] = &&op_dadd, /* 55 */
+        [MIR_DSUB            ] = &&op_dsub, /* 56 */
+        [MIR_DMUL            ] = &&op_dmul, /* 57 */
+        [MIR_DDIV            ] = &&op_ddiv, /* 58 */
+        [MIR_DGT             ] = &&op_dgt, /* 59 */
+        [MIR_DLT             ] = &&op_dlt, /* 60 */
+        [MIR_DGE             ] = &&op_dge, /* 61 */
+        [MIR_DLE             ] = &&op_dle, /* 62 */
+        [MIR_DEQ             ] = &&op_deq, /* 63 */
+        [MIR_DNE             ] = &&op_dne, /* 64 */
+        [MIR_DNEG            ] = &&op_dneg, /* 65 */
+        [MIR_DITOF           ] = &&op_ditof, /* 66 */
+        [MIR_DTOI            ] = &&op_dtoi, /* 67 */
+        [MIR_DTOI_U          ] = &&op_dtoi_u, /* 68 */
+        [MIR_F32_TO_F64      ] = &&op_f32_to_f64, /* 69 */
+        [MIR_F64_TO_F32      ] = &&op_f64_to_f32, /* 70 */
+        [MIR_BF16_TO_F32     ] = &&op_bf16_to_f32, /* 71 */
+        [MIR_F32_TO_BF16     ] = &&op_f32_to_bf16, /* 72 */
+        [MIR_F16_TO_F32      ] = &&op_f16_to_f32, /* 73 */
+        [MIR_F32_TO_F16      ] = &&op_f32_to_f16, /* 74 */
+        [MIR_F16_ADD         ] = &&op_f16_add, /* 75 */
+        [MIR_F16_MUL         ] = &&op_f16_mul, /* 76 */
+        [MIR_F16_DIV         ] = &&op_f16_div, /* 77 */
+        [MIR_QUANTIZE_I8     ] = &&op_default, /* 78 */
+        [MIR_DEQUANTIZE_I8   ] = &&op_default, /* 79 */
+        [MIR_T_GEMM_I8       ] = &&op_default, /* 80 */
+        [MIR_T_GEMM          ] = &&op_t_gemm, /* 81 */
+        [MIR_T_SOFTMAX       ] = &&op_t_softmax, /* 82 */
+        [MIR_T_LAYERNORM     ] = &&op_t_layernorm, /* 83 */
+        [MIR_T_ATTENTION     ] = &&op_t_attention, /* 84 */
+        [MIR_T_EMBEDDING     ] = &&op_t_embedding, /* 85 */
+        [MIR_T_SWIGLU        ] = &&op_t_swiglu, /* 86 */
+        [MIR_T_RMS_NORM      ] = &&op_t_rms_norm, /* 87 */
+        [MIR_T_ROPE          ] = &&op_t_rope, /* 88 */
+        [MIR_T_CONV2D        ] = &&op_t_conv2d, /* 89 */
+        [MIR_T_DROPOUT       ] = &&op_t_dropout, /* 90 */
+        [MIR_T_ARGMAX        ] = &&op_t_argmax, /* 91 */
+        [MIR_T_SUM           ] = &&op_t_sum, /* 92 */
+        [MIR_T_EXP           ] = &&op_t_exp, /* 93 */
+        [MIR_T_SQRT          ] = &&op_t_sqrt, /* 94 */
+        [MIR_T_TANH          ] = &&op_t_tanh, /* 95 */
+        [MIR_T_SIGMOID       ] = &&op_t_sigmoid, /* 96 */
+        [MIR_T_GELU          ] = &&op_t_gelu, /* 97 */
+        [MIR_T_RELU          ] = &&op_t_relu, /* 98 */
+        [MIR_T_CLAMP         ] = &&op_t_clamp, /* 99 */
+        [MIR_T_GEMM_BIAS     ] = &&op_default, /* 100 */
+        [MIR_FUSED_AFFINE    ] = &&op_default, /* 101 */
+        [MIR_T_LAYERNORM_APPLY] = &&op_default, /* 102 */
+        [MIR_T_GEMM_F32      ] = &&op_t_gemm_f32, /* 103 */
+        [MIR_DITOF_U         ] = &&op_ditof_u, /* 104 */
+    };
 
 #define DISPATCH() do { \
         pc++; \
