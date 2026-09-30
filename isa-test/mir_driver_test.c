@@ -31,6 +31,34 @@ static int failures = 0;
 static int total = 0;
 static int driver_count = 0;
 
+/* Build MIR for an expression and hand it to `d` for compilation only.
+ * Same front end as run_one; no execution, so it works on hosts without a
+ * GPU. Returns 1 on success. */
+static int compile_one(const wubu_isa_driver_t *d, const char *expr)
+{
+    HDLexer lex;
+    hd_lex_init(&lex, expr);
+    if (lex.has_error) return 0;
+    HDParser parse;
+    hd_parse_init(&parse, &lex);
+    HDASTNode *ast = hd_parse_expr(&parse);
+    if (!ast || parse.has_error) return 0;
+
+    wubu_mir_prog_t prog;
+    wubu_mir_init(&prog);
+    wubu_vr_t result = wubu_mir_lower_expr(&prog, ast);
+    wubu_mir_ret(&prog, result);
+
+    uint8_t *code = NULL;
+    size_t csize = 0;
+    int rc = d->compile(&prog, &code, &csize);
+    int ok = (rc == 0 && code != NULL && csize > 0);
+    if (code) free(code);
+    wubu_mir_free(&prog);
+    hd_ast_free(ast);
+    return ok;
+}
+
 static int run_one(const char *expr, int64_t expected)
 {
     total++;
@@ -115,6 +143,35 @@ int main(int argc, char **argv)
 
     if (argc == 3) {
         return run_one(argv[1], strtoll(argv[2], NULL, 10)) ? 1 : 0;
+    }
+
+    /* GPU backends: COMPILE ONLY. The six backends above are also executed,
+     * but ptx/vulkan need a GPU and a device-capable host, so a codegen
+     * regression in them would otherwise reach nobody. Compiling here still
+     * catches an emitter that stops producing a module, and it needs no
+     * hardware. */
+    {
+        const char *gpu[] = { "ptx", "vulkan" };
+        printf("\n=== GPU backends: compile-only smoke ===\n");
+        for (int g = 0; g < 2; g++) {
+            const wubu_isa_driver_t *d = wubu_isa_find(gpu[g]);
+            if (!d) { printf("  %-7s (not built)\n", gpu[g]); continue; }
+            int nok = 0, nbad = 0;
+            static const char *smoke[] = {
+                "127+1", "100-250", "100/7", "100%7", "(-100)%7", "-5+10",
+                "7*6", "(1<<4)|3", "1+2*3", "~0", "3>2", "1.5+2.5",
+            };
+            for (size_t k = 0; k < sizeof(smoke)/sizeof(smoke[0]); k++) {
+                if (compile_one(d, smoke[k])) nok++; else nbad++;
+            }
+            if (nbad == 0)
+                printf("  %-7s OK  (%zu/%zu compiled)\n", gpu[g], nok, nok + nbad);
+            else {
+                printf("  %-7s ** FAIL ** (%zu/%zu compiled)\n",
+                       gpu[g], nok, nok + nbad);
+                failures += nbad;
+            }
+        }
     }
 
     struct { const char *e; int64_t v; } B[] = {
