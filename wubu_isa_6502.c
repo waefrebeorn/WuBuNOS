@@ -276,6 +276,12 @@ static int cpu6502_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_
             emit_adc(&e, zp_slot(in->a), zp_slot(in->b), zp_slot(in->dst));
             break;
 
+        case MIR_SUB:
+            /* emit_sbc has always been here but was never wired up, so every
+             * subtraction compiled to nothing and the 6502 returned 0. */
+            emit_sbc(&e, zp_slot(in->a), zp_slot(in->b), zp_slot(in->dst));
+            break;
+
         case MIR_FADD:
         case MIR_FSUB:
         case MIR_FMUL:
