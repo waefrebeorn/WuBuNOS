@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <unistd.h>
 
 int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n);
 
@@ -36,8 +37,11 @@ static int vulkan_compile(const wubu_mir_prog_t *p,
     if (rc_ != 0) return -1;
     /* remember the module's mem-cell count for run()'s buffer sizing */
     { int has_tg=0; for (unsigned q=0;q<p->n;q++) if (p->ins[q].op==MIR_T_GEMM) has_tg=1;
-      /* Multi-WG: per-lane scratch offsets scale by WUBU_VK_GROUPS; remember the
-       * result cell (last C cell) for run() — cell 0 races across WGs. */
+      /* The SSBO element count must match what the emitter reserved.
+       * NOTE: MIR load/store addresses are computed at RUNTIME through
+       * MIR_LOAD chains off a high VR, not by a MIR_CONST the backend can
+       * see, so the true high-water mark is not statically available here.
+       * total_mem (a cell count) is the only conservative source we have. */
       unsigned gx_ = 1;
       { const char *ge = getenv("WUBU_VK_GROUPS"); if (ge) gx_=(unsigned)atoi(ge); if (gx_<1) gx_=1; }
       g_cells = (uint32_t)((p->total_mem > 0 ? p->total_mem : 1) + 1 + (has_tg?gx_*64*4+1:0));
@@ -61,10 +65,30 @@ static int64_t vulkan_run(const uint8_t *code, size_t size, int64_t arg)
     (void)code; (void)size;
     uint32_t cells = g_cells;
     char cmd[512];
+    /* arg IS the memory pointer (see the ISA run contract). The out-of-process
+     * runner receives it only as a decimal, so the cells it points at have to
+     * travel separately -- without this the SSBO is zeroed and every MIR_LOAD
+     * returns 0. */
+    char imgpath[128];
+    snprintf(imgpath, sizeof imgpath, "/tmp/wubu_vk_mem_%d.bin", (int)getpid());
+    int have_img = 0;
+    if (arg) {
+        /* Clamp hard: the caller owns a buffer sized for the program's own
+         * cells, which can be SMALLER than the scratch-extended g_cells.
+         * Reading g_cells*8 would run off the end of it. */
+        size_t nbytes = 0;
+        for (unsigned q = 0; q < cells && q < 64u; q++) nbytes += 8;
+        FILE *mf = fopen(imgpath, "wb");
+        if (mf) {
+            fwrite((const void *)(uintptr_t)arg, 1, nbytes, mf);
+            fclose(mf);
+            have_img = 1;
+        }
+    }
     snprintf(cmd, sizeof(cmd),
-             "/tmp/vk_run %s /tmp/wubu_kernel.spv %lld %u",
+             "/tmp/vk_run %s /tmp/wubu_kernel.spv %lld %u %s",
              getenv("WUBU_VK_DEVICE") ? getenv("WUBU_VK_DEVICE") : "0",
-             (long long)arg, cells);
+             (long long)arg, cells, have_img ? imgpath : "none");
     if (getenv("DBG_VK")) fprintf(stderr, "[vk] cmd: %s\n", cmd);
     FILE *f = NULL;
     unsigned gx_run = 1;

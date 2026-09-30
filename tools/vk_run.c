@@ -33,7 +33,8 @@
 int main(int argc, char **argv)
 {
     if (argc < 5) {
-        fprintf(stderr, "usage: %s <dev_idx> <shader.spv> <arg> <mem_cells>\n",
+        fprintf(stderr, "usage: %s <dev_idx> <shader.spv> <arg> <mem_cells>"
+                        " [mem_image.bin]\n",
                 argv[0]);
         return 1;
     }
@@ -41,6 +42,11 @@ int main(int argc, char **argv)
     const char *spv_path = argv[2];
     int64_t arg = strtoll(argv[3], NULL, 10);
     uint32_t mem_cells = (uint32_t)atoi(argv[4]);
+    /* Optional 5th arg: raw little-endian image of the program's memory
+     * cells, uploaded verbatim into the SSBO before the dispatch. Without it
+     * the buffer stays zeroed, so every MIR_LOAD returns 0 and any program
+     * that dereferences memory silently miscomputes. "none" means no image. */
+    const char *mem_image = (argc > 5 && strcmp(argv[5], "none") != 0) ? argv[5] : NULL;
 
     /* read SPIR-V */
     FILE *f = fopen(spv_path, "rb");
@@ -160,6 +166,16 @@ int main(int argc, char **argv)
     int64_t *host;
     CHECK(vkMapMemory(dev, stage_mem, 0, bufsz, 0, (void **)&host));
     memset(host, 0, (size_t)bufsz);
+    if (mem_image) {
+        FILE *mf = fopen(mem_image, "rb");
+        if (!mf) { perror("mem_image"); return 1; }
+        /* Copy at most bufsz: the caller's image is sized for the program's
+         * own cells, which can be smaller than the scratch-extended SSBO. */
+        size_t got = fread(host, 1, (size_t)bufsz, mf);
+        fclose(mf);
+        if (getenv("WUBU_VK_DUMP"))
+            fprintf(stderr, "[vk_run] uploaded %zu bytes from %s\n", got, mem_image);
+    }
     host[0] = 0;
     host[1] = arg;
 
