@@ -108,7 +108,7 @@ typedef struct {
     uint32_t t_i32_in, t_gid_input;                    /* input v3i32 ptr */
     uint32_t t_pushblk, t_ptr_push;
     uint32_t t_fn_void, t_res_u64;
-    uint32_t t_v2i32, t_f32;
+    uint32_t t_v2i32, t_f32, t_f64;
     uint32_t c_zero32, len_mem_cells;
     uint32_t c_zero64, c_one64;
     uint32_t var_ssbo, var_push, var_gid;
@@ -337,6 +337,7 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
     s.t_u64       = nid(&s);
     s.t_v3i32     = nid(&s);
     s.t_f32       = nid(&s);
+    s.t_f64       = nid(&s);
     s.t_v2i32     = nid(&s);
     s.len_mem_cells = nid(&s);
     s.t_arr_mem   = nid(&s);
@@ -438,6 +439,19 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
     /* ---- capabilities / model / entry ---- */
     { uint32_t c[]={1}; spv_ins(&s.bin,OP_CAPABILITY,c,1);}        /* Shader */
     { uint32_t c[]={11}; spv_ins(&s.bin,OP_CAPABILITY,c,1);}        /* Int64 */
+    /* Float64 (10) is required by OpTypeFloat 64. Declaring it only when the
+     * program actually uses a double keeps f32-only modules byte-identical;
+     * without it spirv-val reports "Using a 64-bit floating point type
+     * requires the Float64 capability" even though dzn tolerates it. */
+    { int uses_f64_ = 0;
+      for (size_t q = 0; q < p->n; q++) {
+          uint16_t o_ = (uint16_t)p->ins[q].op;
+          if (o_==MIR_DADD||o_==MIR_DSUB||o_==MIR_DMUL||o_==MIR_DDIV||
+              o_==MIR_DNEG||o_==MIR_DLT ||o_==MIR_DLE ||o_==MIR_DGT ||
+              o_==MIR_DGE ||o_==MIR_DEQ||o_==MIR_DNE ||o_==MIR_DITOF||
+              o_==MIR_DTOI||o_==MIR_DTOI_U) { uses_f64_ = 1; break; }
+      }
+      if (uses_f64_) { uint32_t c[]={10}; spv_ins(&s.bin,OP_CAPABILITY,c,1); } }
     { uint32_t m[]={0,0}; spv_ins(&s.bin,OP_MEMORYMODEL,m,2);}     /* Simple,None */
 
     /* OpEntryPoint GLCompute %main "main" (no interface vars needed: SSBO) */
@@ -484,6 +498,7 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
     { uint32_t o[]={s.t_u64,64,0}; spv_ins(&s.bin,OP_TYPE_INT,o,3);}
     { uint32_t o[]={s.t_v3i32,s.t_i32,3}; spv_ins(&s.bin,OP_TYPE_VECTOR,o,3);}
     { uint32_t o[]={s.t_f32,32};    spv_ins(&s.bin,OP_TYPE_FLOAT,o,2);}
+    { uint32_t o[]={s.t_f64,64};    spv_ins(&s.bin,OP_TYPE_FLOAT,o,2);}
     { uint32_t o[]={s.t_v2i32,s.t_i32,2}; spv_ins(&s.bin,OP_TYPE_VECTOR,o,3);}
 
     /* OpConstant i32 N (mem cells incl. result slot) */
@@ -794,6 +809,80 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
             { uint32_t o[]={s.t_u64,d,VRMAP_GET(in->a)};
               spv_ins(&s.bin,200,o,3); }
             VRMAP_SET(in->dst, d);
+            break;
+        }
+        /* f64 arithmetic and conversions. MIR holds an f64 as its raw 64-bit
+         * pattern in a u64 VR, so unlike the f32 path there is no v2i32
+         * unpack/pack -- OpBitcast between ulong and double is all that is
+         * needed. These had NO case at all, so every double-precision program
+         * returned 0 on the GPU: 1.5 + 2.5 and 3.0 * 1.5 both gave 0 while
+         * x86-64 gave the correct 4.0 and 4.5.
+         *
+         * Opcodes verified by assembling a reference module with spirv-as and
+         * decoding the emitted words:
+         *   FAdd=129 FSub=131 FMul=133 FDiv=136 FNegate=127
+         *   FOrdEqual=180 FOrdNotEqual=182 FOrdLessThan=184
+         *   FOrdGreaterThan=186 FOrdLessThanEqual=188 FOrdGreaterThanEqual=190
+         * (the <= / >= forms are 188/190, NOT 185/187 -- verified by
+         *  assembling and decoding, since 185/187 do not exist)
+         *   ConvertUToF=112 ConvertFToS=109 ConvertFToU=110
+         *   Bitcast=124
+         * NOTE: SPIR-V's FOrd* comparisons return bool; the 1/0 the rest of
+         * this backend works in is produced by OpSelect, not by the compare. */
+        case MIR_DADD: case MIR_DSUB: case MIR_DMUL: case MIR_DDIV:
+        case MIR_DNEG: {
+            uint32_t fa = nid(&s);
+            { uint32_t o[]={s.t_f64, fa, VRMAP_GET(in->a)}; spv_ins(&s.bin,124,o,3); }
+            uint32_t dstf = nid(&s);
+            if (in->op == MIR_DNEG) {
+                { uint32_t o[]={s.t_f64,dstf,fa}; spv_ins(&s.bin,127,o,3); }
+            } else {
+                uint32_t fb = nid(&s);
+                { uint32_t o[]={s.t_f64, fb, VRMAP_GET(in->b)}; spv_ins(&s.bin,124,o,3); }
+                uint16_t opc = in->op==MIR_DADD ? 129 :
+                               in->op==MIR_DSUB ? 131 :
+                               in->op==MIR_DMUL ? 133 : 136;
+                { uint32_t o[]={s.t_f64,dstf,fa,fb}; spv_ins(&s.bin,opc,o,4); }
+            }
+            uint32_t pk = nid(&s);
+            { uint32_t o[]={s.t_u64, pk, dstf}; spv_ins(&s.bin,124,o,3); }
+            VRMAP_SET(in->dst, pk);
+            break;
+        }
+        case MIR_DLT: case MIR_DLE: case MIR_DGT: case MIR_DGE:
+        case MIR_DEQ: case MIR_DNE: {
+            uint32_t fa = nid(&s), fb = nid(&s);
+            { uint32_t o[]={s.t_f64, fa, VRMAP_GET(in->a)}; spv_ins(&s.bin,124,o,3); }
+            { uint32_t o[]={s.t_f64, fb, VRMAP_GET(in->b)}; spv_ins(&s.bin,124,o,3); }
+            uint16_t opc = in->op==MIR_DLT ? 184 : in->op==MIR_DLE ? 188 :
+                           in->op==MIR_DGT ? 186 : in->op==MIR_DGE ? 190 :
+                           in->op==MIR_DEQ ? 180 : 182;
+            uint32_t b = nid(&s);
+            { uint32_t o[]={s.t_bool, b, fa, fb}; spv_ins(&s.bin,opc,o,4); }
+            /* bool -> 1/0 u64 via OpSelect */
+            uint32_t sel = nid(&s);
+            { uint32_t o[]={s.t_u64, sel, b, s.c_one64, s.c_zero64};
+              spv_ins(&s.bin,169 /*OpSelect*/,o,5); }
+            VRMAP_SET(in->dst, sel);
+            break;
+        }
+        case MIR_DITOF: {   /* int -> double */
+            uint32_t f = nid(&s);
+            { uint32_t o[]={s.t_f64, f, VRMAP_GET(in->a)}; spv_ins(&s.bin,112 /*ConvertUToF*/,o,3); }
+            uint32_t pk = nid(&s);
+            { uint32_t o[]={s.t_u64, pk, f}; spv_ins(&s.bin,124,o,3); }
+            VRMAP_SET(in->dst, pk);
+            break;
+        }
+        case MIR_DTOI: case MIR_DTOI_U: {   /* double -> int */
+            uint32_t f = nid(&s);
+            { uint32_t o[]={s.t_f64, f, VRMAP_GET(in->a)}; spv_ins(&s.bin,124,o,3); }
+            uint32_t iv = nid(&s);
+            /* 110 ConvertFToU (unsigned), 109 ConvertFToS (signed) --
+             * verified by spirv-as round-trip, NOT 115/116 */
+            { uint32_t o[]={s.t_u64, iv, f};
+              spv_ins(&s.bin, in->op==MIR_DTOI_U ? 110 : 109, o, 3); }
+            VRMAP_SET(in->dst, iv);
             break;
         }
         case MIR_FADD: case MIR_FSUB: case MIR_FMUL: case MIR_FDIV:
