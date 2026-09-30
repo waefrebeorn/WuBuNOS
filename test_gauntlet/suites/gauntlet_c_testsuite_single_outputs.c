@@ -225,6 +225,6 @@ const gauntlet_c_testsuite_single_output_t gauntlet_c_testsuite_single_outputs[]
     {"ct_00218", ""},
     {"ct_00219", "20\n10\n20\n123\n2\n0\n5\n1\n2\n3\n4\nlong\n1\n3"},
     {"ct_00220", "0068 0065 006C 006C 006F 0024 0024 4F60 597D 00A2 00A2 4E16 754C 20AC 20AC 0077 006F 0072 006C 0064"}
-}};
+};
 
 const size_t gauntlet_c_testsuite_single_output_count = 220;

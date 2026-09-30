@@ -109,6 +109,6 @@ const gauntlet_fujitsu_proper_output_t gauntlet_fujitsu_proper_outputs[] = {
     {"fujitsu_0201_0049", "pass\nexit 0"},
     {"fujitsu_0201_0050", "pass\nexit 0"},
     {"fujitsu_0201_0051", "pass\nexit 0"}
-}};
+};
 
 const size_t gauntlet_fujitsu_proper_output_count = 104;

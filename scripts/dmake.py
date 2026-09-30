@@ -398,7 +398,10 @@ def write_gauntlet_file(name, tests, format_type):
                     f.write(",")
                 f.write("\n")
             
-            f.write("}};\n\n")
+            # One '{' was opened above, so close exactly one. Writing "}}"
+            # here emitted `}};`, which every generated *_outputs.c then
+            # failed to compile with "expected ',' or ';' before '}' token".
+            f.write("};\n\n")
             f.write(f"const size_t {name}_output_count = {len(tests)};\n")
 
 def status():

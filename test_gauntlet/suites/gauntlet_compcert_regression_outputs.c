@@ -75,6 +75,6 @@ const gauntlet_compcert_regression_output_t gauntlet_compcert_regression_outputs
     {"compcert_volatile2", "signed char 1: OK\nsigned char 2: OK\nunsigned char 1: OK\nunsigned char 2: OK\nsigned short 1: OK\nsigned short 2: OK\nunsigned short 1: OK\nunsigned short 2: OK\nint 1: OK\nint 2: OK\nfloat 1: OK\nfloat 2: OK\ndouble 1: OK\ndouble 2: OK\nlong long 1: OK\nlong long 2: OK\nglobal signed char 1: OK\nglobal signed char 2: OK\nglobal unsigned char 1: OK\nglobal unsigned char 2: OK\nglobal signed short 1: OK\nglobal signed short 2: OK\nglobal unsigned short 1: OK\nglobal unsigned short 2: OK\nglobal int 1: OK\nglobal int 2: OK\nglobal float 1: OK\nglobal float 2: OK\nglobal double 1: OK\nglobal double 2: OK\nglobal long long 1: OK\nglobal long long 2: OK"},
     {"compcert_volatile3", "x = 0\nx = 1\nx++ = 1\nx = 2\nx = 44\nx += 12 = 56\nx = 56\nx = 55\nx-- = 55\nx = 54\nx = 47\nx -= 3 = 44\nx = 44\nx = 45\n++x = 46\nx = 46\nx = 45\n--x = 44\nx = 44\nc = 0\nc = 1\nc++ = 1\nc = 2\nc = 252\nc += 42 = 38\nc = 38\nc = 37\nc-- = 37\nc = 36\nc = 29\nc -= 3 = 26\nc = 26\nc = 27\n++c = 28\nc = 28\nc = 27\n--c = 26\nc = 26"},
     {"compcert_volatile4", "l = 42\na[5] = 255\ng = 3\nb[2] = -1\nb[i] = -2\np[1] = 80\np[i] = 81"}
-}};
+};
 
 const size_t gauntlet_compcert_regression_output_count = 70;
