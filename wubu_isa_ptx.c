@@ -301,6 +301,48 @@ static void emit_kernel_body(ptx_emitter_t *e, const wubu_mir_prog_t *p)
             ptx_emit(e, "    mov.b64 %%r%d, %%r%d;\n", (int)rd, (int)ptx_vr(e, ins->a));
             break;
 
+        /* Integer width casts. These opcodes had NO handler at all and fell
+         * through to `default: break;`, emitting no instruction whatsoever.
+         * That silently corrupted every ptx result: `127 + 1` lowers to
+         * CONST/SEXT32/MOV/RET, so %r0 was never assigned and the GPU stub
+         * read back uninitialised device memory (0x0100000000000000).
+         *
+         * Same class of bug as the MIR interpreter's positional dispatch
+         * table: an opcode with no handler vanishes instead of failing
+         * loudly. If you add an opcode to wubu_mir_op_t, grep every backend
+         * for it. */
+        case MIR_SEXT32:
+            rd = ptx_vr(e, ins->dst);
+            ptx_emit(e, "    cvta.s32.s64 %%r%d, %%r%d;\n",
+                     (int)rd, (int)ptx_vr(e, ins->a));
+            break;
+        case MIR_SEXT16:
+            rd = ptx_vr(e, ins->dst);
+            ptx_emit(e, "    cvta.s16.s64 %%r%d, %%r%d;\n",
+                     (int)rd, (int)ptx_vr(e, ins->a));
+            break;
+        case MIR_SEXT8:
+            rd = ptx_vr(e, ins->dst);
+            ptx_emit(e, "    cvta.s8.s64 %%r%d, %%r%d;\n",
+                     (int)rd, (int)ptx_vr(e, ins->a));
+            break;
+        case MIR_ZEXT32:
+            rd = ptx_vr(e, ins->dst);
+            /* Zero-extend = truncate to 32 bits unsigned, then widen back. */
+            ptx_emit(e, "    cvta.u32.u64 %%r%d, %%r%d;\n",
+                     (int)rd, (int)ptx_vr(e, ins->a));
+            ptx_emit(e, "    cvta.u64.u32 %%r%d, %%r%d;\n",
+                     (int)rd, (int)rd);
+            break;
+        case MIR_TO_PTR:
+            /* Cell offset -> device pointer into mem[]; %ra0 is the base
+             * (emitted as cvta.global.u64 %ra0, mem before the body). */
+            rd = ptx_vr(e, ins->dst);
+            ptx_emit(e, "    cvta.global.u64 %%r%d, %%ra0;\n", (int)rd);
+            ptx_emit(e, "    add.s64 %%r%d, %%r%d, %%r%d;\n",
+                     (int)rd, (int)rd, (int)ptx_vr(e, ins->a));
+            break;
+
         case MIR_ADD:
             rd = ptx_vr(e, ins->dst);
             ptx_emit(e, "    add.s64 %%r%d, %%r%d, %%r%d;\n",
@@ -748,6 +790,48 @@ static void emit_kernel_body(ptx_emitter_t *e, const wubu_mir_prog_t *p)
         case MIR_MOV:
             rd = ptx_vr(e, ins->dst);
             ptx_emit(e, "    mov.b64 %%r%d, %%r%d;\n", (int)rd, (int)ptx_vr(e, ins->a));
+            break;
+
+        /* Integer width casts. These opcodes had NO handler at all and fell
+         * through to `default: break;`, emitting no instruction whatsoever.
+         * That silently corrupted every ptx result: `127 + 1` lowers to
+         * CONST/SEXT32/MOV/RET, so %r0 was never assigned and the GPU stub
+         * read back uninitialised device memory (0x0100000000000000).
+         *
+         * Same class of bug as the MIR interpreter's positional dispatch
+         * table: an opcode with no handler vanishes instead of failing
+         * loudly. If you add an opcode to wubu_mir_op_t, grep every backend
+         * for it. */
+        case MIR_SEXT32:
+            rd = ptx_vr(e, ins->dst);
+            ptx_emit(e, "    cvta.s32.s64 %%r%d, %%r%d;\n",
+                     (int)rd, (int)ptx_vr(e, ins->a));
+            break;
+        case MIR_SEXT16:
+            rd = ptx_vr(e, ins->dst);
+            ptx_emit(e, "    cvta.s16.s64 %%r%d, %%r%d;\n",
+                     (int)rd, (int)ptx_vr(e, ins->a));
+            break;
+        case MIR_SEXT8:
+            rd = ptx_vr(e, ins->dst);
+            ptx_emit(e, "    cvta.s8.s64 %%r%d, %%r%d;\n",
+                     (int)rd, (int)ptx_vr(e, ins->a));
+            break;
+        case MIR_ZEXT32:
+            rd = ptx_vr(e, ins->dst);
+            /* Zero-extend = truncate to 32 bits unsigned, then widen back. */
+            ptx_emit(e, "    cvta.u32.u64 %%r%d, %%r%d;\n",
+                     (int)rd, (int)ptx_vr(e, ins->a));
+            ptx_emit(e, "    cvta.u64.u32 %%r%d, %%r%d;\n",
+                     (int)rd, (int)rd);
+            break;
+        case MIR_TO_PTR:
+            /* Cell offset -> device pointer into mem[]; %ra0 is the base
+             * (emitted as cvta.global.u64 %ra0, mem before the body). */
+            rd = ptx_vr(e, ins->dst);
+            ptx_emit(e, "    cvta.global.u64 %%r%d, %%ra0;\n", (int)rd);
+            ptx_emit(e, "    add.s64 %%r%d, %%r%d, %%r%d;\n",
+                     (int)rd, (int)rd, (int)ptx_vr(e, ins->a));
             break;
 
         case MIR_ADD:
