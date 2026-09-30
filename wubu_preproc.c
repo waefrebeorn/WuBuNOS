@@ -248,7 +248,28 @@ static void strip_bitfields(char *line)
 {
     char *p = line;
     char *out = line;
+    /* A ':' is only a bit-field width when no conditional operator is in
+     * flight on this line. Without this, the ternary in `(0)?0:42` looked
+     * like a bit field (the char before ':' is the digit '0', which is
+     * alnum) and `:42` was deleted outright, so hd_eval saw "(0)?0;" and the
+     * else branch vanished -- every ternary returned the then value. */
+    int pending_cond = 0;
     while (*p) {
+        if (*p == '?') {
+            /* '?' in `a ? b : c`. A '?' or ':' inside a string/char literal or
+             * comment is handled by the lexer's own scan, not here; counting
+             * them is the conservative choice -- worst case we leave a
+             * bit-field width in place, which is harmless, whereas the
+             * previous behaviour silently deleted live code. */
+            pending_cond++;
+            *out++ = *p++;
+            continue;
+        }
+        if (*p == ':' && pending_cond > 0) {
+            pending_cond--;
+            *out++ = *p++;
+            continue;
+        }
         /* Look for ':' followed by a digit (bit field width) */
         if (*p == ':' && p[1] >= '0' && p[1] <= '9') {
             /* Check this is a bit field (preceded by an identifier) */

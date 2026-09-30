@@ -1066,6 +1066,8 @@ static HDASTNode *parse_ternary(HDParser *p) {
         advance(p);
         HDASTNode *n = hd_ast_new(HD_AST_TERNARY);
         n->cond = expr;
+        /* The middle operand is a full expression (comma operator allowed);
+         * the else operand is right-associative. */
         n->then_branch = parse_expr(p);
         expect(p, HD_TOK_COLON);
         n->else_branch = parse_ternary(p);
