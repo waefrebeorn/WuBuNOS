@@ -451,7 +451,14 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
         for(size_t i=0;i<ws;i++) sb_word(&s.bin,(uint32_t)tmp[i*4]|((uint32_t)tmp[i*4+1]<<8)|((uint32_t)tmp[i*4+2]<<16)|((uint32_t)tmp[i*4+3]<<24));
         sb_word(&s.bin, s.var_gid);   /* interface: GlobalInvocationId input */
     }
-    { uint32_t e[]={s.fn_main,17,64,1,1}; spv_ins(&s.bin,OP_EXEC_MODE,e,5);} /* LocalSize 64 */
+    /* LocalSize 1 for scalar programs, 64 when a MIR_T_GEMM needs the lanes
+     * for its cross-lane reduction. With 64 lanes a SCALAR program would run
+     * the whole body in every invocation and all 64 would store to mem cell 0,
+     * so the result would be whichever lane finished last. */
+    { int scalar_prog_ = 1;
+      for (size_t q = 0; q < p->n; q++) if (p->ins[q].op == MIR_T_GEMM) scalar_prog_ = 0;
+      { uint32_t e[]={s.fn_main,17,scalar_prog_?1:64,1,1};
+        spv_ins(&s.bin,OP_EXEC_MODE,e,5); } }
     { uint32_t e[]={1,450}; spv_ins(&s.bin,OP_SOURCE,e,2);}
 
     /* debug names help spirv-val diagnostics */
@@ -555,6 +562,7 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
     int just_terminator = 0;
     uint32_t cur_block = s.lbl_entry;
     uint32_t last_ret_src = s.c_zero64;
+
 
     /* Pre-assign SSA block ids to every MIR label so forward jumps can
      * reference blocks before they are emitted. */
@@ -734,6 +742,57 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
             uint32_t d = nid(&s);
             { uint32_t o[]={s.t_u64,d,VRMAP_GET(in->a),VRMAP_GET(in->b)};
               spv_ins(&s.bin,opc,o,4); }
+            VRMAP_SET(in->dst, d);
+            break;
+        }
+        /* Integer divide / remainder / shifts. These had no case, so every
+         * one silently evaluated to whatever the destination already held --
+         * the same "missing opcode = plausible wrong answer" failure as
+         * MIR_MOV and MIR_NEG. The gauntlet does not catch it because
+         * hd_run_prog silently falls back to wubu_mir_interp, and the Vulkan
+         * driver is not in the gauntlet target list at all.
+         *
+         * Opcode numbers are the SPIR-V core ones. Verified by assembling a
+         * reference module with spirv-as and decoding the emitted words,
+         * cross-checked against the ADD/SUB/MUL mapping just above
+         * (128 OpIAdd / 130 OpISub / 132 OpIMul):
+         *   134 OpUDiv  135 OpSDiv  137 OpUMod  139 OpSMod
+         *   195 OpShiftRightArithmetic  196 OpShiftLeftLogical  200 OpNot
+         *
+         * C's % is TRUNCATING (the remainder takes the sign of the dividend):
+         *   -100 % 7 == -2   because -100 / 7 == -14
+         * SPIR-V's OpSMod (139) is FLOOR-based and gives 5 instead, so it is
+         * the wrong instruction. OpSRem (138) truncates toward zero and
+         * matches C. Verified on both dzn and lavapipe: with 139 the backend
+         * returned 5 for `(-100) % 7` where x86-64 returns -2.
+         *
+         * Do not "fix" this to 139. Same trap as OpSDiv: SPIR-V's SDiv is
+         * truncating (matches C), but its SMod is not. */
+        case MIR_DIV: case MIR_UDIV: case MIR_MOD: case MIR_UMOD: {
+            uint32_t opc = (in->op==MIR_DIV)  ? 135 :   /* OpSDiv  - truncating */
+                           (in->op==MIR_UDIV) ? 134 :   /* OpUDiv  */
+                           (in->op==MIR_MOD)  ? 138 :   /* OpSRem  - truncating */
+                                            137;      /* OpUMod  */
+            uint32_t d = nid(&s);
+            { uint32_t o[]={s.t_u64,d,VRMAP_GET(in->a),VRMAP_GET(in->b)};
+              spv_ins(&s.bin,opc,o,4); }
+            VRMAP_SET(in->dst, d);
+            break;
+        }
+        case MIR_SHL: case MIR_SHR: {
+            uint32_t opc = (in->op==MIR_SHL) ? 196      /* OpShiftLeftLogical */
+                                           : 195;     /* OpShiftRightArithmetic */
+            uint32_t d = nid(&s);
+            { uint32_t o[]={s.t_u64,d,VRMAP_GET(in->a),VRMAP_GET(in->b)};
+              spv_ins(&s.bin,opc,o,4); }
+            VRMAP_SET(in->dst, d);
+            break;
+        }
+        case MIR_NOT: {
+            /* SPIR-V OpNot(200) is a unary bitwise complement. */
+            uint32_t d = nid(&s);
+            { uint32_t o[]={s.t_u64,d,VRMAP_GET(in->a)};
+              spv_ins(&s.bin,200,o,3); }
             VRMAP_SET(in->dst, d);
             break;
         }
