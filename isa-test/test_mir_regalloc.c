@@ -209,8 +209,20 @@ static int verify_no_conflicts(const wubu_mir_prog_t *p,
         }
         live.n = write;
 
-        /* Define: add the new vr (if any) to the live set */
-        if (has_dst) vrset_add(&live, in->dst);
+        /* Define: add the new vr (if any) to the live set.
+         *
+         * Only if it is read LATER. A value whose first_def == last_use is
+         * dead the moment it is produced, so adding it here would keep it
+         * live for the rest of the program: the kill above deliberately
+         * spares def_dst, so the def below re-added it and it never died.
+         * That produced a bogus conflict -- e.g. v4 (defined at ins3, never
+         * read) stayed live to ins5 and collided with v5, which the
+         * allocator had correctly given the same register.
+         * The real allocator assigns on live intervals, so matching that is
+         * what makes this oracle meaningful. */
+        if (has_dst && in->dst < n_vr &&
+            last_use[in->dst] > (int32_t)i)
+            vrset_add(&live, in->dst);
     }
 
     free(live.vrs);
