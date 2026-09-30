@@ -131,22 +131,25 @@ size_t hd_type_size(const HDType *t) {
         case HD_TYPE_PTR:  return 8;
         case HD_TYPE_ARRAY: return t->base ? hd_type_size(t->base) * (size_t)t->array_size : 0;
         case HD_TYPE_STRUCT: {
-            /* Compute actual packed byte size from member types.
-             * The parser stores t->size in cells (over-allocated), but
-             * the real byte size is the sum of member sizes.
-             * Alignment = max member alignment (simplified: use member's natural alignment). */
+            /* TRUE C byte size -- this is what `sizeof` must report, so
+             * `sizeof(struct S{int a;int b;})` == 8, not 16.
+             *
+             * Do NOT use t->size here: the parser advances t->size in CELLS
+             * (one cell per member) to match the member offsets codegen
+             * addresses as `offset * 8`. Allocation needs that inflated
+             * figure -- see hd_type_alloc_size() -- but sizeof needs the
+             * real C size. Mixing them up is what made
+             * `struct S s; s.b=20; int* p=&s.b; *p;` read garbage (allocated
+             * 8 bytes but addressed members[1] at byte 8).
+             */
             if (t->n_members > 0) {
-                int64_t total_bytes = 0;
-                int64_t max_align = 1;
+                int64_t total_bytes = 0, max_align = 1;
                 for (int i = 0; i < t->n_members; i++) {
                     size_t msz = hd_type_size(t->members[i].type);
                     total_bytes += (int64_t)msz;
-                    /* Member alignment = its natural size (1,2,4,8) */
-                    int64_t mem_align = (int64_t)msz;
-                    if (mem_align > max_align) max_align = mem_align;
+                    if ((int64_t)msz > max_align) max_align = (int64_t)msz;
                 }
-                /* Round up to struct alignment */
-                if (total_bytes % max_align != 0)
+                if (max_align > 0 && total_bytes % max_align != 0)
                     total_bytes += max_align - (total_bytes % max_align);
                 return (size_t)(total_bytes > 0 ? total_bytes : 8);
             }
@@ -154,4 +157,27 @@ size_t hd_type_size(const HDType *t) {
         }
         default: return 8;
     }
+}
+
+/* Bytes to RESERVE when storing a value of this type in the data section or
+ * on the stack.
+ *
+ * This differs from hd_type_size() for structs and unions on purpose. The
+ * parser lays a struct out in CELLS -- t->size grows by
+ * ceil(hd_type_size(member)/8) per member and members[].offset records that
+ * running cell count -- and codegen addresses a member as `offset * 8`. So a
+ * struct must be reserved at `t->size * 8` bytes even though its C size is
+ * smaller, or the last members land past the end and alias whatever was
+ * allocated next.
+ *
+ * hd_type_size() stays the true C size because `sizeof` must report that.
+ * Use this function for allocation/reservation, never for sizeof.
+ */
+size_t hd_type_alloc_size(const HDType *t) {
+    if (!t) return 8;
+    if ((t->kind == HD_TYPE_STRUCT || t->kind == HD_TYPE_UNION) &&
+        t->n_members > 0 && t->size > 0)
+        return (size_t)t->size * 8;
+    size_t sz = hd_type_size(t);
+    return sz > 0 ? sz : 8;
 }

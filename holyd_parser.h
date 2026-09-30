@@ -14,6 +14,8 @@ HDASTNode *hd_parse_stmt(HDParser *p);
 HDASTNode *hd_parse_decl(HDParser *p);
 HDASTNode *hd_parse_compilation_unit(HDParser *p);
 size_t hd_type_size(const HDType *t);
+/* Bytes to RESERVE for storage (cell-inflated for structs); see impl. */
+size_t hd_type_alloc_size(const HDType *t);
 HDASTNode *hd_parse_block(HDParser *p);
 HDTokenType hd_parse_peek(HDParser *p);
 

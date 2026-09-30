@@ -296,11 +296,15 @@ int gen_stmt(HDGen *gen, const HDASTNode *node) {
                  * entirely, so later `s.a` created an implicit stack local and
                  * pointed at garbage (crash). */
                 {
-                    int size = 8;
-                    if (node->type) {
-                        size_t tsz = hd_type_size(node->type);
-                        if (tsz > 0) size = (int)tsz;
-                    }
+                    /* Use hd_type_alloc_size(), NOT hd_type_size(): a struct
+                     * must be reserved at t->size*8 (cell-inflated) bytes so
+                     * its members, which codegen addresses as
+                     * `offset*8`, all fit. hd_type_size() is the true C size
+                     * and is what `sizeof` reports -- using it here
+                     * under-allocated and the last member aliased the next
+                     * global. The stack-local path below already did this. */
+                    int size = (int)hd_type_alloc_size(node->type);
+                    if (size <= 0) size = 8;
                     size_t global_offset = gen->data_size;
                     while (gen->data_size % 8 != 0) emit_data_byte(gen, 0);
                     /* reserve `size` bytes (round up to 8) for the global */
@@ -343,16 +347,10 @@ int gen_stmt(HDGen *gen, const HDASTNode *node) {
                      * 24 bytes, a struct needs sizeof(struct). Previously
                      * every var got one 8-byte slot, so struct S s; s.a=42
                      * pointed at garbage and crashed. */
-                    int size = 8;
-                    if (node->type) {
-                        if (node->type->kind == HD_TYPE_STRUCT) {
-                            size = (int)(node->type->size * 8);
-                            if (size <= 0) size = (int)hd_type_size(node->type);
-                        } else {
-                            size_t tsz = hd_type_size(node->type);
-                            if (tsz > 0) size = (int)tsz;
-                        }
-                    }
+                    /* hd_type_alloc_size() covers the struct case (t->size*8)
+                     * and delegates to hd_type_size() for everything else. */
+                    int size = (int)hd_type_alloc_size(node->type);
+                    if (size <= 0) size = 8;
                     /* A struct/array local must reserve its FULL size, not
                      * 8 bytes, or a member beyond offset 8 (`s.c`) writes
                      * past the slot into the saved rbp at [rbp+0] → corrupts
