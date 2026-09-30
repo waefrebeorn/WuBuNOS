@@ -230,7 +230,19 @@ int main(int argc, char **argv)
     }
 
     VkPipeline pipe;
-    CHECK(vkCreateComputePipelines(dev, VK_NULL_HANDLE, 1, &pci, pc, &pipe));
+    /* Vulkan 1.0 takes 6 args. pAllocator is the 5th (NULL here), NOT the
+     * pipeline cache. The old call passed `pc` in that slot, which shifted
+     * every argument left by one: the driver received a garbage VkPipeline*
+     * as pPipelines and called through it, crashing at 0x100000010 inside
+     * libvulkan_dzn.so.
+     *
+     * It type-checked only because VkPipelineCache and
+     * VkAllocationCallbacks are both pointers -- gcc did warn
+     * ("incompatible pointer type"), and that warning was the whole clue.
+     *
+     * Note pci.layout = layout above is already correct; the pipeline layout
+     * lives in VkComputePipelineCreateInfo, not in this call. */
+    CHECK(vkCreateComputePipelines(dev, VK_NULL_HANDLE, 1, &pci, NULL, &pipe));
 
     /* persist the (possibly updated) pipeline cache so the NEXT run reuses the
      * translation instead of re-doing SPIR-V→DXIL */

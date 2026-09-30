@@ -378,6 +378,22 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
     for (size_t q = 0; q < p->n; q++) {
         if (p->ins[q].op == MIR_CONST) {
             ADD_CONST(p->ins[q].imm);
+        } else if (p->ins[q].op == MIR_SEXT32 || p->ins[q].op == MIR_ZEXT32
+                || p->ins[q].op == MIR_SEXT16 || p->ins[q].op == MIR_SEXT8) {
+            /* Pre-register the width mask and sign bit. OpConstant must live
+             * in the module's global constants section, which is emitted
+             * before the instruction loop -- registering here is what gives
+             * them a definition. Emitting the OpConstant inline in the
+             * instruction switch instead yields "Constant cannot appear in a
+             * function declaration" from spirv-val. */
+            int bits_ = (p->ins[q].op == MIR_SEXT16) ? 16 :
+                        (p->ins[q].op == MIR_SEXT8)  ? 8  : 32;
+            ADD_CONST((long long)((1ULL << bits_) - 1ULL));   /* width mask */
+            ADD_CONST((long long)(1ULL << (bits_ - 1)));      /* sign bit   */
+            ADD_CONST((long long)(bits_ - 1));                 /* shift amt  */
+            ADD_CONST(1LL);                                    /* & 1        */
+            /* 0xFFFFFFFF00000000: multiply 0/1 by this to broadcast the sign */
+            ADD_CONST((long long)(int64_t)(0xFFFFFFFFULL << 32));
         } else if (p->ins[q].op == MIR_T_GEMM) {
             int M_ = (int)(p->ins[q].imm >> 22);
             int K_ = (int)((p->ins[q].imm >> 11) & 0x7FF);
@@ -582,6 +598,130 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
             uint32_t csrc = (w < ncm) ? cmts[w].id : s.c_zero64;
             uint32_t dst_id = nid(&s);
             { uint32_t o[]={s.t_u64,dst_id,csrc}; spv_ins(&s.bin,83,o,3); }  /* OpCopyObject */
+            VRMAP_SET(in->dst, dst_id);
+            break;
+        }
+        /* Copy and integer width casts. These had NO case at all, so the
+         * emitted SPIR-V silently dropped them. `127 + 1` lowers to
+         * CONST/SEXT32/MOV/RET; without the MOV the RET read an unmapped
+         * (zero) value and the Vulkan backend returned 0 for every program.
+         *
+         * Same failure mode as the ptx backend and the interpreter's
+         * positional dispatch table: an opcode with no handler vanishes
+         * instead of failing loudly. Add the opcode to wubu_mir_op_t and this
+         * switch will silently miscompile -- grep every backend. */
+        case MIR_MOV: {
+            uint32_t dst_id = nid(&s);
+            { uint32_t o[]={s.t_u64,dst_id,VRMAP_GET(in->a)};
+              spv_ins(&s.bin,83,o,3); }                              /* OpCopyObject */
+            VRMAP_SET(in->dst, dst_id);
+            break;
+        }
+        /* Unary negate. Like the cast opcodes this had NO case, so `-1`
+         * silently produced 0 on the Vulkan backend. SPIR-V has no OpSNegate;
+         * negate with two's-complement subtraction from zero. */
+        case MIR_NEG: {
+            uint32_t d = nid(&s);
+            /* 130 = OpISub (128 is OpIAdd -- verified against the
+             * MIR_ADD/MIR_SUB/MIR_MUL mapping in this same file) */
+            { uint32_t o[]={s.t_u64,d,s.c_zero64,VRMAP_GET(in->a)};
+              spv_ins(&s.bin,130,o,4); }                             /* OpISub 0 - a */
+            VRMAP_SET(in->dst, d);
+            break;
+        }
+        /* Sign/zero-extension on 64-bit values: truncate to the narrower
+         * type, then reinterpret back to u64. OpUConvert 126 handles
+         * truncation; the shift/mask below is the portable spelling that
+         * does not depend on signedness rules. */
+        case MIR_SEXT32: case MIR_SEXT16: case MIR_SEXT8:
+        case MIR_ZEXT32: {
+            int bits = (in->op==MIR_SEXT32 || in->op==MIR_ZEXT32) ? 32 :
+                       (in->op==MIR_SEXT16) ? 16 : 8;
+            uint64_t mask = (bits == 64) ? ~0ULL : ((1ULL << bits) - 1ULL);
+            uint32_t src  = VRMAP_GET(in->a);
+            /* A negative MIR_CONST is already stored sign-extended in its
+             * 64-bit OpConstant field, so narrowing it again is wrong.
+             * `100 - 250` folds to MIR_CONST(-150) and still carries a
+             * trailing MIR_SEXT32; re-truncating turned -150 into 4294967146.
+             * Detect that case by checking whether the source id is one of the
+             * negative constants we registered, and pass it through. */
+            int src_is_neg_const = 0;
+            for (size_t q_ = 0; q_ < ncm; q_++)
+                if (cmts[q_].id == src && cmts[q_].imm < 0) { src_is_neg_const = 1; break; }
+            if (src_is_neg_const) {
+                uint32_t d0 = nid(&s);
+                { uint32_t o[]={s.t_u64,d0,src}; spv_ins(&s.bin,83,o,3); }
+                VRMAP_SET(in->dst, d0);
+                break;
+            }
+            /* The mask and sign ids were registered in the prepass above, so
+             * they are already defined in the global constants section. Look
+             * them up in cmts[] rather than emitting a new OpConstant here. */
+            uint32_t cid_mask = 0, cid_31 = 0, cid_one = 0, cid_himask = 0;
+            { size_t w_;
+              long long himask = (long long)(int64_t)(0xFFFFFFFFULL << 32);
+              for (w_ = 0; w_ < ncm; w_++) {
+                  if (cmts[w_].imm == (long long)mask)     cid_mask   = cmts[w_].id;
+                  if (cmts[w_].imm == 1LL)                 cid_one    = cmts[w_].id;
+                  if (cmts[w_].imm == himask)              cid_himask = cmts[w_].id;
+              }
+              /* shift amount is bits-1 (e.g. 31 for a 32-bit cast), which is
+               * NOT the same constant as the sign bit value 2^31 */
+              for (w_ = 0; w_ < ncm; w_++)
+                  if (cmts[w_].imm == (long long)(bits - 1)) { cid_31 = cmts[w_].id; break; }
+            }
+            if (!cid_mask || !cid_31 || !cid_one || !cid_himask) {
+                fprintf(stderr, "[spirv] missing cast constant bits=%d "
+                        "(mask=%u shift=%u one=%u himask=%u)\n",
+                        bits, cid_mask, cid_31, cid_one, cid_himask);
+                break;
+            }
+            uint32_t masked = nid(&s);
+            { uint32_t o[]={s.t_u64,masked,src,cid_mask}; spv_ins(&s.bin,199,o,4); } /* and */
+            if (in->op == MIR_ZEXT32) {
+                VRMAP_SET(in->dst, masked);
+            } else {
+                /* Sign-extend 32 -> 64 on a value held in a u64 register.
+                 *
+                 * The usual (x ^ sign) - sign trick is WRONG here. The
+                 * u64's bits 32..63 are already zero, so XOR-ing bit 31 in
+                 * just sets bit 31; the borrow does not propagate back down
+                 * from bit 63, so the result keeps bit 31 set. Measured: every
+                 * value in 0..2^31-1 came out as 2147483648.
+                 *
+                 * Correct sequence: mask to 32 bits, then broadcast bit 31
+                 * into the top 32 bits with a shift-and-subtract that is
+                 * exact in u64 arithmetic:
+                 *     hi    = (masked >> 31) & 1        // 0 or 1
+                 *     hi64  = hi * 0xFFFFFFFF00000000   // 0 or all-ones
+                 *     result= (masked & 0xFFFFFFFF) | hi64
+                 * OpShiftRightLogical(194), OpAnd(199), OpIMul(132),
+                 * OpBitwiseOr(197). No final mask on the result -- masking
+                 * it would discard the sign extension again. */
+                uint32_t hi = nid(&s), hib = nid(&s),
+                         hi64 = nid(&s), lo64 = nid(&s), res = nid(&s);
+                { uint32_t o0[]={s.t_u64,hi,masked,cid_31};
+                  spv_ins(&s.bin,194,o0,4); }                    /* lshr 31 */
+                { uint32_t o1[]={s.t_u64,hib,hi,cid_one};
+                  spv_ins(&s.bin,199,o1,4); }                    /* and 1 */
+                { uint32_t o2[]={s.t_u64,hi64,hib,cid_himask};
+                  spv_ins(&s.bin,132,o2,4); }                    /* mul */
+                { uint32_t o3[]={s.t_u64,lo64,masked,cid_mask};
+                  spv_ins(&s.bin,199,o3,4); }                    /* and mask */
+                { uint32_t o4[]={s.t_u64,res,lo64,hi64};
+                  spv_ins(&s.bin,197,o4,4); }                    /* or */
+                VRMAP_SET(in->dst, res);
+            }
+            break;
+        }
+        case MIR_TO_PTR:
+            /* Cell offset -> pointer into the mem SSBO. SPIR-V here is
+             * single-address-space, so the offset is already the value the
+             * loads/stores use; a copy keeps dst defined for the VR map. */
+        {
+            uint32_t dst_id = nid(&s);
+            { uint32_t o[]={s.t_u64,dst_id,VRMAP_GET(in->a)};
+              spv_ins(&s.bin,83,o,3); }
             VRMAP_SET(in->dst, dst_id);
             break;
         }
