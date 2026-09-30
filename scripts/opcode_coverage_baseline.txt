@@ -1,0 +1,6 @@
+wubu_isa_arm64.c 28
+wubu_isa_mips.c 37
+wubu_isa_ptx.c 82
+wubu_isa_riscv.c 40
+wubu_isa_spirv.c 62
+wubu_isa_x86_64.c 94

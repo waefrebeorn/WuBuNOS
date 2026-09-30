@@ -228,6 +228,13 @@ int64_t wubu_mir_interp(const wubu_mir_prog_t *p)
         [MIR_DITOF_U         ] = &&op_ditof_u, /* 104 */
     };
 
+    /* A missing entry here is legal C and silently defaults to NULL, so the
+     * compiler cannot catch it. scripts/check_opcode_coverage.py enforces
+     * coverage across every backend at build time instead. Do not try to
+     * replace it with a sizeof()-based typedef here: the table's size comes
+     * from its initializer list, so adding an enum member does not change
+     * that size and the check silently passes. (Verified by trying it.) */
+
 #define DISPATCH() do { \
         pc++; \
         if (pc >= p->n) goto done; \

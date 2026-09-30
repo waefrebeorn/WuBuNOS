@@ -1073,7 +1073,19 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
             /* helper leaves us in an open labeled block */
             just_terminator = 0;
             break;
-        default: break; /* remaining ops land next wave */
+        /* Deliberately loud. An opcode with no case here is DROPPED, and the
+         * program then returns a plausible wrong answer instead of failing.
+         * That is how MIR_MOV, MIR_NEG, the casts, the integer div/mod/shift
+         * group, the f64 core and MIR_BREAK/MIR_CONTINUE all went unnoticed.
+         *
+         * Do not restore a silent `break` here. If an opcode is genuinely not
+         * implemented yet, say so in the log so the gap is visible; keep the
+         * list in sync with the coverage audit in
+         * references/backend-opcode-coverage.md. */
+        default:
+            fprintf(stderr, "[spirv] UNIMPLEMENTED opcode %d at pc=%zu -- "
+                            "dropped; result will be wrong\n", (int)in->op, pc);
+            break;
         }
     }
 
