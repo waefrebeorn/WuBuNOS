@@ -106,7 +106,14 @@ static const Probe PROBES[] = {
     /* ---- casts ---- */
     {"int cast", "(int)42;", 42},
     {"float to int", "(int)42.9;", 42},
-    {"ptr cast", "int x=42; (int)(long)(void*)(long)&x;", 0},  /* addr, ignore value */
+    /* A raw address is not reproducible (ASLR), so this cannot assert a
+     * literal. What it CAN assert is the property that matters: the cast
+     * chain preserves the address, so loading through it yields x. This used
+     * to be `{"ptr cast", "int x=42; (int)(long)(void*)(long)&x;", 0}` --
+     * asserting that the address of x is 0, which is false in both gcc and
+     * HolyD (gcc truncates it to 1016285556). It was a placeholder that was
+     * never reconciled with the adjacent `addr, ignore value` comment. */
+    {"ptr cast", "int x=42; *(int*)(long)(void*)(long)&x;", 42},
     /* ---- misc ---- */
     {"char literal", "'A';", 65},
     {"string index", "\"hello\"[0];", 104},
