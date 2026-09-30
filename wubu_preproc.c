@@ -491,11 +491,17 @@ char *wubu_preprocess(const char *src)
     if (!out) return NULL;
     size_t o = 0;
 
-    /* Prepend global declarations needed by the preprocessor macros */
-    {
-        const char *globals = 
-            "int wubu_va_args[32];\n"  /* variadic argument storage */
-            ;
+    /* Prepend the variadic argument storage ONLY when this source actually
+     * refers to it. Injecting it unconditionally made every single-expression
+     * eval parse as a declaration: hd_eval("42") saw
+     *   int wubu_va_args[32];
+     *   42
+     * so hd_parse_stmt returned the VAR_DECL, never evaluated the literal, and
+     * the JIT thunk returned its own mmap address instead of 42 (every
+     * [Codegen/Eval] case in holyc_test failed with the same address). */
+    if (strstr(src, "wubu_va_args") || strstr(src, "va_arg") ||
+        strstr(src, "va_start") || strstr(src, "va_end")) {
+        const char *globals = "int wubu_va_args[32];\n";
         size_t gl = strlen(globals);
         memcpy(out + o, globals, gl);
         o += gl;
