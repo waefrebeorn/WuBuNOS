@@ -240,6 +240,13 @@ int64_t hd_eval(const char *source) {
                 gen_expr(&gen, last->child);
             } else if (last->kind == HD_AST_RETURN) {
                 gen_stmt(&gen, last);
+            } else if (last->kind == HD_AST_LABEL) {
+                /* A trailing `label: expr;` must go through gen_stmt so the
+                 * label is placed and its body (the result expression) is
+                 * emitted into rax. gen_expr on a LABEL placed nothing at all,
+                 * so the jump target never resolved -- `goto skip; ... skip:
+                 * x+1;` skipped the expression and `goto loop` spun forever. */
+                gen_stmt(&gen, last);
             } else {
                 gen_expr(&gen, last);
             }

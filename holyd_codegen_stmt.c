@@ -786,6 +786,13 @@ int gen_stmt(HDGen *gen, const HDASTNode *node) {
                         patch_rel32(gen, gen->label_patches[i].patch_pos,
                                     gen->labels[idx].offset);
             }
+            /* The parser attaches the labelled statement to the LABEL node
+             * (hd_parse.c: n->body = parse_stmt()). Record the position first,
+             * then emit the body so `goto` lands on the real instruction.
+             * Dropping the body left `goto` jumping into nothing: the
+             * "goto loop" probe spun forever and "goto forward" returned the
+             * wrong value. The MIR interpreter already emitted n->body. */
+            if (node->body) gen_stmt(gen, node->body);
             break;
 
         case HD_AST_BREAK:
