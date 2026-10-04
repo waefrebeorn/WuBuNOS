@@ -400,11 +400,27 @@ static int amdgpu_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_s
 
 static int64_t amdgpu_run(const uint8_t *code, size_t size, int64_t arg)
 {
-    (void)code; /* emitted amdgcn text — the executable artifact */
     (void)size;
     (void)arg;
-    /* Execute the program faithfully and return its real result. */
-    if (!g_amd_prog) return 0;
+    /* HONESTY: this backend cannot execute on a GPU. It emits real amdgcn
+     * assembly (verified by llvm-mc) but has no ROCm runtime path, so it
+     * cannot launch a kernel and read back a result.
+     *
+     * Previously this ran wubu_mir_interp() and returned its value, while
+     * describe() advertised "AMDGPU -> code object -> GPU launch". A caller
+     * could not tell interpreter output from real GPU execution -- the exact
+     * silent-fallback class that hid the Vulkan runner bug.
+     *
+     * A missing runner is now the -1 execution-failure sentinel, and the
+     * fallback is opt-in via WUBU_AMDGPU_INTERP=1 so anyone who wants the
+     * interpreter result has to ask for it explicitly. */
+    if (!g_amd_prog) return -1;
+    if (!getenv("WUBU_AMDGPU_INTERP")) {
+        fprintf(stderr,
+                "[amdgpu] no ROCm runtime: emitted assembly was not executed.\n"
+                "         Set WUBU_AMDGPU_INTERP=1 to fall back to wubu_mir_interp.\n");
+        return -1;
+    }
     int64_t result = wubu_mir_interp(g_amd_prog);
     return result;
 }
@@ -418,6 +434,8 @@ static void amdgpu_describe(void)
     printf("  Exec model:    SIMT (32-wide wavefronts)\n");
     printf("  Compile:       MIR -> AMDGPU assembly text\n");
     printf("  Run:           AMDGPU -> code object -> GPU launch\n");
+    printf("  Exec note:     no ROCm runtime wired; run() returns -1 unless\n");
+    printf("                 WUBU_AMDGPU_INTERP=1 opts into wubu_mir_interp.\n");
     printf("  MIR ops:       ADD SUB MUL AND OR XOR SHL SHR NEG NOT MOV RET\\n");
     printf("  Float (f32):   FADD FSUB FMUL FDIV FNEG FEQ FNE FLT FLE\n");
     printf("  Float (f64):   DADD DSUB DMUL DDIV DNEG\n");
