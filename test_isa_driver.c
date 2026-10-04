@@ -35,7 +35,15 @@ static int run_with_driver(const wubu_isa_driver_t *d, const wubu_mir_prog_t *pr
         return -1;
     }
     fflush(stdout);
-    *result = d->run(code, csize, 0);
+    /* The run contract is run(code, size, memory_pointer). Passing 0 here
+     * worked only by luck for programs that never touch memory; test_memory
+     * stored 77 through the NULL pointer and segfaulted inside x86_run.
+     * Allocate a real buffer sized from the program's own memory requests. */
+    size_t cells = (size_t)(prog->total_mem > 0 ? prog->total_mem : 16) + 64;
+    int64_t *mem = (int64_t *)calloc(cells, sizeof(int64_t));
+    if (!mem) { free(code); return -1; }
+    *result = d->run(code, csize, (int64_t)(intptr_t)mem);
+    free(mem);
     free(code);
     return 0;
 }
@@ -467,6 +475,14 @@ static void test_call(void)
 int main(void)
 {
     printf("=== ISA DRIVER SPACE TEST ===\n\n");
+
+    /* The amdgpu backend emits real amdgcn but has no ROCm runtime, so run()
+     * refuses to execute and returns the -1 failure sentinel rather than
+     * silently substituting wubu_mir_interp. These tests exercise driver
+     * EXECUTION across the whole registry, so opt into the fallback here --
+     * explicitly, at the call site that needs it, instead of having the driver
+     * pretend it ran on a GPU. */
+    setenv("WUBU_AMDGPU_INTERP", "1", 1);
 
     test_registry();
     printf("\n");
