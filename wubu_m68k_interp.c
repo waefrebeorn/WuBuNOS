@@ -16,6 +16,7 @@
 #include "wubu_softfloat.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 #define M68K_MEM 65536        /* 64K: the 68000 addresses 16MB, but the
                                * driver's frames are tiny; 64K is the
@@ -279,9 +280,17 @@ int64_t wubu_m68k_run(const uint8_t *code, size_t size, int64_t arg)
             continue;
         }
         /* LSL.L #1,D0 : 0xE388   LSR.L #1,D0 : 0xE288 */
-        if (w == 0xE388 || w == 0xE288) {
+        if (w == 0xE388 || w == 0xE288 || w == 0xE088 || w == 0xE188) {
             uint32_t v = (uint32_t)cpu.d[0];
-            cpu.d[0] = (w == 0xE388) ? (int32_t)(v << 1) : (int32_t)(v >> 1);
+            /* 0xE388 LSL.L (left), 0xE288 LSR.L (logical right),
+             * 0xE188 ASL.L (left), 0xE088 ASR.L (ARITHMETIC right).
+             * MIR_SHR is arithmetic, so 0xE288 was the wrong opcode. */
+            /* v is uint32_t, so `v >> 1` is a LOGICAL shift -- sign-extend
+             * first or ASR.L turns -48 into 0x7FFFFFF0. */
+            int32_t sv = (int32_t)v;
+            cpu.d[0] = (w == 0xE388 || w == 0xE188) ? (int32_t)(v << 1)
+                      : (w == 0xE088)                  ? (sv >> 1)
+                                                     : (int32_t)((uint32_t)v >> 1);
             set_nz(&cpu, cpu.d[0]);
             continue;
         }

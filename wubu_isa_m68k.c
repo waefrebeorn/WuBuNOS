@@ -130,6 +130,10 @@ static void move_a6_d(m68k_emitter_t *e, int16_t d16, int m)
 /* LSL.L #1,D0 : 0xE388   LSR.L #1,D0 : 0xE288  (both verified) */
 #define LSL1D0()  e16(&e, 0xE388)
 #define LSR1D0()  e16(&e, 0xE288)
+/* MIR_SHR is arithmetic (see wubu_mir.h). ASR.L #1,D0 = 0xE088 -- the same
+ * encoding family as LSR.L (0xE288) with the arithmetic bit set. LSR1D0 was
+ * the wrong instruction here and zero-filled negative operands. */
+#define ASR1D0()  e16(&e, 0xE088)
 
 /* Bcc.s : 0110 cccc dddddddd ; target = PC_after + sext(disp) */
 #define BRA_CC(cond) ((uint16_t)(0x6000 | (((cond)) << 8)))
@@ -352,7 +356,7 @@ static int m68k_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_siz
             size_t beq_pos = e.n;
             PATCH_AT(beq_pos, CC_EQ, 0);     /* BEQ -> done (patched below) */
             e16(&e, 0x6700);                 /* BEQ.s placeholder */
-            if (in->op == MIR_SHL) LSL1D0(); else LSR1D0();
+            if (in->op == MIR_SHL) LSL1D0(); else ASR1D0();
             SUBQ1(1);                        /* subq.l #1,d1 */
             /* bra loop (backward): emit + patch immediately */
             {

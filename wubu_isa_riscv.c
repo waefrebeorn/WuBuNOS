@@ -160,6 +160,10 @@ static int64_t slot_disp(wubu_vr_t vr) { return (int64_t)(-((int64_t)(vr + 1) * 
 
 /* funct7 */
 #define FN7_DEFAULT 0x00
+/* SRA (arithmetic shift right) is funct7=0x20, funct3=0x5. SRL shares
+ * funct3=0x5 and is selected by funct7=0x00, so the two differ ONLY in
+ * funct7 -- which is exactly the bug MIR_SHR had. */
+#define FN7_SRA     0x20
 #define FN7_SLTU    0x00   /* SLTU: funct7=0, funct3=3 (unsigned less-than) */
 #define FN7_MUL     0x01   /* MUL: funct7[5:0]=0x01, funct3=0x0 */
 #define FN7_DIV     0x01   /* DIV: funct7[5:0]=0x01, funct3=0x4 */
@@ -503,10 +507,13 @@ static int riscv_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
             break;
         }
         case MIR_SHR: {
-            /* SRLI (logical right shift) — for unsigned shift */
+            /* MIR_SHR is ARITHMETIC (see wubu_mir.h): the interpreter does
+             * `int64_t >> `, which sign-extends, and x86-64 emits `sar` to
+             * match. SRA is the RISC-V arithmetic shift; SRLI was wrong here
+             * and returned a zero-filled result for a negative operand. */
             load_d(&e, REG_T0, REG_FP, (int32_t)slot_off(e.frame, in->a));
             load_d(&e, REG_T1, REG_FP, (int32_t)slot_off(e.frame, in->b));
-            op_r(&e, FN7_DEFAULT, REG_T1, REG_T0, FN3_SRL, REG_T0);
+            op_r(&e, FN7_SRA, REG_T1, REG_T0, FN3_SRL, REG_T0);
             store_d(&e, REG_T0, REG_FP, (int32_t)slot_off(e.frame, in->dst));
             break;
         }

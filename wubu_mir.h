@@ -43,7 +43,15 @@ typedef enum {
     MIR_OR,            /* dst = a | b (bitwise) */
     MIR_XOR,           /* dst = a ^ b */
     MIR_SHL,           /* dst = a << b */
-    MIR_SHR,           /* dst = a >> b */
+    MIR_SHR,           /* dst = a >> b, ARITHMETIC (sign-extending), 64-bit wide.
+                         * The interpreter does `int64_t >> ` and x86-64 emits
+                         * `sar rax, cl` to match, so this is the contract.
+                         * riscv/m68k/8086/z80/6502/mips/8051/avr/pic currently
+                         * emit a LOGICAL shift and return the wrong answer for
+                         * a negative operand -- see
+                         * wubunos-isa-call-conventions/references/mir-shr-is-arithmetic.md
+                         * No logical-shift opcode exists; use a mask if you
+                         * need one. */
     MIR_NEG,           /* dst = -a */
     MIR_NOT,           /* dst = ~a */
     MIR_EQ,            /* dst = (a == b) ? 1 : 0 */
