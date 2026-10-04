@@ -297,6 +297,17 @@ static int mips_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_siz
             e32(&e, R_TYPE(MIPS_REG_T1, MIPS_REG_T0, MIPS_REG_T0, 0, 0x04)); /* sllv $t0,$t0,$t1 */
             e32(&e, MIPS_SW(29, MIPS_REG_T0, (uint16_t)slot_off(in->dst)));
             break;
+        case MIR_SHR:
+            /* MIR_SHR is ARITHMETIC (see wubu_mir.h). srav (funct=0x06) is the
+             * variable arithmetic shift right; srlv (0x02) would zero-fill.
+             * This case was MISSING entirely, so MIR_SHR emitted nothing and
+             * the destination slot kept its previous value -- which is why
+             * mips reported 0 for the shift test. */
+            e32(&e, MIPS_LW(29, MIPS_REG_T0, (uint16_t)slot_off(in->a)));
+            e32(&e, MIPS_LW(29, MIPS_REG_T1, (uint16_t)slot_off(in->b)));
+            e32(&e, R_TYPE(MIPS_REG_T1, MIPS_REG_T0, MIPS_REG_T0, 0, 0x06)); /* srav $t0,$t0,$t1 */
+            e32(&e, MIPS_SW(29, MIPS_REG_T0, (uint16_t)slot_off(in->dst)));
+            break;
         case MIR_DIV: {
             e32(&e, MIPS_LW(29, MIPS_REG_T0, (uint16_t)slot_off(in->a)));
             e32(&e, MIPS_LW(29, MIPS_REG_T1, (uint16_t)slot_off(in->b)));

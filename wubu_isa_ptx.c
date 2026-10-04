@@ -421,7 +421,7 @@ static void emit_kernel_body(ptx_emitter_t *e, const wubu_mir_prog_t *p)
              * Extract low 32 bits of the count via the shared-mem bridge
              * into scratch %w0, mask to 0..63, then shift. We must NOT
              * clobber rd before reading ins->a — use %w0 only. */
-            { uint32_t cnt = ptx_vr(e, ins->b) + 1; /* scratch f32 VR slot */
+            { uint32_t cnt = ptx_vr(e, ins->b) + 1; /* +1 matches the f32 reg numbering */
               ptx_vr_to_f32(e, cnt, ptx_vr(e, ins->b));
               ptx_emit(e, "    and.b32 %%w0, %%w0, 63;\n");
               ptx_emit(e, "    mov.b64 %%r%d, %%r%d;\n", (int)rd, (int)ptx_vr(e, ins->a));
@@ -431,12 +431,20 @@ static void emit_kernel_body(ptx_emitter_t *e, const wubu_mir_prog_t *p)
 
         case MIR_SHR:
             rd = ptx_vr(e, ins->dst);
-            /* MIR_SHR is LOGICAL right shift (zero-fill). Same .u32 count issue. */
-            { uint32_t cnt = ptx_vr(e, ins->b) + 1; /* scratch f32 VR slot */
-              ptx_vr_to_f32(e, cnt, ptx_vr(e, ins->b));
-              ptx_emit(e, "    and.b32 %%w0, %%w0, 63;\n");
+            /* MIR_SHR is an ARITHMETIC right shift (see wubu_mir.h). */
+            { uint32_t cnt = ptx_vr(e, ins->b) + 1; /* f32 reg slot */
+              /* Read the count DIRECTLY into %w0 -- do NOT go through the
+               * f32 bridge. ptx_vr_to_f32 stores %r<vr> to shared memory and
+               * reloads %w0, which races with the mov.b64 below and left %w0
+               * holding a stale value: the shift count came out as the
+               * PREVIOUS shift's count (4 instead of 2), so -48 >> 4 = -3. */
+              ptx_emit(e, "    and.b64 %%rd0, %%r%d, 63;\n", (int)ptx_vr(e, ins->b));
               ptx_emit(e, "    mov.b64 %%r%d, %%r%d;\n", (int)rd, (int)ptx_vr(e, ins->a));
-              ptx_emit(e, "    shr.u64 %%r%d, %%r%d, %%w0;\n", (int)rd, (int)rd);
+              /* MIR_SHR is ARITHMETIC (see wubu_mir.h): the interpreter does
+               * `int64_t >> ` and x86-64 emits `sar`. shr.u64 zero-filled the
+               * high bits and lost the sign; shr.s64 replicates it. */
+              ptx_emit(e, "    shr.s64 %%r%d, %%r%d, %%rd0;\n", (int)rd, (int)rd);
+              (void)cnt;
             }
             break;
 
