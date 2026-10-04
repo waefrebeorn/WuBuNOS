@@ -408,7 +408,7 @@ uint64_t wubu_sf_f64_mul(uint64_t A, uint64_t B) {
      * just clearer. */
     if ((A & ~F64_SIGN) == 0 || (B & ~F64_SIGN) == 0) {
         r.m = 0; r.k = 0;
-        return sf_round(r, 53, F64_BIAS, 1) | (uint64_t)(sign << 63);
+        return sf_round(r, 53, F64_BIAS, 1) | ((uint64_t)(sign & 1) << 63);
     }
     /* 53x53 -> 106 bits via 27/26 split */
     uint64_t ah = a.m >> 27, al = a.m & ((1ull << 27) - 1);
@@ -432,7 +432,7 @@ uint64_t wubu_sf_f64_mul(uint64_t A, uint64_t B) {
     r.k = a.k + b.k + 54;
     r.s2 = (lo2 != 0);
     norm64(&r.m, &r.k);
-    return sf_round(r, 53, F64_BIAS, 1) | (uint64_t)(sign << 63);
+    return sf_round(r, 53, F64_BIAS, 1) | ((uint64_t)(sign & 1) << 63);
 }
 
 uint64_t wubu_sf_f64_div(uint64_t A, uint64_t B) {
@@ -447,7 +447,7 @@ uint64_t wubu_sf_f64_div(uint64_t A, uint64_t B) {
     sf_raw_t r; r.sign = sign;
     int clz = sf_clz64(a.m);
     sf_div_core64(a.m << clz, b.m, (int32_t)(a.k - clz - b.k), &r);
-    return sf_round(r, 53, F64_BIAS, 1) | (uint64_t)(sign << 63);
+    return sf_round(r, 53, F64_BIAS, 1) | ((uint64_t)(sign & 1) << 63);
 }
 
 uint64_t wubu_sf_i64_to_f64(int64_t v) {
@@ -457,7 +457,7 @@ uint64_t wubu_sf_i64_to_f64(int64_t v) {
     int sh = sf_clz64(m); m <<= sh;
     sf_raw_t r; r.sign = sign; r.g2 = 0; r.s2 = 0;
     r.m = m; r.k = -(int32_t)sh; norm64(&r.m, &r.k);
-    return sf_round(r, 53, F64_BIAS, 1) | (uint64_t)(sign << 63);
+    return sf_round(r, 53, F64_BIAS, 1) | ((uint64_t)(sign & 1) << 63);
 }
 int64_t wubu_sf_f64_to_i64(uint64_t a) {
     if (wubu_sf_f64_is_nan(a) || wubu_sf_f64_is_inf(a)) return a >> 63 ? INT64_MIN : INT64_MAX;
