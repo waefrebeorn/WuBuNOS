@@ -437,6 +437,18 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
     sb_word(&s.bin, vr_base + maxvr + 4096); /* bound placeholder */
     sb_word(&s.bin, 0);
 
+    /* Does the program use f64 anywhere? Needed in two places: the Float64
+     * capability and the OpTypeFloat 64 declaration both have to be omitted for
+     * f32-only programs, and the type block is emitted well before the ops. */
+    int uses_f64 = 0;
+    for (size_t q = 0; q < p->n; q++) {
+        const uint16_t o_ = (uint16_t)p->ins[q].op;
+        if (o_==MIR_DADD||o_==MIR_DSUB||o_==MIR_DMUL||o_==MIR_DDIV||
+            o_==MIR_DNEG||o_==MIR_DLT ||o_==MIR_DLE ||o_==MIR_DGT ||
+            o_==MIR_DGE ||o_==MIR_DEQ||o_==MIR_DNE ||o_==MIR_DITOF||
+            o_==MIR_DTOI||o_==MIR_DTOI_U) { uses_f64 = 1; break; }
+    }
+
     /* ---- capabilities / model / entry ---- */
     { uint32_t c[]={1}; spv_ins(&s.bin,OP_CAPABILITY,c,1);}        /* Shader */
     { uint32_t c[]={11}; spv_ins(&s.bin,OP_CAPABILITY,c,1);}        /* Int64 */
@@ -444,15 +456,7 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
      * program actually uses a double keeps f32-only modules byte-identical;
      * without it spirv-val reports "Using a 64-bit floating point type
      * requires the Float64 capability" even though dzn tolerates it. */
-    { int uses_f64_ = 0;
-      for (size_t q = 0; q < p->n; q++) {
-          uint16_t o_ = (uint16_t)p->ins[q].op;
-          if (o_==MIR_DADD||o_==MIR_DSUB||o_==MIR_DMUL||o_==MIR_DDIV||
-              o_==MIR_DNEG||o_==MIR_DLT ||o_==MIR_DLE ||o_==MIR_DGT ||
-              o_==MIR_DGE ||o_==MIR_DEQ||o_==MIR_DNE ||o_==MIR_DITOF||
-              o_==MIR_DTOI||o_==MIR_DTOI_U) { uses_f64_ = 1; break; }
-      }
-      if (uses_f64_) { uint32_t c[]={10}; spv_ins(&s.bin,OP_CAPABILITY,c,1); } }
+    { if (uses_f64) { uint32_t c[]={10}; spv_ins(&s.bin,OP_CAPABILITY,c,1); } }
     { uint32_t m[]={0,0}; spv_ins(&s.bin,OP_MEMORYMODEL,m,2);}     /* Simple,None */
 
     /* OpEntryPoint GLCompute %main "main" (no interface vars needed: SSBO) */
@@ -499,7 +503,12 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
     { uint32_t o[]={s.t_u64,64,0}; spv_ins(&s.bin,OP_TYPE_INT,o,3);}
     { uint32_t o[]={s.t_v3i32,s.t_i32,3}; spv_ins(&s.bin,OP_TYPE_VECTOR,o,3);}
     { uint32_t o[]={s.t_f32,32};    spv_ins(&s.bin,OP_TYPE_FLOAT,o,2);}
-    { uint32_t o[]={s.t_f64,64};    spv_ins(&s.bin,OP_TYPE_FLOAT,o,2);}
+    /* OpTypeFloat 64 requires the Float64 capability (declared above, but only
+     * when used). Emitting the type unconditionally left EVERY non-f64 module
+     * invalid: "Using a 64-bit floating point type requires the Float64
+     * capability". Loops hit it because the loop scaffolding is emitted
+     * regardless of float width. Guard it with the same uses_f64 test. */
+    if (uses_f64) { uint32_t o[]={s.t_f64,64}; spv_ins(&s.bin,OP_TYPE_FLOAT,o,2); }
     { uint32_t o[]={s.t_v2i32,s.t_i32,2}; spv_ins(&s.bin,OP_TYPE_VECTOR,o,3);}
 
     /* OpConstant i32 N (mem cells incl. result slot) */
