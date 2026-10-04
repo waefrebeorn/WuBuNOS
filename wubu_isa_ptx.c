@@ -397,6 +397,21 @@ static void emit_kernel_body(ptx_emitter_t *e, const wubu_mir_prog_t *p)
                      (int)rd, (int)ptx_vr(e, ins->a), (int)ptx_vr(e, ins->b));
             break;
 
+        case MIR_UDIV:
+            /* div.u64, not div.s64: MIR_UDIV treats the operands as unsigned,
+             * which changes both the sign handling and, for values above
+             * 2^63, the magnitude. These cases were missing entirely. */
+            rd = ptx_vr(e, ins->dst);
+            ptx_emit(e, "    div.u64 %%r%d, %%r%d, %%r%d;\n",
+                     (int)rd, (int)ptx_vr(e, ins->a), (int)ptx_vr(e, ins->b));
+            break;
+
+        case MIR_UMOD:
+            rd = ptx_vr(e, ins->dst);
+            ptx_emit(e, "    rem.u64 %%r%d, %%r%d, %%r%d;\n",
+                     (int)rd, (int)ptx_vr(e, ins->a), (int)ptx_vr(e, ins->b));
+            break;
+
         case MIR_AND:
             rd = ptx_vr(e, ins->dst);
             ptx_emit(e, "    and.b64 %%r%d, %%r%d, %%r%d;\n",

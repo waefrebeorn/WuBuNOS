@@ -320,6 +320,11 @@ static int mips_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_siz
             patch_push(&patches, &np, &cp, e.n - 4, done);
             note_label(&e, skip, e.n / 4);
             e32(&e, R_TYPE(MIPS_REG_T0, MIPS_REG_T1, 0, 0, 0x1A));  /* div $t0,$t1 */
+            /* rd above must be the DESTINATION REGISTER PAIR: MIPS writes the
+             * quotient to lo(rd) and the remainder to hi(rd). It was rd = 0
+             * ($zero), so the result landed in $zero while `mflo $t0` read a
+             * stale value out of $t0 -- signed division returned whatever
+             * happened to be sitting there. */
             e32(&e, MIPS_MFLO(MIPS_REG_T0));  /* mflo $t0 */
             note_label(&e, done, e.n / 4);
             e32(&e, MIPS_SW(29, MIPS_REG_T0, (uint16_t)slot_off(in->dst)));

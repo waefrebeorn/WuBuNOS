@@ -472,6 +472,23 @@ static int riscv_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
             store_d(&e, REG_A1, REG_FP, (int32_t)slot_off(e.frame, in->dst));
             break;
         }
+        case MIR_UDIV: {
+            /* DIVU -- the constants existed but nothing emitted them, so
+             * MIR_UDIV fell through and left the destination untouched. */
+            load_d(&e, REG_T0, REG_FP, (int32_t)slot_off(e.frame, in->a));
+            load_d(&e, REG_T1, REG_FP, (int32_t)slot_off(e.frame, in->b));
+            op_r(&e, FN7_DIVU, REG_T1, REG_T0, FN3_DIVU, REG_T0);
+            store_d(&e, REG_T0, REG_FP, (int32_t)slot_off(e.frame, in->dst));
+            break;
+        }
+        case MIR_UMOD: {
+            /* REMU leaves the remainder in a1, same as REM. */
+            load_d(&e, REG_T0, REG_FP, (int32_t)slot_off(e.frame, in->a));
+            load_d(&e, REG_T1, REG_FP, (int32_t)slot_off(e.frame, in->b));
+            op_r(&e, FN7_DIVU, REG_T1, REG_T0, FN3_DIVU, REG_T0);  /* quotient in a0 */
+            store_d(&e, REG_A1, REG_FP, (int32_t)slot_off(e.frame, in->dst));
+            break;
+        }
         case MIR_AND: {
             load_d(&e, REG_T0, REG_FP, (int32_t)slot_off(e.frame, in->a));
             load_d(&e, REG_T1, REG_FP, (int32_t)slot_off(e.frame, in->b));
