@@ -336,8 +336,13 @@ static int mips_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_siz
             e32(&e, MIPS_LW(29, MIPS_REG_T1, (uint16_t)slot_off(in->b)));
             uint32_t done = internal_label(&e);
             switch (in->op) {
-            case MIR_LT: e32(&e, mips_slt(MIPS_REG_T0, MIPS_REG_T0, MIPS_REG_T1)); break; /* $t0 = (a < b) */
-            case MIR_GE: e32(&e, mips_slt(MIPS_REG_T0, MIPS_REG_T0, MIPS_REG_T1)); /* $t0 = (a < b) */
+            case MIR_LT: e32(&e, mips_slt(MIPS_REG_T0, MIPS_REG_T1, MIPS_REG_T0)); break; /* $t0 = (a < b) */
+                         /* mips_slt is (rs, rt, rd): rd must be T0, since the
+                          * code below reads the result out of T0. The old
+                          * call passed rd = T1 and rs = rt = T0, so it
+                          * computed (T0 < T0) into T1 and left T0 holding
+                          * the first operand. */
+            case MIR_GE: e32(&e, mips_slt(MIPS_REG_T0, MIPS_REG_T1, MIPS_REG_T0)); /* $t0 = (a < b) */
                          /* negate: $t0 = 1 - $t0 */
                          e32(&e, mips_addui(0, MIPS_REG_T2, 1)); /* $t2 = 1 */
                          e32(&e, mips_sub(MIPS_REG_T2, MIPS_REG_T0, MIPS_REG_T0)); break; /* $t0 = 1 - $t0 */
