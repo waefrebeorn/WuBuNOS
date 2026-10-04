@@ -116,7 +116,15 @@ static int64_t vulkan_run(const uint8_t *code, size_t size, int64_t arg)
         return rr;
     }
     f = popen(cmd, "r");
-    if (!f) return 0;
+    /* A missing runner used to return 0 here, which is indistinguishable
+     * from "the shader computed 0" -- that silence is what hid this bug for
+     * as long as the Vulkan path was broken. Fail loudly instead. Build the
+     * runner with `make vk_run`. */
+    if (!f) {
+        fprintf(stderr, "[vk] cannot exec: %s\n"
+                        "     build the runner with `make vk_run`\n", cmd);
+        return -1;  /* -1 = execution failure, distinct from a 0 result */
+    }
     long long r = 0;
     /* dzn driver emits WARNING lines to stdout before the result number; skip non-numeric */
     while (!feof(f) && !ferror(f)) {
@@ -124,10 +132,15 @@ static int64_t vulkan_run(const uint8_t *code, size_t size, int64_t arg)
         if (c2=='-' || c2=='+' || (c2>='0' && c2<='9')) { ungetc(c2, f); break; }
     }
     if (fscanf(f, "%lld", &r) != 1) {
-        /* Surface vk_run/device errors instead of swallowing them as 0. */
-        char *line = NULL; size_t sz = 0;
-        if (getline(&line, &sz, f) > 0) r = -1;  /* -1 = execution failure */
-        free(line);
+        /* No number came back. That means the runner failed to start (it is
+         * spawned through a shell, so popen() itself succeeds and only the
+         * child reports "not found") or the device errored. Either way this
+         * is an EXECUTION FAILURE, not a zero result -- returning 0 here is
+         * what made every broken Vulkan run look like "the shader answered
+         * 0". Report -1 and say so. */
+        fprintf(stderr, "[vk] no result from runner: %s\n"
+                        "     build it with `make vk_run`\n", cmd);
+        r = -1;
     }
     pclose(f);
     return (int64_t)r;
