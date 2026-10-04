@@ -1235,8 +1235,17 @@ static int ptx_compile(const wubu_mir_prog_t *p, uint8_t **out_code, size_t *out
 
 #ifdef WUBU_HOSTED
     /* 2a. Hosted: compile PTX -> cubin via ptxas (with caching) */
-    const char *ptx_path = "/tmp/wubu_kernel.ptx";
-    const char *cubin_path = "/tmp/wubu_kernel.cubin";
+
+    /* Process-unique scratch paths. These were fixed shared names, so two
+     * concurrent runners (gauntlet forks several) clobbered each other's
+     * PTX and cubin: runner A could load runner B's cubin and silently
+     * report B's result. The in-memory `last_hash` below is per-process, so
+     * it never invalidates across processes either. */
+    char ptx_path_s[128], cubin_path_s[128];
+    snprintf(ptx_path_s, sizeof ptx_path_s, "/tmp/wubu_kernel_%d.ptx", (int)getpid());
+    snprintf(cubin_path_s, sizeof cubin_path_s, "/tmp/wubu_kernel_%d.cubin", (int)getpid());
+    const char *ptx_path   = ptx_path_s;
+    const char *cubin_path = cubin_path_s;
 
     /* Compute simple hash of PTX content to detect changes */
     uint32_t ptx_hash = 0;
@@ -1246,9 +1255,18 @@ static int ptx_compile(const wubu_mir_prog_t *p, uint8_t **out_code, size_t *out
     /* Check if cubin already exists and matches */
     static uint32_t last_hash = 0;
     int need_compile = 1;
-    if (ptx_hash == last_hash) {
+    if (ptx_hash == last_hash && last_hash != 0) {
         FILE *cf = fopen(cubin_path, "rb");
-        if (cf) { fclose(cf); need_compile = 0; }
+        /* Verify the cached cubin is non-empty: a previous run can die after
+         * creating the file but before ptxas fills it, and an empty cubin
+         * would then be loaded as if it were valid. */
+        if (cf) {
+            long sz = 0;
+            fseek(cf, 0, SEEK_END);
+            sz = ftell(cf);
+            fclose(cf);
+            if (sz > 0) need_compile = 0;
+        }
     }
 
     if (need_compile) {
@@ -1310,7 +1328,16 @@ static int64_t ptx_run(const uint8_t *code, size_t size, int64_t arg)
     }
 
     /* Write cubin to /tmp */
-    const char *cubin_path = "/tmp/wubu_kernel.cubin";
+    /* Process-unique scratch paths. These were fixed shared names, so two
+     * concurrent runners (gauntlet forks several) clobbered each other's
+     * PTX and cubin: runner A could load runner B's cubin and silently
+     * report B's result. The in-memory `last_hash` below is per-process, so
+     * it never invalidates across processes either. */
+    char ptx_path_s[128], cubin_path_s[128];
+    snprintf(ptx_path_s, sizeof ptx_path_s, "/tmp/wubu_kernel_%d.ptx", (int)getpid());
+    snprintf(cubin_path_s, sizeof cubin_path_s, "/tmp/wubu_kernel_%d.cubin", (int)getpid());
+    const char *ptx_path   = ptx_path_s;
+    const char *cubin_path = cubin_path_s;
     FILE *f = fopen(cubin_path, "wb");
     if (!f) return 0;
     fwrite(code, 1, size, f);
