@@ -402,8 +402,14 @@ uint64_t wubu_sf_f64_mul(uint64_t A, uint64_t B) {
     }
     sf_raw_t a, b; f64_unpack(A, &a); f64_unpack(B, &b);
     sf_raw_t r; r.sign = sign; r.g2 = 0; r.s2 = 0;
-    if (a.m == 0 || b.m == 0) { r.m = 0; r.k = 0;
-        return sf_round(r, 53, F64_BIAS, 1) | (uint64_t)(sign << 63); }
+    /* Zero test on the IEEE bit pattern. An exact power of two has a zero
+     * stored FRACTION but f64_unpack folds in the implicit leading 1, so
+     * m == 0 really does mean the value is zero -- testing the raw bits is
+     * just clearer. */
+    if ((A & ~F64_SIGN) == 0 || (B & ~F64_SIGN) == 0) {
+        r.m = 0; r.k = 0;
+        return sf_round(r, 53, F64_BIAS, 1) | (uint64_t)(sign << 63);
+    }
     /* 53x53 -> 106 bits via 27/26 split */
     uint64_t ah = a.m >> 27, al = a.m & ((1ull << 27) - 1);
     uint64_t bh = b.m >> 27, bl = b.m & ((1ull << 27) - 1);
@@ -412,10 +418,19 @@ uint64_t wubu_sf_f64_mul(uint64_t A, uint64_t B) {
     uint64_t hh = ah * bh;
     uint64_t lo2 = ((lh & ((1ull<<27)-1)) << 27) | (ll & ((1ull<<27)-1));
     uint64_t hi2 = hh + (lh >> 27);
-    int sh = sf_clz64(hi2) - 1;
-    uint64_t comb = (hi2 << 36) | (lo2 >> 18);
-    r.g2 = 0; r.s2 = (lo2 & ((1ull << 18) - 1)) != 0;
-    r.m = comb << sh; r.k = a.k + b.k + 54 - sh;
+    /* ROOT CAUSE: the product is 106 bits and the old code did
+     *     comb = (hi2 << 36) | (lo2 >> 18);
+     * hi2 is up to 53 bits, so `hi2 << 36` is ~89 bits. Storing that into a
+     * 64-bit word keeps only the LOW 64 bits, which for a normal product are
+     * all zero -- wubu_sf_f64_mul returned 0 for essentially every input.
+     *
+     * The product is exactly  hi2 * 2^54 + lo2, and hi2 is the top 53 bits,
+     * which already fits in uint64_t. Keep hi2 as the significand, carry the
+     * discarded lo2 as the rounding/sticky bit, and leave the exponent
+     * formula (a.k + b.k + 54) untouched. */
+    r.m = hi2;
+    r.k = a.k + b.k + 54;
+    r.s2 = (lo2 != 0);
     norm64(&r.m, &r.k);
     return sf_round(r, 53, F64_BIAS, 1) | (uint64_t)(sign << 63);
 }
