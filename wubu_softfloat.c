@@ -191,7 +191,7 @@ uint32_t wubu_sf_f32_add(uint32_t A, uint32_t B) {
     if (a.m == 0 || b.m == 0) {
         if (a.m != 0) return ((uint32_t)asg << 31) | (uint32_t)(A & ~F32_SIGN);
         if (b.m != 0) return ((uint32_t)bsg << 31) | (uint32_t)(B & ~F32_SIGN);
-        return (uint32_t)((asg == bsg ? asg : 0) << 31);
+        return ((uint32_t)(asg == bsg ? asg : 0) << 31);
     }
     norm64(&a.m, &a.k); norm64(&b.m, &b.k);
     if (a.k != b.k ? (a.k < b.k) : (a.m < b.m)) {
@@ -362,7 +362,7 @@ uint64_t wubu_sf_f64_add(uint64_t A, uint64_t B) {
     if (a.k != b.k ? (a.k < b.k) : (a.m < b.m)) {
         sf_raw_t t = a; a = b; b = t; uint64_t tA = A; A = B; B = tA; int ts = asg; asg = bsg; bsg = ts;
     }
-    if (a.m == 0) return (uint64_t)((asg == bsg ? asg : 0) << 63);
+    if (a.m == 0) return ((uint64_t)(asg == bsg ? asg : 0) << 63);
     int same = (asg == bsg);
     int32_t dk = a.k - b.k;
     uint64_t bm = b.m; int b_guard = 0, b_stick = 0;
