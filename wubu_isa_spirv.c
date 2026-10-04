@@ -110,7 +110,7 @@ typedef struct {
     uint32_t t_fn_void, t_res_u64;
     uint32_t t_v2i32, t_f32, t_f64;
     uint32_t c_zero32, len_mem_cells;
-    uint32_t c_zero64, c_one64;
+    uint32_t c_zero64, c_one64, c_three64;
     uint32_t var_ssbo, var_push, var_gid;
     uint32_t fn_main, lbl_entry;
 } S;
@@ -355,6 +355,7 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
     s.c_i32_sem   = nid(&s);
     s.c_zero64    = nid(&s);
     s.c_one64     = nid(&s);
+    s.c_three64   = nid(&s);
     s.var_ssbo    = nid(&s);
     s.var_push    = nid(&s);
     s.var_gid     = nid(&s);
@@ -535,6 +536,11 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
       sb_word(&s.bin,s.t_u64); sb_word(&s.bin,s.c_zero64); sb_word(&s.bin,0); sb_word(&s.bin,0);}
     { sb_word(&s.bin,(uint32_t)(5<<16)|OP_CONSTANT);
       sb_word(&s.bin,s.t_u64); sb_word(&s.bin,s.c_one64); sb_word(&s.bin,1); sb_word(&s.bin,0);}
+    /* cell width in bytes: MIR addresses are BYTE offsets (see the x86-64
+     * backend's "No shl rax,3 -- addresses are byte offsets"), so a MIR
+     * address must be shifted right by 3 to become an SSBO element index. */
+    { sb_word(&s.bin,(uint32_t)(5<<16)|OP_CONSTANT);
+      sb_word(&s.bin,s.t_u64); sb_word(&s.bin,s.c_three64); sb_word(&s.bin,3); sb_word(&s.bin,0);}
     /* remaining cmts[] constants */
     for (size_t q = 0; q < ncm; q++) {
         uint32_t lo = (uint32_t)(uint64_t)cmts[q].imm;
@@ -1000,9 +1006,19 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
         }
         case MIR_LOAD: {
             /* MIR cell i -> SSBO element i+1 (cell 0 = return slot).
-             * idx64 = a + 1; val = load(ptr_u64); dst = val */
+             * idx64 = (a >> 3) + 1; val = load(ptr_u64); dst = val
+             * The >>3 is REQUIRED: MIR addresses are BYTE offsets into the
+             * interpreter's cell array, so address 8 is cell 1. Indexing the
+             * SSBO with the raw byte address made every load read 8 cells too
+             * far -- which is why memory-using programs returned 0 while the
+             * straight-line arithmetic cases (no MIR_LOAD) passed. Matches
+             * wubu_isa_x86_64.c:1632 ("No shl rax,3 -- addresses are byte
+             * offsets") and wubu_mir_interp's mem_load64(mem, byte_addr). */
+            uint32_t cell = nid(&s);
+            { uint32_t o[]={s.t_u64,cell,VRMAP_GET(in->a),s.c_three64};
+              spv_ins(&s.bin,OPCODE_SHIFT_RIGHT_LOGICAL,o,4); }
             uint32_t idx64 = nid(&s);
-            { uint32_t o[]={s.t_u64,idx64,VRMAP_GET(in->a),s.c_one64};
+            { uint32_t o[]={s.t_u64,idx64,cell,s.c_one64};
               spv_ins(&s.bin,OPCODE_IADD,o,4); }
             uint32_t uptr = nid(&s);
             { uint32_t o[]={s.t_res_u64,uptr,s.var_ssbo,s.c_zero32,idx64};
@@ -1013,8 +1029,12 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n)
             break;
         }
         case MIR_STORE: {
+            /* Same byte-offset -> cell conversion as MIR_LOAD. */
+            uint32_t cell = nid(&s);
+            { uint32_t o[]={s.t_u64,cell,VRMAP_GET(in->a),s.c_three64};
+              spv_ins(&s.bin,OPCODE_SHIFT_RIGHT_LOGICAL,o,4); }
             uint32_t idx64 = nid(&s);
-            { uint32_t o[]={s.t_u64,idx64,VRMAP_GET(in->a),s.c_one64};
+            { uint32_t o[]={s.t_u64,idx64,cell,s.c_one64};
               spv_ins(&s.bin,OPCODE_IADD,o,4); }
             uint32_t uptr = nid(&s);
             { uint32_t o[]={s.t_res_u64,uptr,s.var_ssbo,s.c_zero32,idx64};
