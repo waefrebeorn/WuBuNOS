@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdarg.h>
+#include <unistd.h>
 
 typedef struct {
     char *text;
@@ -165,8 +166,19 @@ static char *emit_tgemm_kernel(int M, int N, int K) {
 
 /* Compile PTX to cubin (cached) */
 static int compile_tgemm_cubin(int M, int N, int K, uint8_t **out_code, size_t *out_size) {
-    const char *cubin_path = "/tmp/wubu_tgemm.cubin";
-    const char *ptx_path = "/tmp/wubu_tgemm.ptx";
+    /* Per-process paths. A fixed "/tmp/wubu_tgemm.cubin" let two concurrent
+     * processes overwrite each other's cubin, so one ran the other's kernel.
+     * Same defect class as the PTX kernel race (b5f7c0a) and the Vulkan SPIR-V
+     * race (3ef6ab1). The kernel is data-independent -- M/N/K are runtime
+     * arguments -- so one compile per process is correct. */
+    static char cubin_path_s[128];
+    static char ptx_path_s[128];
+    if (!cubin_path_s[0]) {
+        snprintf(cubin_path_s, sizeof cubin_path_s, "/tmp/wubu_tgemm_%d.cubin", (int)getpid());
+        snprintf(ptx_path_s, sizeof ptx_path_s, "/tmp/wubu_tgemm_%d.ptx", (int)getpid());
+    }
+    const char *cubin_path = cubin_path_s;
+    const char *ptx_path = ptx_path_s;
 
     static int cached = 0;
     if (!cached) {
@@ -180,8 +192,8 @@ static int compile_tgemm_cubin(int M, int N, int K, uint8_t **out_code, size_t *
 
         char cmd[512];
         snprintf(cmd, sizeof(cmd),
-                 "ptxas -arch=sm_89 -O2 %s -o %s 2>/tmp/ptxas_tgemm.log",
-                 ptx_path, cubin_path);
+                 "ptxas -arch=sm_89 -O2 %s -o %s 2>/tmp/ptxas_tgemm_%d.log",
+                 ptx_path, cubin_path, (int)getpid());
         int rc = system(cmd);
         if (rc != 0) {
             fprintf(stderr, "[ptx_tgemm] ptxas failed (rc=%d)\n", rc);
