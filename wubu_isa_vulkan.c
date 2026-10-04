@@ -8,8 +8,8 @@
  * old recycled hardware, llvmpipe CPU fallback.
  *
  * ABI with vk_run:
- *   compile() writes SPIR-V to /tmp/wubu_kernel.spv (plus returns bytes)
- *   run()     invokes vk_run <dev> /tmp/wubu_kernel.spv <arg> <cells>
+ *   compile() writes SPIR-V to a per-pid, per-module path (and returns bytes)
+ *   run()     invokes vk_run <dev> <that same path> <arg> <cells>
  *             and parses the decimal result.
  *
  * C11, self-contained.
@@ -25,6 +25,19 @@ int wubu_spirv_emit(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_n);
 
 static uint32_t g_cells = 17;
 static uint32_t g_result_cell = 0;  /* SSBO cell holding the return value */
+
+/* Same simple content hash the PTX backend uses, so a module change is
+ * detected and two concurrent compiles never share a path. */
+static unsigned vk_hash(const uint8_t *b, size_t n)
+{
+    unsigned h = 2166136261u;
+    for (size_t i = 0; i < n; i++) { h ^= b[i]; h *= 16777619u; }
+    return h;
+}
+
+/* Set by vulkan_compile, read by vulkan_run: the exact SPIR-V file this
+ * module was just written to. */
+static char *g_spvpath = NULL;
 
 static int vulkan_compile(const wubu_mir_prog_t *p,
                           uint8_t **out_code, size_t *out_size)
@@ -47,8 +60,17 @@ static int vulkan_compile(const wubu_mir_prog_t *p,
       g_cells = (uint32_t)((p->total_mem > 0 ? p->total_mem : 1) + 1 + (has_tg?gx_*64*4+1:0));
       g_result_cell = has_tg ? (uint32_t)p->total_mem : 0; }
 
-    /* persist for the runner */
-    FILE *f = fopen("/tmp/wubu_kernel.spv", "wb");
+    /* Persist for the runner. The path must be unique per process AND per
+     * module: a fixed "/tmp/wubu_kernel.spv" let two concurrent Vulkan
+     * compiles overwrite each other's SPIR-V, so one backend would execute
+     * the OTHER one's shader. (Same defect class as the PTX cubin, fixed in
+     * b5f7c0a.) vulkan_run() re-derives the identical path from the same
+     * pid + module bytes. */
+    char spvpath[128];
+    snprintf(spvpath, sizeof spvpath, "/tmp/wubu_kernel_%d_%08x.spv",
+             (int)getpid(), (unsigned)vk_hash(code, n));
+    g_spvpath = strdup(spvpath);
+    FILE *f = fopen(spvpath, "wb");
     if (!f) { free(code); return -1; }
     fwrite(code, 1, n, f);
     fclose(f);
@@ -85,10 +107,17 @@ static int64_t vulkan_run(const uint8_t *code, size_t size, int64_t arg)
             have_img = 1;
         }
     }
+    /* vulkan_run() must use the SAME per-process path vulkan_compile wrote.
+     * Running a module that was never compiled used to mean running whatever
+     * another process had left in the shared /tmp/wubu_kernel.spv. */
+    if (!g_spvpath) {
+        fprintf(stderr, "[vulkan] run() before compile(); build with make vk_run\n");
+        return -1;
+    }
     snprintf(cmd, sizeof(cmd),
-             "/tmp/vk_run %s /tmp/wubu_kernel.spv %lld %u %s",
+             "/tmp/vk_run %s %s %lld %u %s",
              getenv("WUBU_VK_DEVICE") ? getenv("WUBU_VK_DEVICE") : "0",
-             (long long)arg, cells, have_img ? imgpath : "none");
+             g_spvpath, (long long)arg, cells, have_img ? imgpath : "none");
     if (getenv("DBG_VK")) fprintf(stderr, "[vk] cmd: %s\n", cmd);
     FILE *f = NULL;
     unsigned gx_run = 1;
