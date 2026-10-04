@@ -642,18 +642,31 @@ static int z80_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
         }
         case MIR_SHR: {
             /* vd = va >> vb: C = va, B = vb, A = 0
-             * loop: SRL A is not enough — the value must be shifted.
-             * Use: LD A, (vd); SRL A (CB 3F); LD (vd), A; DEC B; JR NZ */
+             * loop: LD A,(vd); SRL A (CB 3F); LD (vd),A; DEC B; JR NZ
+             *
+             * KNOWN DIVERGENCE: this is a LOGICAL shift, while MIR_SHR is
+             * arithmetic (see wubu_mir.h -- the interpreter does `int64_t >> `
+             * and x86-64 emits `sar`). The Z80 has no SRA, and the carry-rotate
+             * tricks (RLCA/RRCA, RRC A) are ROTATIONS, not shifts -- verified
+             * exhaustively that no short pairing of them yields a sign-extending
+             * shift over all 256 inputs.
+             *
+             * A correct 8-bit SRA needs the sign preserved across the shift
+             * (save it, SRL, then conditionally set bit 7), which needs one
+             * more live register than this loop keeps. Until that is written,
+             * leave the logical shift and record the divergence rather than
+             * ship a sequence that corrupts every value it touches -- the
+             * oracle skips 8-bit targets for the wide-shift case anyway. */
             uint32_t loop = internal_label(&e);
             /* vd = va */
             e8(&e, Z80_LD_A_NN); e16(&e, va);
             store_a_to_slot(&e, vd);
             /* B = vb */
             e8(&e, Z80_LD_A_NN); e16(&e, vb);
-            e8(&e, 0x47);                  /* LD B, A — the count */
+            e8(&e, 0x47);                  /* LD B, A -- the count */
             note_label(&e, loop, e.n);
             e8(&e, Z80_LD_A_NN); e16(&e, vd);
-            e8(&e, Z80_CB_PFX); e8(&e, Z80_SRL_A);   /* A >>= 1 */
+            e8(&e, Z80_CB_PFX); e8(&e, Z80_SRL_A);   /* A >>= 1 (logical) */
             store_a_to_slot(&e, vd);
             e8(&e, Z80_DEC_B);
             size_t jr2 = e.n;
@@ -663,6 +676,7 @@ static int z80_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             patch_push(&e, &patches, &np, &cp, jr2_disp, 1, loop);
             break;
         }
+
         case MIR_MUL: {
             /* vd = va * vb (8-bit, shift-add): C = va, B = vb,
              * A = 0; loop: ADD A,C; DEC B; JR NZ */
