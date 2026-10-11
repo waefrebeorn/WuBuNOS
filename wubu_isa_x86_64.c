@@ -1305,8 +1305,12 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             int sa = VR_ENC_SAFE(in->a);
             int sb = VR_ENC_SAFE(in->b);
             int sd = VR_ENC_SAFE(in->dst);
-            /* rdi = prog.mem (embedded pointer) */
-            rex(&e,1,0,0,0); e8(&e, 0xBF); e64(&e, (uint64_t)prog->mem);
+            /* rdi = mem base: rbx holds the RUNTIME base (loaded from
+             * wubu_jit_mem_ptr in the prologue). prog->mem is NULL at
+             * compile time (the test passes its calloc'd mem at run time
+             * via x86_run's third arg) — embedding it made every T_GEMM
+             * helper call dereference NULL. */
+            rex(&e,1,0,0,0); e8(&e, 0x89); e8(&e, 0xDF);  /* mov rdi, rbx */
             /* rsi = A (vr value / slot index) */
             /* rsi = A (x86 enc 6) */
             if (sa>=0) { rex(&e,1,reg_needs_rex(sa),0,0); e8(&e,0x89); e8(&e,(uint8_t)(0xC0|((sa&7)<<3)|6)); }
@@ -1323,7 +1327,14 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
              * 41 B8 is NOT matched by shrink_movabs. Safe. */
             e8(&e,0x41); e8(&e,0xB8); e32(&e,(uint32_t)M);     /* r8d = M */
             e8(&e,0x41); e8(&e,0xB9); e32(&e,(uint32_t)N);     /* r9d = N */
-            /* push K (7th arg, on stack): 6A ib (imm8) if K<128, else 68 id */
+            /* SysV: rsp must be 16-byte aligned AT the call, and the 7th
+             * arg (K) must sit at [rsp+8] at callee entry. The frame
+             * leaves rsp ≡ 0 mod 16 at call sites, so: sub 8 first
+             * (≡ 8), THEN push K (≡ 0) — K lands on top at [rsp+8]
+             * once the call pushes the return address. Padding ABOVE
+             * the arg (push K; sub 8) would leave K at [rsp+16] and
+             * the callee reads garbage as K. */
+            e8(&e,0x48); e8(&e,0x83); e8(&e,0xEC); e8(&e,0x08);  /* sub rsp,8 */
             if ((uint32_t)K < 0x80u)     { e8(&e,0x6A); e8(&e,(uint8_t)K); }
             else                          { e8(&e,0x68); e32(&e,(uint32_t)K); }
             /* movabs r11, &wubu_tgemm_scalar (REX.WB + B8 = 49 BB imm64).
@@ -1332,8 +1343,8 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             rex(&e,1,0,0,1); e8(&e,0xBB); e64(&e,(uint64_t)&wubu_tgemm_parallel);
             /* call r11 (FF D3 with REX.B → 41 FF D3; without 0x41 it decodes as call rbx!) */
             e8(&e,0x41); e8(&e,0xFF); e8(&e,0xD3);
-            /* add rsp,8 (restore stack for K arg) */
-            e8(&e,0x48); e8(&e,0x83); e8(&e,0xC4); e8(&e,0x08);
+            /* add rsp,16 (K arg + alignment pad) */
+            e8(&e,0x48); e8(&e,0x83); e8(&e,0xC4); e8(&e,0x10);
             break;
         }
         case MIR_T_GEMM_F32: {
@@ -1345,8 +1356,8 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             int sa = VR_ENC_SAFE(in->a);
             int sb = VR_ENC_SAFE(in->b);
             int sd = VR_ENC_SAFE(in->dst);
-            /* rdi = prog->mem (base of MIR memory) */
-            rex(&e,1,0,0,0); e8(&e, 0xBF); e64(&e, (uint64_t)prog->mem);
+            /* rdi = mem base: rbx holds the runtime base (see MIR_T_GEMM note) */
+            rex(&e,1,0,0,0); e8(&e, 0x89); e8(&e, 0xDF);  /* mov rdi, rbx */
             /* rsi = A (x86 enc 6) */
             if (sa>=0) { rex(&e,1,reg_needs_rex(sa),0,0); e8(&e,0x89); e8(&e,(uint8_t)(0xC0|((sa&7)<<3)|6)); }
             else emit_load_rbp(&e,6,spill_off(assign, assign_count, &e, in->a));
@@ -1610,9 +1621,10 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
                     if (v0h >= 0) emit_mov_vr_from_rax(&e, v0h);
                     else emit_store_rbp(&e, spill_off(assign, assign_count, &e, 0), 0);
                 }
-                e8(&e, 0xC9);   /* leave — restore rsp/rbp (was missing: ret with
-                                 * rsp still inside the frame returned to garbage) */
-                e8(&e, 0x5B);   /* pop rbx — restore callee-saved rbx */
+                /* rsp untouched: the callee shares the caller's frame. A
+                 * leave/pop here would double-unwind it (see a60c02d revert
+                 * note) — the caller's epilogue and the register pops around
+                 * the call then run on a stack 16 bytes too high. */
                 e8(&e, 0xC3);   /* ret */
                 break;
             }
@@ -1698,8 +1710,8 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
         case MIR_T_CLAMP: {
             /* Tensor ops: emit call to wubu_tensor_dispatch(op, mem, a, b, dst, N).
              * Use same pattern as T_GEMM: movabs r11, &wubu_tensor_dispatch; call r11. */
-            /* rdi = prog.mem (embedded pointer) */
-            rex(&e,1,0,0,0); e8(&e, 0xBF); e64(&e, (uint64_t)prog->mem);
+            /* rdi = mem base: rbx holds the runtime base (see MIR_T_GEMM note) */
+            rex(&e,1,0,0,0); e8(&e, 0x89); e8(&e, 0xDF);  /* mov rdi, rbx */
             /* rsi = A (x86 enc 6) */
             int sa = VR_ENC_SAFE(in->a);
             if (sa >= 0) { rex(&e,1,reg_needs_rex(sa),0,0); e8(&e,0x89); e8(&e,(uint8_t)(0xC0|((sa&7)<<3)|6)); }
@@ -1842,15 +1854,15 @@ static int64_t x86_run(const uint8_t *code, size_t size, int64_t arg) {
     /* Set host callbacks for runtime functions */
     wubu_jit_exit_fn = exit;
 
-    /* Patch the emitted code: scan entire buffer for movabs rsi, imm64
-     * (the JIT mem base embedded at compile time) and replace with
-     * mov rsi, rbx (which holds the runtime mem base from SysV arg rdi). */
-    uint8_t *patch = (uint8_t *)exec;
-    for (size_t i = 0; i + 9 < size; i++) {
-        if (patch[i] == 0x48 && patch[i+1] == 0xBE) {
-            patch[i+1] = 0x89; patch[i+2] = 0xDE; /* mov rsi, rbx */
-        }
-    }
+    /* NOTE: a legacy patch here scanned the buffer for `48 BE` (movabs
+     * rsi, imm64) and rewrote it to `mov rsi, rbx`. That was a
+     * workaround for the compile-time prog->mem embedding, which the
+     * emitter no longer produces (mem base comes from rbx, loaded in
+     * the prologue). The scan was actively harmful: `48 B8+r` movabs
+     * consts include `48 BE` when a MIR_CONST lands in rsi, and
+     * rewriting that const load to `mov rsi,rbx` fed the mem POINTER
+     * to wubu_tgemm_parallel as the B base, which then wrote wild
+     * addresses and corrupted x86_run's own frame. Removed. */
 
     int64_t (*fn)(void) = (int64_t (*)(void))exec;
     int64_t r = fn();
