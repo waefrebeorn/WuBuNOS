@@ -1,9 +1,17 @@
-#include <omp.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdint.h>
 #include "wubu_tgemm.h"
 #include <immintrin.h>
+#ifdef WUBU_NO_OMP
+/* Serial fallback: used by hosted capture binaries where libgomp's
+ * runtime cannot initialize cleanly. Correct, just not parallel. */
+#define omp_get_max_threads() 1
+#define OMP_DUMMY
+#endif
+#ifndef WUBU_NO_OMP
+#include <omp.h>
+#endif
 
 void tgemm_avx512(int64_t *mem, int64_t A, int64_t B,
                   int64_t C, int M, int N, int K)
@@ -52,7 +60,11 @@ void wubu_tgemm_f32_avx512(const float * __restrict__ A,
 {
     const int MR = 8, NR = 16, KC = 128, NC = 256;
 
+#ifndef WUBU_NO_OMP
     int nthreads = (M * (long long)N * K >= 200000000LL) ? omp_get_max_threads() : 1;
+#else
+    int nthreads = 1;
+#endif
 
     /* Parallelize over (j0,k0) panel pairs for load balance.
      * Linear index jp -> (j0, k0) decomposition. */
