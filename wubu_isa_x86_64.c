@@ -667,10 +667,22 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
     size_t n_patches = 0, cap_patches = 0;
 #define PATCH_PUSH(pos, lbl) x86_patch_push(&patches, &n_patches, &cap_patches, (pos), (lbl))
 
-    /* prologue */
+    /* prologue: push rbp, then all callee-saved regs we clobber, THEN
+     * anchor rbp at the r15 slot. Layout (low→high):
+     *   [rbp-…: spills+frame][r15][r14][r13][r12][rbx][rbp][ret]
+     * rbp points AT the r15 slot; the epilogue does mov rsp,rbp and
+     * pops r15..rbx, then pop rbp, ret. Spills live below rbp, the
+     * pushes above — no overlap. (Anchoring rbp above the pushes with
+     * `leave` pops the wrong slot; see the env-string-jump crash.) */
     e8(&e, 0x55);                      /* push rbp */
     e8(&e, 0x53);                      /* push rbx — we clobber it for the mem base;
                                          * SysV ABI requires the callee to preserve it */
+    e8(&e, 0x41); e8(&e, 0x54);        /* push r12 — the allocator assigns vr homes
+                                         * to r12-r15; the caller may keep live values
+                                         * there across fn(), so save them all */
+    e8(&e, 0x41); e8(&e, 0x55);        /* push r13 */
+    e8(&e, 0x41); e8(&e, 0x56);        /* push r14 */
+    e8(&e, 0x41); e8(&e, 0x57);        /* push r15 */
     rex(&e,1,0,0,0); e8(&e, 0x89); e8(&e, 0xE5);  /* mov rbp, rsp */
     /* rbx = [wubu_jit_mem_ptr] (load mem base from global) */
     rex(&e,1,0,0,0); e8(&e, 0xBB); e64(&e, (uint64_t)&wubu_jit_mem_ptr); /* movabs rbx, &wubu_jit_mem_ptr */
@@ -1607,9 +1619,20 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
 
         case MIR_RET: case MIR_FRET: {
             if (x86_in_func_body(prog, i)) {
-                /* callee return under the flat-register model: park the value
-                 * in vr0's home (v0 == the call result), then hardware `ret`
-                 * pops the call-pushed return address. rsp untouched. */
+                /* Which function does this RET belong to? */
+                int ret_func = -1;
+                for (int f = 0; f < prog->n_funcs; f++)
+                    if (i >= (size_t)prog->funcs[f].start && i < (size_t)prog->funcs[f].end)
+                        { ret_func = f; break; }
+                /* A function entered via the entry trampoline `jmp rel32`
+                 * (funcs[0] when funcs[0].start == 0, i.e. entry_jmp_pos != 0)
+                 * OWNS fn()'s frame — no return address was pushed for it,
+                 * so its RET must run the full epilogue (leave; pop rbx;
+                 * ret) to unwind to x86_run. A bare ret there pops a frame
+                 * DATA slot as the return address and jumps into the
+                 * environment strings on the stack. Functions entered via
+                 * MIR_CALL are callees: bare ret, caller tears down. */
+                int owns_frame = (ret_func == 0 && entry_jmp_pos != 0);
                 int sret = VR_ENC_SAFE(in->a);
                 int v0h  = VR_ENC_SAFE(0);
                 if (sret >= 0 && v0h >= 0) {
@@ -1621,11 +1644,22 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
                     if (v0h >= 0) emit_mov_vr_from_rax(&e, v0h);
                     else emit_store_rbp(&e, spill_off(assign, assign_count, &e, 0), 0);
                 }
-                /* rsp untouched: the callee shares the caller's frame. A
-                 * leave/pop here would double-unwind it (see a60c02d revert
-                 * note) — the caller's epilogue and the register pops around
-                 * the call then run on a stack 16 bytes too high. */
-                e8(&e, 0xC3);   /* ret */
+                if (owns_frame) {
+                    e8(&e, 0x48); e8(&e, 0x89); e8(&e, 0xEC);  /* mov rsp,rbp */
+                    e8(&e, 0x41); e8(&e, 0x5F);  /* pop r15 */
+                    e8(&e, 0x41); e8(&e, 0x5E);  /* pop r14 */
+                    e8(&e, 0x41); e8(&e, 0x5D);  /* pop r13 */
+                    e8(&e, 0x41); e8(&e, 0x5C);  /* pop r12 */
+                    e8(&e, 0x5B);   /* pop rbx */
+                    e8(&e, 0x5D);   /* pop rbp */
+                    e8(&e, 0xC3);   /* ret */
+                } else {
+                    /* rsp untouched: the callee shares the caller's frame. A
+                     * leave/pop here would double-unwind it (see 560d0ce) —
+                     * the caller's epilogue and the register pops around the
+                     * call then run on a stack 16 bytes too high. */
+                    e8(&e, 0xC3);   /* ret */
+                }
                 break;
             }
             /* If result is already in rax (lookahead skip), don't reload */
@@ -1635,8 +1669,13 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
                 else emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
             }
             result_in_rax = 0;
-            e8(&e, 0xC9);  /* leave (mov rsp,rbp; pop rbp) */
-            e8(&e, 0x5B);  /* pop rbx — restore the caller's callee-saved rbx */
+            e8(&e, 0x48); e8(&e, 0x89); e8(&e, 0xEC);  /* mov rsp,rbp */
+            e8(&e, 0x41); e8(&e, 0x5F);  /* pop r15 */
+            e8(&e, 0x41); e8(&e, 0x5E);  /* pop r14 */
+            e8(&e, 0x41); e8(&e, 0x5D);  /* pop r13 */
+            e8(&e, 0x41); e8(&e, 0x5C);  /* pop r12 */
+            e8(&e, 0x5B);  /* pop rbx */
+            e8(&e, 0x5D);  /* pop rbp */
             e8(&e, 0xC3);  /* ret */
             break;
         }
@@ -1740,7 +1779,16 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
     }
 
     /* fallback ret */
-    if (e.n == 0 || e.code[e.n-1] != 0xC3) { e8(&e, 0xC9); e8(&e, 0xC3); }
+    if (e.n == 0 || e.code[e.n-1] != 0xC3) {
+        e8(&e, 0x48); e8(&e, 0x89); e8(&e, 0xEC);  /* mov rsp,rbp */
+        e8(&e, 0x41); e8(&e, 0x5F);  /* pop r15 */
+        e8(&e, 0x41); e8(&e, 0x5E);  /* pop r14 */
+        e8(&e, 0x41); e8(&e, 0x5D);  /* pop r13 */
+        e8(&e, 0x41); e8(&e, 0x5C);  /* pop r12 */
+        e8(&e, 0x5B);
+        e8(&e, 0x5D);   /* pop rbp */
+        e8(&e, 0xC3);
+    }
 
     /* patch jumps */
     if (getenv("WUBU_CALL_DEBUG"))
