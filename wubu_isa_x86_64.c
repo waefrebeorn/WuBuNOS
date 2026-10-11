@@ -669,6 +669,8 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
 
     /* prologue */
     e8(&e, 0x55);                      /* push rbp */
+    e8(&e, 0x53);                      /* push rbx — we clobber it for the mem base;
+                                         * SysV ABI requires the callee to preserve it */
     rex(&e,1,0,0,0); e8(&e, 0x89); e8(&e, 0xE5);  /* mov rbp, rsp */
     /* rbx = [wubu_jit_mem_ptr] (load mem base from global) */
     rex(&e,1,0,0,0); e8(&e, 0xBB); e64(&e, (uint64_t)&wubu_jit_mem_ptr); /* movabs rbx, &wubu_jit_mem_ptr */
@@ -1608,6 +1610,9 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
                     if (v0h >= 0) emit_mov_vr_from_rax(&e, v0h);
                     else emit_store_rbp(&e, spill_off(assign, assign_count, &e, 0), 0);
                 }
+                e8(&e, 0xC9);   /* leave — restore rsp/rbp (was missing: ret with
+                                 * rsp still inside the frame returned to garbage) */
+                e8(&e, 0x5B);   /* pop rbx — restore callee-saved rbx */
                 e8(&e, 0xC3);   /* ret */
                 break;
             }
@@ -1618,7 +1623,8 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
                 else emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
             }
             result_in_rax = 0;
-            e8(&e, 0xC9);  /* leave */
+            e8(&e, 0xC9);  /* leave (mov rsp,rbp; pop rbp) */
+            e8(&e, 0x5B);  /* pop rbx — restore the caller's callee-saved rbx */
             e8(&e, 0xC3);  /* ret */
             break;
         }

@@ -17,6 +17,15 @@ OS_ROOT ?= /home/wubu/wubuos/src
 CFLAGS  = -O3 -std=c11 -D_POSIX_C_SOURCE=200809L -DWUBU_HOSTED \
           -march=native -mavx2 -mfma -frename-registers -funroll-loops \
           -include wubu_gnu_compat.h -I. -I$(OS_ROOT)/jit -I$(OS_ROOT)/runtime -fopenmp
+
+# The JIT runtime (wubu_isa_x86_64.c x86_run + the emitter) is miscompiled by
+# the -march=native -mavx2 -mfma auto-vectorizer: 48 x86-64 gauntlet tests
+# SIGSEGV inside the JIT'd code when run in the forked per-test grandchildren
+# (the same bytes pass in-process and under gdb) — the same miscompile family
+# as the documented clock_gettime/-funroll-loops bug. Scrub the arch+vector
+# flags for the gauntlet_runner link only; the rest of the build keeps them.
+GAUNTLET_CFLAGS = -O2 -std=c11 -D_POSIX_C_SOURCE=200809L -DWUBU_HOSTED \
+          -include wubu_gnu_compat.h -I. -I$(OS_ROOT)/jit -I$(OS_ROOT)/runtime -fopenmp
 LDFLAGS = -lm
 
 # ---- Source groups ----
@@ -89,7 +98,7 @@ test_mir_opt: $(MIR) wubu_tgemm_avx512.o $(ISA) wubu_isa_vulkan.c wubu_isa_spirv
 
 # Universal test gauntlet (needs full JIT runtime — see OS Makefile for canonical build)
 gauntlet_runner: $(FRONT) $(MIR) wubu_tgemm_avx512.o $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) $(JIT_SRC) $(GAUN) jit_stubs_arm64.c $(OS_ROOT)/runtime/wubu_spawn.c
-	$(CC) $(CFLAGS) -I. -Itest_gauntlet $^ $(LDFLAGS) -o gauntlet_runner
+	$(CC) $(GAUNTLET_CFLAGS) -I. -Itest_gauntlet $^ $(LDFLAGS) -o gauntlet_runner
 
 # Direct gauntlet (no forking, runs tests in parent process)
 gauntlet_direct: test_gauntlet_direct.c $(FRONT) $(MIR) wubu_tgemm_avx512.o $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) $(JIT_SRC) jit_stubs_arm64.c $(OS_ROOT)/runtime/wubu_spawn.c $(wildcard test_gauntlet/suites/gauntlet_gcc_*.c) $(wildcard test_gauntlet/suites/gauntlet_fujitsu.c) $(wildcard test_gauntlet/suites/gauntlet_extern_*.c) $(wildcard test_gauntlet/suites/gauntlet_c_testsuite.c) $(wildcard test_gauntlet/suites/gauntlet_llvm.c) $(wildcard test_gauntlet/suites/gauntlet_lacc.c)
