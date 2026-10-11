@@ -52,6 +52,7 @@ typedef struct {
     int member_bit_widths[MAX_MEMBERS];    /* bit field width (0 = not bit field) */
     int member_bit_offsets[MAX_MEMBERS];   /* bit offset within byte */
     int member_is_unsigned[MAX_MEMBERS];
+    int member_is_ptr[MAX_MEMBERS];       /* 1 if member type is a pointer */
     char member_type_names[MAX_MEMBERS][HD_MAX_IDENT_LEN]; /* struct type name if member is struct */
     int n_members;
     int total_size;
@@ -844,6 +845,24 @@ static int mir_index_stride(HDMirGen *g, const HDASTNode *n) {
 }
 static wubu_vr_t mir_lvalue_addr(HDMirGen *g, const HDASTNode *n); /* forward decl */
 
+/* True if the DOT/MEMBER/ARROW node names a member whose type is a pointer
+ * (so the member's cell holds a pointer VALUE that must be loaded before
+ * indexing or dereferencing). */
+static bool mir_dot_is_ptr_member(HDMirGen *g, const HDASTNode *n) {
+    if (!n || !n->ident[0]) return false;
+    const char *varname = n->left && n->left->kind == HD_AST_IDENT ? n->left->ident : NULL;
+    if (!varname) return false;
+    const char *struct_type = mir_find_var_struct_name(g, varname);
+    if (!struct_type || !struct_type[0]) return false;
+    mir_struct_t *st = mir_find_struct(g, struct_type);
+    if (!st) return false;
+    for (int mi = 0; mi < st->n_members; mi++) {
+        if (strcmp(st->member_names[mi], n->ident) == 0)
+            return st->member_is_ptr[mi];
+    }
+    return false;
+}
+
 static wubu_vr_t mir_address_of(HDMirGen *g, const HDASTNode *n) {
     if (!n) return 0;
     if (n->kind == HD_AST_STRING_LIT)
@@ -878,6 +897,14 @@ static wubu_vr_t mir_address_of(HDMirGen *g, const HDASTNode *n) {
             idx_node = tmp;
         }
         wubu_vr_t base = mir_address_of(g, base_node);
+        if (base == 0) return 0;
+        /* s.sp[2] / ps->sp[2]: the base is a POINTER MEMBER. mir_address_of
+         * returns the member's ADDRESS; the pointer VALUE must be loaded
+         * first, otherwise the index would offset the member's own slot
+         * (reading s.a[1] instead of *(s.sp+2)). */
+        if ((base_node->kind == HD_AST_DOT || base_node->kind == HD_AST_MEMBER ||
+             base_node->kind == HD_AST_ARROW) && mir_dot_is_ptr_member(g, base_node))
+            base = wubu_mir_load(g->prog, base);
         wubu_vr_t idx  = mir_gen_expr(g, idx_node);
         int stride = mir_index_stride(g, n);
         if (stride > 1) {
@@ -982,8 +1009,20 @@ static wubu_vr_t mir_address_of(HDMirGen *g, const HDASTNode *n) {
         const char *struct_type = NULL;
         if (n->left->kind == HD_AST_IDENT) {
             struct_type = mir_find_var_struct_name(g, n->left->ident);
+            /* A ptr-to-struct param may carry the type on its var record even
+             * when struct_name was not recorded; consult the declared type. */
+            if ((!struct_type || !struct_type[0])) {
+                for (int i = 0; i < g->n_vars; i++) {
+                    if (strcmp(g->vars[i].name, n->left->ident) == 0 && g->vars[i].type &&
+                        g->vars[i].type->kind == HD_TYPE_PTR && g->vars[i].type->base &&
+                        g->vars[i].type->base->name[0]) {
+                        struct_type = g->vars[i].type->base->name;
+                        break;
+                    }
+                }
+            }
         }
-        if (!struct_type && n->left->type && n->left->type->kind == HD_TYPE_PTR && n->left->type->base)
+        if ((!struct_type || !struct_type[0]) && n->left->type && n->left->type->kind == HD_TYPE_PTR && n->left->type->base)
             struct_type = n->left->type->base->name;
         int offset = mir_struct_member_offset(g, struct_type ? struct_type : "", n->ident);
         if (offset < 0) return 0;
@@ -1104,6 +1143,7 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
                     s->member_bit_widths[s->n_members] = n->type->members[i].bit_width;
                     s->member_bit_offsets[s->n_members] = n->type->members[i].bit_offset;
                     s->member_is_unsigned[s->n_members] = (n->type->members[i].type && (n->type->members[i].type->kind == HD_TYPE_U8 || n->type->members[i].type->kind == HD_TYPE_U16 || n->type->members[i].type->kind == HD_TYPE_U32 || n->type->members[i].type->kind == HD_TYPE_U64)) ? 1 : 0;
+                    s->member_is_ptr[s->n_members] = (n->type->members[i].type && n->type->members[i].type->kind == HD_TYPE_PTR) ? 1 : 0;
                     if (n->type->members[i].type && n->type->members[i].type->kind == HD_TYPE_STRUCT && n->type->members[i].type->name[0])
                         strncpy(s->member_type_names[s->n_members], n->type->members[i].type->name, HD_MAX_IDENT_LEN - 1);
                     s->n_members++;
@@ -1174,6 +1214,7 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
                             s->member_names[mi][HD_MAX_IDENT_LEN - 1] = '\0';
                             s->member_offsets[mi] = (int)n->type->members[mi].offset;
                             s->member_is_unsigned[mi] = (n->type->members[mi].type && (n->type->members[mi].type->kind == HD_TYPE_U8 || n->type->members[mi].type->kind == HD_TYPE_U16 || n->type->members[mi].type->kind == HD_TYPE_U32 || n->type->members[mi].type->kind == HD_TYPE_U64)) ? 1 : 0;
+                            s->member_is_ptr[mi] = (n->type->members[mi].type && n->type->members[mi].type->kind == HD_TYPE_PTR) ? 1 : 0;
                             if (n->type->members[mi].type && n->type->members[mi].type->kind == HD_TYPE_STRUCT && n->type->members[mi].type->name[0])
                                 strncpy(s->member_type_names[mi], n->type->members[mi].type->name, HD_MAX_IDENT_LEN - 1);
                             s->n_members++;
@@ -1304,7 +1345,8 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
         }
 extern_done:
         if (n->init) {
-            if (n->is_static && g->in_function_body) {
+            if (n->is_static && g->in_function_body &&
+                n->init->kind != HD_AST_BRACE_INIT) {
                 /* Static local: emit guard check + conditional init.
                  * Allocate a guard variable in global memory.
                  * Emit: if (guard == 0) { *addr = init_val; guard = 1; } */
@@ -1339,7 +1381,29 @@ extern_done:
                 wubu_mir_place_label(g->prog, skip_label);
             } else if (n->init->kind == HD_AST_BRACE_INIT) {
                 /* array/struct initializer list: store each element.
-                 * Designated initializers (HD_AST_DESIG_INIT) store at a specific offset. */
+                 * Designated initializers (HD_AST_DESIG_INIT) store at a specific offset.
+                 *
+                 * A static local with a brace initializer must init ONCE (C
+                 * semantics): emit the same guard variable pattern the scalar
+                 * static path uses, wrapping the per-element stores. Without
+                 * the guard the elements would be re-stored on every call
+                 * (wrong for non-constant initializers) — and before this
+                 * guard existed, static arrays fell into the scalar path
+                 * above and stored 0 instead of their elements. */
+                wubu_vr_t guard_addr = 0;
+                uint32_t skip_label = 0;
+                if (n->is_static && g->in_function_body) {
+                    int64_t guard_cell = (int64_t)(g->prog->total_mem + 1);
+                    int64_t guard_mem = guard_cell * 8;  /* byte address */
+                    g->prog->total_mem = guard_cell;
+                    guard_addr = mir_new_vr(g);
+                    wubu_mir_const_to(g->prog, guard_addr, guard_mem);
+                    wubu_vr_t guard_val = wubu_mir_load(g->prog, guard_addr);
+                    wubu_vr_t zero = wubu_mir_const(g->prog, 0);
+                    wubu_vr_t eq = wubu_mir_binop(g->prog, MIR_EQ, guard_val, zero);
+                    skip_label = wubu_mir_new_label(g->prog);
+                    wubu_mir_jz(g->prog, eq, skip_label);  /* if guard != 0, skip */
+                }
                 int n_elems = (int)n->init->n_args;
                 /* Reallocate if the initializer determines the size */
                 if (arr_size == 0 && n_elems > 0) {
@@ -1459,6 +1523,13 @@ extern_done:
                     wubu_vr_t elem_addr = wubu_mir_binop(g->prog, MIR_ADD, addr,
                                                           wubu_mir_const(g->prog, (int64_t)offset));
                     wubu_mir_store(g->prog, elem_addr, ev);
+                }
+                /* Close the static-init-once guard: set guard = 1 and jump
+                 * target so a second call skips the whole initializer. */
+                if (guard_addr) {
+                    wubu_vr_t one = wubu_mir_const(g->prog, 1);
+                    wubu_mir_store(g->prog, guard_addr, one);
+                    wubu_mir_place_label(g->prog, skip_label);
                 }
             } else {
                 /* For struct variables initialized from another struct/expr,
@@ -3637,6 +3708,17 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             } else {
                 base = mir_address_of(g, base_node);
             }
+        } else if (base_node && (base_node->kind == HD_AST_DOT ||
+                                 base_node->kind == HD_AST_MEMBER ||
+                                 base_node->kind == HD_AST_ARROW)) {
+            /* s.sp[2] / ps->sp[2]: the base is a POINTER MEMBER.
+             * mir_address_of returns the member's ADDRESS; the pointer VALUE
+             * must be loaded first, otherwise the index offsets the member's
+             * own slot (s.sp[2] would read s.a[1] instead of *(s.sp+2)). */
+            base = mir_address_of(g, base_node);
+            if (base == 0) return 0;
+            if (mir_dot_is_ptr_member(g, base_node))
+                base = wubu_mir_load(g->prog, base);
         } else {
             base = mir_address_of(g, base_node);
         }
@@ -4624,6 +4706,7 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
                 s->member_names[s->n_members][HD_MAX_IDENT_LEN - 1] = '\0';
                 s->member_offsets[s->n_members] = (int)t->members[j].offset;
                 s->member_is_unsigned[s->n_members] = (t->members[j].type && (t->members[j].type->kind == HD_TYPE_U8 || t->members[j].type->kind == HD_TYPE_U16 || t->members[j].type->kind == HD_TYPE_U32 || t->members[j].type->kind == HD_TYPE_U64)) ? 1 : 0;
+                s->member_is_ptr[s->n_members] = (t->members[j].type && t->members[j].type->kind == HD_TYPE_PTR) ? 1 : 0;
                 if (t->members[j].type && t->members[j].type->kind == HD_TYPE_STRUCT && t->members[j].type->name[0])
                     strncpy(s->member_type_names[s->n_members], t->members[j].type->name, HD_MAX_IDENT_LEN - 1);
                 s->n_members++;
