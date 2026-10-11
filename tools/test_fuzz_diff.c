@@ -228,8 +228,11 @@ static long fuzz_native_f32(long n)
 {
     long hwdiv = 0;
     const wubu_isa_driver_t *d = wubu_isa_find("x86-64");
-    const wubu_isa_driver_t *gpud = wubu_isa_find("ptx");
-    const wubu_isa_driver_t *vkd = wubu_isa_find("vulkan");
+    /* GPU legs opt-in (see main): the per-seed popen cost on a GPU-less
+     * box made this the slowest fuzz mode by far. */
+    int fuzz_gpu = getenv("WUBU_FUZZ_GPU") != NULL;
+    const wubu_isa_driver_t *gpud = fuzz_gpu ? wubu_isa_find("ptx") : NULL;
+    const wubu_isa_driver_t *vkd = fuzz_gpu ? wubu_isa_find("vulkan") : NULL;
     if (!d) { printf("  native f32: skip (no x86-64 driver)\n"); return 0; }
     long ok=0, bad=0, bf=0;
     for (long s=0; s<n; s++){
@@ -354,8 +357,14 @@ int main(int argc, char **argv){
     long ok=0, mismatch=0, crash=0, buildfail=0;
     const wubu_isa_driver_t *d_a = wubu_isa_find("x86-64");
     const wubu_isa_driver_t *d_b = wubu_isa_find("8086");
-    const wubu_isa_driver_t *d_gpu = wubu_isa_find("ptx");    /* GPU leg (sm_89) */
-    const wubu_isa_driver_t *d_vk  = wubu_isa_find("vulkan"); /* GPU leg (any card) */
+    /* GPU legs are opt-in: each leg popen's an out-of-process runner per
+     * seed (3000 seeds = 3000 runner launches). On a box without a real
+     * GPU (WSL dzn) every launch costs ~1s and the test appears to hang.
+     * Set WUBU_FUZZ_GPU=1 to enable them; the x86-64/8086/interpreter
+     * differential is the core oracle and always runs. */
+    int fuzz_gpu = getenv("WUBU_FUZZ_GPU") != NULL;
+    const wubu_isa_driver_t *d_gpu = fuzz_gpu ? wubu_isa_find("ptx") : NULL;
+    const wubu_isa_driver_t *d_vk  = fuzz_gpu ? wubu_isa_find("vulkan") : NULL;
 
     for (long s = 0; s < n; s++){
         /* (1) parent: build the program */

@@ -150,7 +150,7 @@ test_mir_float: wubu_mir.c wubu_mir_interp.c wubu_mir_opt.c wubu_mir_lower.c \
 # (x86-64 JIT, 8086, interpreter) — finds correctness bugs via differential
 # comparison, no per-case oracle needed.
 test_fuzz_diff: tools/test_fuzz_diff.c $(MIR) wubu_tgemm_avx512.o $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) jit_stub.c jit_stubs_arm64.c
-	$(CC) $(CFLAGS) -I. -o $@ $^ -lm
+	$(CC) $(GAUNTLET_CFLAGS) -I. -o $@ $^ -lm
 	./$@ 3000
 
 # T_GEMM tensor-op: correctness vs naive C + interpreter/interp/JIT timing

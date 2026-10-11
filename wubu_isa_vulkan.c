@@ -82,9 +82,19 @@ static int vulkan_compile(const wubu_mir_prog_t *p,
 
 /* mem cells needed: total_mem + result slot; keep a floor so tiny programs
  * still have an arg cell. Must match emitter's array size exactly. */
+static int vk_gpu_unavailable = -1;  /* -1 = not yet probed, 1 = no GPU */
+
 static int64_t vulkan_run(const uint8_t *code, size_t size, int64_t arg)
 {
     (void)code; (void)size;
+    /* Probe once: an absent runner binary disables the leg immediately;
+     * a present-but-broken runner is disabled after its first failure
+     * (see the rc<0 handling below). The fuzz differential invokes this
+     * per seed — 3000 popen round-trips against a non-functional runner
+     * looked like a hang. */
+    if (vk_gpu_unavailable == -1)
+        vk_gpu_unavailable = (access("/tmp/vk_run", X_OK) == 0) ? 0 : 1;
+    if (vk_gpu_unavailable == 1) return -1;
     uint32_t cells = g_cells;
     char cmd[512];
     /* arg IS the memory pointer (see the ISA run contract). The out-of-process
@@ -150,6 +160,7 @@ static int64_t vulkan_run(const uint8_t *code, size_t size, int64_t arg)
      * as long as the Vulkan path was broken. Fail loudly instead. Build the
      * runner with `make vk_run`. */
     if (!f) {
+        vk_gpu_unavailable = 1;  /* disable for the rest of this process */
         fprintf(stderr, "[vk] cannot exec: %s\n"
                         "     build the runner with `make vk_run`\n", cmd);
         return -1;  /* -1 = execution failure, distinct from a 0 result */
@@ -170,6 +181,7 @@ static int64_t vulkan_run(const uint8_t *code, size_t size, int64_t arg)
         fprintf(stderr, "[vk] no result from runner: %s\n"
                         "     build it with `make vk_run`\n", cmd);
         r = -1;
+        vk_gpu_unavailable = 1;  /* disable for the rest of this process */
     }
     pclose(f);
     return (int64_t)r;
