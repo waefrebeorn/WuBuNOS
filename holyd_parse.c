@@ -505,8 +505,28 @@ static HDType *parse_type(HDParser *p) {
                                 ma->array_size = asz;
                                 extra_type = ma;
                             }
+                            /* Bit-field width on an additional declarator:
+                             * `int a:4, b:4;` — parse `:N` and pack like the
+                             * first declarator's bit-field path. */
+                            int extra_bfw = 0;
+                            if (peek(p) == HD_TOK_COLON) {
+                                advance(p);
+                                if (peek(p) == HD_TOK_INT) { extra_bfw = (int)p->lex->tok.int_val; advance(p); }
+                            }
                             if (comp_kind == HD_TYPE_UNION) {
                                 t->members[t->n_members].offset = 0;
+                            } else if (extra_bfw > 0) {
+                                /* Bit field: pack into current word (cell index). */
+                                int bit_offset = t->bit_pos;
+                                int bits_available = 64 - (bit_offset % 64);
+                                if (extra_bfw > bits_available)
+                                    t->bit_pos = (bit_offset + 63) & ~63;
+                                t->members[t->n_members].bit_offset = t->bit_pos;
+                                t->members[t->n_members].bit_width = extra_bfw;
+                                t->members[t->n_members].offset = t->bit_pos / 64;
+                                t->bit_pos += extra_bfw;
+                                int end_byte = (t->bit_pos + 7) / 8;
+                                if (end_byte > (int)t->size) t->size = end_byte;
                             } else {
                                 t->members[t->n_members].offset = t->size;
                                 size_t _msz = hd_type_size(extra_type);
