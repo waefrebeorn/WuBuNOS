@@ -40,8 +40,16 @@ touch it. Simplest robust version: always spill a call-result VR to its stack sl
 immediately (set `assign[rv].reg = -1`), making every call result memory-resident.
 Correctness first; the regalloc can re-optimize later.
 
-**STATUS (0cd0145):** the regalloc spill (VRs whose live range crosses a MIR_CALL →
-stack slot) is DONE and gated green, but did NOT fix recursion. **Refined root cause
+**MEASURED IMPACT (0cd0145 spill + 6678d05 epilogue):** the regalloc spill
+(VRs whose live range crosses a MIR_CALL → stack slot) dropped the x86-64 gauntlet
+FAIL count from **329 → 142** (a 57% reduction) — validating GAP 1+2 as the
+highest-leverage fix. The epilogue fix (called functions unwind their frame) fixes
+fib(2)=1. Both gated 195/195 + selfhost 155/155 + fuzz_diff 0.
+
+**STATUS:** fib(2) fixed. Remaining: fib(10) and `x=5;y=fib(1)` still fail — a
+residual operand-preservation-across-calls bug (a local/call-result stored before a
+second call is clobbered by it). Next probe: whether the second call's frame or the
+8-reg save/restore overwrites the first operand's spill slot / local store. **Refined root cause
 (traced via MIR dump):** the MIR is correct (`store mem[g]=v46; call fib; mov v65544=v0;
 store mem[h]=v59`). The bug is in x86 codegen of **two sequential calls to the SAME
 function**: the internal-call register save/restore (`wubu_isa_x86_64.c` ~1594,
