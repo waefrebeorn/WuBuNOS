@@ -1499,11 +1499,15 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
          * Use a HIGH VR for the address so it never collides with argument registers
          * (v1..vN) or instruction-index VRs. */
         wubu_vr_t addr = mir_new_vr(g);  /* high VR for the address */
-        int64_t cell_idx = (int64_t)(g->prog->total_mem + 1);
-        /* Align to 8-byte boundary for ABI compliance */
-        if (cell_idx & 1) cell_idx++;
-        int64_t mem_addr = cell_idx * 8;  /* byte address */
-        g->prog->total_mem = cell_idx + (arr_size > 0 ? arr_size : 1) - 1;
+        /* total_mem is a BYTE high-water mark (wubu_mir_alloc advances it in
+         * bytes). Allocate this var in the same byte space so locals and
+         * mir_alloc buffers (string literals, struct-return buffers) never
+         * overlap — a cell/byte unit mismatch here let a struct-return
+         * buffer land on top of a live local. */
+        int64_t mem_addr = (int64_t)(g->prog->total_mem + 1);
+        if (mem_addr & 7) mem_addr += 8 - (mem_addr & 7);   /* 8-byte align */
+        int64_t n_cells_var = (arr_size > 0 ? arr_size : 1);
+        g->prog->total_mem = mem_addr + n_cells_var * 8;
         wubu_mir_const_to(g->prog, addr, mem_addr);  /* addr VR = byte address */
         /* Search from end to find the most recent declaration (shadowing) */
         for (int i = g->n_vars - 1; i >= 0; i--)
@@ -1567,9 +1571,8 @@ extern_done:
                  * Allocate a guard variable in global memory.
                  * Emit: if (guard == 0) { *addr = init_val; guard = 1; } */
                 wubu_vr_t guard_addr = mir_new_vr(g);
-                int64_t guard_cell = (int64_t)(g->prog->total_mem + 1);
-                int64_t guard_mem = guard_cell * 8;  /* byte address */
-                g->prog->total_mem = guard_cell;
+                int64_t guard_mem = (int64_t)(g->prog->total_mem + 8);  /* byte addr, 8-aligned */
+                g->prog->total_mem = guard_mem;
                 wubu_mir_const_to(g->prog, guard_addr, guard_mem);
                 /* Mark var as static with guard */
                 for (int i = g->n_vars - 1; i >= 0; i--)
@@ -1609,9 +1612,8 @@ extern_done:
                 wubu_vr_t guard_addr = 0;
                 uint32_t skip_label = 0;
                 if (n->is_static && g->in_function_body) {
-                    int64_t guard_cell = (int64_t)(g->prog->total_mem + 1);
-                    int64_t guard_mem = guard_cell * 8;  /* byte address */
-                    g->prog->total_mem = guard_cell;
+                    int64_t guard_mem = (int64_t)(g->prog->total_mem + 8);  /* byte addr */
+                    g->prog->total_mem = guard_mem;
                     guard_addr = mir_new_vr(g);
                     wubu_mir_const_to(g->prog, guard_addr, guard_mem);
                     wubu_vr_t guard_val = wubu_mir_load(g->prog, guard_addr);
@@ -1624,7 +1626,7 @@ extern_done:
                 /* Reallocate if the initializer determines the size */
                 if (arr_size == 0 && n_elems > 0) {
                     arr_size = n_elems;
-                    addr = wubu_mir_alloc(g->prog, arr_size);
+                    addr = wubu_mir_alloc(g->prog, (int64_t)arr_size * 8);
                     g->array_elements_pending = n_elems;
                     for (int i = 0; i < g->n_vars; i++)
                         if (strcmp(g->vars[i].name, n->ident) == 0) {
@@ -1821,7 +1823,7 @@ extern_done:
                         /* Reallocate array if size not yet determined */
                         if (arr_size == 0) {
                             arr_size = (int)slen;
-                            addr = wubu_mir_alloc(g->prog, arr_size);
+                            addr = wubu_mir_alloc(g->prog, (int64_t)arr_size * 8);
                             g->array_elements_pending = arr_size;
                             for (int i = 0; i < g->n_vars; i++)
                                 if (strcmp(g->vars[i].name, n->ident) == 0) {
@@ -1921,7 +1923,7 @@ extern_done:
              * declaration. This works for tests that don't have many
              * simultaneous VLAs or deep recursion. */
             int vla_block = 256; /* cells per VLA block */
-            wubu_vr_t base_addr = wubu_mir_alloc(g->prog, (int64_t)vla_block);
+            wubu_vr_t base_addr = wubu_mir_alloc(g->prog, (int64_t)vla_block * 8);
             wubu_mir_const_to(g->prog, addr, (int64_t)base_addr);
             for (int i = g->n_vars - 1; i >= 0; i--)
                 if (strcmp(g->vars[i].name, n->ident) == 0) {
@@ -1962,7 +1964,7 @@ extern_done:
                 }
                 /* Allocate a persistent buffer in the MIR's global memory space.
                  * Unlike stack-allocated locals, this survives the callee's return. */
-                wubu_vr_t buf_addr = wubu_mir_alloc(g->prog, ret_struct_size);
+                wubu_vr_t buf_addr = wubu_mir_alloc(g->prog, (int64_t)ret_struct_size * 8);
                 /* Copy ret_struct_size cells from src_addr to buf_addr. */
                 wubu_vr_t src_base = mir_new_vr(g);
                 wubu_mir_mov_to(g->prog, src_base, src_addr);
@@ -3640,7 +3642,7 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         if (n_cells < 1) n_cells = 1;
 
         /* Allocate memory for the compound literal */
-        wubu_vr_t addr = wubu_mir_alloc(g->prog, n_cells);
+        wubu_vr_t addr = wubu_mir_alloc(g->prog, (int64_t)n_cells * 8);
 
         /* Store initializer elements */
         if (n->type && (n->type->kind == HD_TYPE_STRUCT || n->type->kind == HD_TYPE_UNION)) {
