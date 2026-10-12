@@ -1560,6 +1560,16 @@ extern_done:
                             }
                         }
                         ev = mir_gen_expr(g, elem);
+                        /* Pointer array from string literal: the element must
+                         * hold a real POINTER (mem_base + offset), not the raw
+                         * byte offset mir_gen_expr returns for a STRING_LIT. */
+                        if (n->type && n->type->kind == HD_TYPE_ARRAY &&
+                            n->type->base && n->type->base->kind == HD_TYPE_PTR &&
+                            elem->kind == HD_AST_STRING_LIT) {
+                            wubu_vr_t pv = mir_new_vr(g);
+                            wubu_mir_to_ptr(g->prog, ev, pv);
+                            ev = pv;
+                        }
                         /* Convert initializer value to element type for arrays */
                         if (n->type && n->type->kind == HD_TYPE_ARRAY && n->type->base) {
                             HDType *base = n->type->base;
