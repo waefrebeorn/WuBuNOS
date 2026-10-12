@@ -1476,9 +1476,13 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
             vr = mir_decl_var_unsigned(g, n->ident, is_uns);
         /* Function-pointer initializer: int (*fp)(int)=f; — record the target
          * func_id so fp(args) resolves to an indirect call. */
-        if (n->init && n->init->kind == HD_AST_IDENT && n->init->ident[0]) {
+        if (n->init && ((n->init->kind == HD_AST_IDENT && n->init->ident[0]) ||
+                        (n->init->kind == HD_AST_ADDR && n->init->child &&
+                         n->init->child->kind == HD_AST_IDENT && n->init->child->ident[0]))) {
+            const char *fname = (n->init->kind == HD_AST_IDENT) ? n->init->ident
+                                                                : n->init->child->ident;
             for (int fi = 0; fi < g->prog->n_funcs; fi++)
-                if (strcmp(g->prog->funcs[fi].name, n->init->ident) == 0) {
+                if (strcmp(g->prog->funcs[fi].name, fname) == 0) {
                     for (int i = g->n_vars - 1; i >= 0; i--)
                         if (strcmp(g->vars[i].name, n->ident) == 0) {
                             g->vars[i].fn_ptr_func_id = fi;
@@ -2533,17 +2537,21 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         /* Function pointer assignment: s.fn = add — store func_id in var for later indirect calls.
          * Detects: LHS is a DOT/MEMBER on a struct var OR a plain IDENT
          * function-pointer variable, RHS is a function IDENT. */
-        if (n->right && n->right->kind == HD_AST_IDENT && n->right->ident[0] &&
+        if (n->right && ((n->right->kind == HD_AST_IDENT && n->right->ident[0]) ||
+                         (n->right->kind == HD_AST_ADDR && n->right->child &&
+                          n->right->child->kind == HD_AST_IDENT && n->right->child->ident[0])) &&
             n->left && (n->left->kind == HD_AST_DOT || n->left->kind == HD_AST_MEMBER ||
                         n->left->kind == HD_AST_IDENT)) {
             /* Resolve the root variable and the function */
             const HDASTNode *lhs = n->left;
             while (lhs && (lhs->kind == HD_AST_DOT || lhs->kind == HD_AST_MEMBER))
                 lhs = lhs->left;
+            const char *rfname = (n->right->kind == HD_AST_IDENT) ? n->right->ident
+                                                                  : n->right->child->ident;
             if (lhs && lhs->kind == HD_AST_IDENT && lhs->ident[0]) {
                 int fid = -1;
                 for (int i = 0; i < g->prog->n_funcs; i++)
-                    if (strcmp(g->prog->funcs[i].name, n->right->ident) == 0) { fid = i; break; }
+                    if (strcmp(g->prog->funcs[i].name, rfname) == 0) { fid = i; break; }
                 if (fid >= 0) {
                     for (int i = 0; i < g->n_vars; i++)
                         if (strcmp(g->vars[i].name, lhs->ident) == 0) {
@@ -4299,6 +4307,15 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                     if (strcmp(g->vars[i].name, n->callee->ident) == 0 &&
                         g->vars[i].fn_ptr_func_id >= 0) { fid = g->vars[i].fn_ptr_func_id; break; }
             }
+        }
+        /* Deref call: (*fp)(args) — callee is a DEREF of a function-pointer
+         * IDENT. Resolve via that var's recorded fn_ptr_func_id. */
+        if (fid < 0 && n->callee && n->callee->kind == HD_AST_DEREF &&
+            n->callee->child && n->callee->child->kind == HD_AST_IDENT &&
+            n->callee->child->ident[0]) {
+            for (int i = 0; i < g->n_vars; i++)
+                if (strcmp(g->vars[i].name, n->callee->child->ident) == 0 &&
+                    g->vars[i].fn_ptr_func_id >= 0) { fid = g->vars[i].fn_ptr_func_id; break; }
         }
         /* Function pointer member call: s.fn(args) where callee is a DOT/MEMBER expr.
          * The function pointer was previously stored as a func_id in the var.
