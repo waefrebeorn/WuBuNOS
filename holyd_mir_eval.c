@@ -1359,6 +1359,15 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
                             g->vars[i].array_stride = elem_st->total_size;
                     }
                 }
+                /* Pointer-to-array local: int (*p)[N]. Mark it so p[i]
+                 * decays to a sub-array address (stride N cells) and
+                 * p[i][j] indexes correctly. */
+                if (n->type && n->type->kind == HD_TYPE_PTR && n->type->base &&
+                    n->type->base->kind == HD_TYPE_ARRAY) {
+                    g->vars[i].is_ptr_array = 1;
+                    if (g->vars[i].array_stride < 1)
+                        g->vars[i].array_stride = n->type->base->array_size;
+                }
                 g->vars[i].is_struct = is_struct_var;
                 if (is_struct_var)
                     strncpy(g->vars[i].struct_name, struct_type_name, HD_MAX_IDENT_LEN - 1);
@@ -3740,6 +3749,12 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                         /* DEREF of pointer: yields a value */
                         if (base_node->kind == HD_AST_DEREF && t->kind == HD_TYPE_PTR) {
                             use_value = 1;
+                        }
+                        if (t->kind == HD_TYPE_PTR && t->base &&
+                            t->base->kind == HD_TYPE_ARRAY && g->vars[vi].is_ptr_array) {
+                            /* ptr-to-array: p[i] is a sub-array that decays to
+                             * its address; the outer index offsets from there. */
+                            use_value = 0;
                         }
                         break;
                     }
