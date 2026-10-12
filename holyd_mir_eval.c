@@ -826,6 +826,18 @@ static int mir_index_stride(HDMirGen *g, const HDASTNode *n) {
     const HDASTNode *root = n;
     while (root && root->kind == HD_AST_INDEX) root = root->left;
     if (!root || root->kind != HD_AST_IDENT) return 8; /* default: 8 bytes */
+    /* Byte-addressable memory: a char/uint8 POINTER strides by 1 byte per
+     * element (p[i] advances 1 byte), not the 8-byte cell size. Check this
+     * before the array logic (which forces a minimum 8-byte stride). */
+    for (int i = 0; i < g->n_vars; i++) {
+        if (strcmp(g->vars[i].name, root->ident) == 0 &&
+            g->vars[i].type && g->vars[i].type->kind == HD_TYPE_PTR &&
+            g->vars[i].type->base &&
+            (g->vars[i].type->base->kind == HD_TYPE_I8 ||
+             g->vars[i].type->base->kind == HD_TYPE_U8)) {
+            return 1;
+        }
+    }
     /* Look up the variable in the symbol table */
     for (int i = 0; i < g->n_vars; i++) {
         if (strcmp(g->vars[i].name, root->ident) == 0 &&
