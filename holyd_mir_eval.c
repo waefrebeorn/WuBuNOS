@@ -5289,10 +5289,9 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
             /* Allocate memory for this parameter: struct params get
              * param_struct_size cells; scalar params get 1 cell. */
             wubu_vr_t addr = mir_new_vr(&g);  /* high VR for the address */
-            int64_t cell_idx = (int64_t)(prog->total_mem + 1);
-            if (cell_idx & 1) cell_idx++;  /* 8-byte align */
-            int64_t mem_addr = cell_idx * 8;  /* byte address */
-            prog->total_mem = cell_idx + param_struct_size - 1;
+            int64_t mem_addr = (int64_t)(prog->total_mem + 1);
+            if (mem_addr & 7) mem_addr += 8 - (mem_addr & 7);  /* 8-byte align */
+            prog->total_mem = mem_addr + param_struct_size * 8;
             wubu_mir_const_to(prog, addr, mem_addr);  /* addr VR = byte address */
             if (param_is_struct) {
                 /* Struct-by-value: v(pi+1) holds the source address.
@@ -5403,10 +5402,9 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
             if (va_args_idx < 0 && g.n_vars < MIRGEN_MAX_VARS) {
                 va_args_idx = g.n_vars++;
                 strncpy(g.vars[va_args_idx].name, "wubu_va_args", HD_MAX_IDENT_LEN - 1);
-                int64_t cell_idx = (int64_t)(prog->total_mem + 1);
-                if (cell_idx & 1) cell_idx++;  /* 8-byte align */
-                int64_t mem_addr = cell_idx * 8;  /* byte address */
-                prog->total_mem = cell_idx + 31; /* 32 elements */
+                int64_t mem_addr = (int64_t)(prog->total_mem + 8);
+                prog->total_mem = mem_addr + 32 * 8; /* 32 elements */
+                (void)mem_addr;
                 g.vars[va_args_idx].addr = wubu_mir_const(prog, mem_addr);
             }
             if (va_args_idx >= 0) {
