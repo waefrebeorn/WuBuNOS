@@ -42,7 +42,27 @@ addr_of_string, array_of_strings, cast_string_pointer, standard_library_calls.
   STRING token after a literal's trailing quote) and was reverted. Needs
   the lexer's string-trailing-quote quirk fixed first.
 
+## FIXED this session (ec57817, 44455df)
+- **addr-16 alloc bug**: wubu_mir_alloc started the first allocation at
+  byte 16, colliding with the x86 JIT frame. Fixed: base >= 32. ALL
+  first-allocation memory now stable.
+- **byte-packed string literals**: strings were cell-packed (stride 8) but
+  char* reads byte-stride 1. Now byte-packed. char *s="hi"; s[0]==104,
+  strlen==5, s[2]==108 all correct.
+- **adjacent string concat**: "a" "b" -> "ab" now parses (was EROR).
+
+## Remaining chapter_16 failures (16/33 passing)
+All need ONE of these advanced features:
+- **Pointer-to-array types** `T (*p)[N] = &a; p[i][j]`: addr_of_string,
+  char_constant_operations (got=7 at array_ptr[0][9]), transfer_by_eightbyte.
+  2D arrays work; ptr-to-array with &a does not.
+- **External libc calls with output** (puts/strcmp): the calls go through
+  dlsym but tests check stdout/side effects, not return values.
+- **Escape sequences in compound initializers** + static arrays with NUL:
+  terminating_null_bytes, string_special_characters, partial_initialize.
+- **negative_zero got=7**: float special-value (double -0.0) handling.
+
 ## Next fix target
-Fix the pointer-var VAR_DECL init to store the string literal's actual
-byte address (not 16). Unlocks the ~8 string-pointer tests — the single
-biggest lever in chapter_16.
+Pointer-to-array types `T (*p)[N]` — the largest remaining cluster
+(3+ tests). `is_ptr_array` tracking already exists; need &a to produce a
+ptr-to-array and p[i][j] to decay/index correctly.
