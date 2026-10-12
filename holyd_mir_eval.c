@@ -149,6 +149,24 @@ static HDType *mir_lvalue_elem_type(HDMirGen *g, const HDASTNode *n) {
     return NULL;
 }
 
+/* True if an lvalue node holds a double (float) value: a double* deref
+ * (*p), a double array element (a[i] where base is double[]), or a double
+ * struct member. Used by the ++/-- general-lvalue paths so they emit the
+ * float MIR ops (DADD/DSUB) instead of integer ADD/SUB. */
+static int mir_lvalue_is_float(HDMirGen *g, const HDASTNode *n) {
+    if (!n) return 0;
+    if (n->kind == HD_AST_DEREF) {
+        const HDASTNode *base = n->child;
+        if (base && base->kind == HD_AST_IDENT && base->ident[0]) {
+            HDType *vt = mir_find_var_type(g, base->ident);
+            if (vt && vt->kind == HD_TYPE_PTR && vt->base && vt->base->kind == HD_TYPE_F64)
+                return 1;
+        }
+    }
+    HDType *et = mir_lvalue_elem_type(g, n);
+    return (et && et->kind == HD_TYPE_F64) ? 1 : 0;
+}
+
 static const HDASTNode *mir_find_func(HDMirGen *g, const char *name) {
     for (int i = g->n_funcs - 1; i >= 0; i--) {
         if (g->func_ast[i] && strcmp(g->func_ast[i]->ident, name) == 0)
@@ -934,6 +952,33 @@ static int mir_index_stride(HDMirGen *g, const HDASTNode *n) {
     for (int i = 0; i < g->n_vars; i++) {
         if (strcmp(g->vars[i].name, root->ident) == 0 &&
             (g->vars[i].is_array || g->vars[i].is_ptr_array)) {
+            /* Multi-dimensional stride: walk the ARRAY type spine. For
+             * int a[D0][D1][D2], the depth-1 (outermost) index a[i] strides
+             * by D1*D2 cells, depth-2 [j] by D2 cells, depth-3 (innermost)
+             * [k] by 1 cell. Compute the product of the inner dims from the
+             * array type, skipping (depth-1) outer dimensions. */
+            HDType *t = g->vars[i].type;
+            if (t && t->kind == HD_TYPE_ARRAY) {
+                /* collect the per-dimension element counts down the spine */
+                int dims[16], nd = 0;
+                HDType *p = t;
+                while (p && p->kind == HD_TYPE_ARRAY && nd < 16) {
+                    dims[nd++] = p->array_size > 0 ? p->array_size : 1;
+                    p = p->base;
+                }
+                /* depth 1 = dims[0] is the outermost. The stride for the
+                 * depth-d index = product(dims[d..nd-1]) cells. */
+                if (depth >= 1 && depth <= nd) {
+                    long stride_cells = 1;
+                    for (int d = depth; d < nd; d++) stride_cells *= dims[d];
+                    long stride = stride_cells * 8;
+                    if (stride < 8) stride = 8;
+                    return (int)stride;
+                }
+                /* fallthrough: default cell stride */
+                return 8;
+            }
+            /* scalar or pointer-to-scalar array */
             if (depth <= 1) {
                 /* Outermost index: use array_stride * 8 */
                 int stride = g->vars[i].array_stride * 8;
@@ -2607,16 +2652,24 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         if (n->child) {
             wubu_vr_t laddr = mir_lvalue_addr(g, n->child);
             if (laddr) {
-                int is_ptr = (n->child->kind == HD_AST_DEREF);
+                int is_float_lv = mir_lvalue_is_float(g, n->child);
                 wubu_vr_t tmp = mir_new_vr(g);
                 wubu_vr_t v = wubu_mir_load(g->prog, laddr);
                 wubu_mir_mov_to(g->prog, tmp, v);
-                wubu_vr_t one = wubu_mir_const(g->prog, 1);
-                wubu_vr_t upd = (n->kind == HD_AST_POST_INC)
-                    ? wubu_mir_binop(g->prog, MIR_ADD, tmp, one)
-                    : wubu_mir_binop(g->prog, MIR_SUB, tmp, one);
+                wubu_vr_t upd;
+                if (is_float_lv) {
+                    union { double d; int64_t i; } u; u.d = 1.0;
+                    wubu_vr_t one_d = wubu_mir_const(g->prog, u.i);
+                    upd = (n->kind == HD_AST_POST_INC)
+                        ? wubu_mir_binop(g->prog, MIR_DADD, tmp, one_d)
+                        : wubu_mir_binop(g->prog, MIR_DSUB, tmp, one_d);
+                } else {
+                    wubu_vr_t one = wubu_mir_const(g->prog, 1);
+                    upd = (n->kind == HD_AST_POST_INC)
+                        ? wubu_mir_binop(g->prog, MIR_ADD, tmp, one)
+                        : wubu_mir_binop(g->prog, MIR_SUB, tmp, one);
+                }
                 wubu_mir_store(g->prog, laddr, upd);
-                (void)is_ptr;
                 return tmp;
             }
         }
@@ -2686,10 +2739,19 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             wubu_vr_t laddr = mir_lvalue_addr(g, n->child);
             if (laddr) {
                 wubu_vr_t v = wubu_mir_load(g->prog, laddr);
-                wubu_vr_t one = wubu_mir_const(g->prog, 1);
-                wubu_vr_t upd = (n->kind == HD_AST_PRE_INC)
-                    ? wubu_mir_binop(g->prog, MIR_ADD, v, one)
-                    : wubu_mir_binop(g->prog, MIR_SUB, v, one);
+                wubu_vr_t upd;
+                if (mir_lvalue_is_float(g, n->child)) {
+                    union { double d; int64_t i; } u; u.d = 1.0;
+                    wubu_vr_t one_d = wubu_mir_const(g->prog, u.i);
+                    upd = (n->kind == HD_AST_PRE_INC)
+                        ? wubu_mir_binop(g->prog, MIR_DADD, v, one_d)
+                        : wubu_mir_binop(g->prog, MIR_DSUB, v, one_d);
+                } else {
+                    wubu_vr_t one = wubu_mir_const(g->prog, 1);
+                    upd = (n->kind == HD_AST_PRE_INC)
+                        ? wubu_mir_binop(g->prog, MIR_ADD, v, one)
+                        : wubu_mir_binop(g->prog, MIR_SUB, v, one);
+                }
                 wubu_mir_store(g->prog, laddr, upd);
                 return upd;
             }
