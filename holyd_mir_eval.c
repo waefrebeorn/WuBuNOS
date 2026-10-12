@@ -53,6 +53,8 @@ typedef struct {
     int member_bit_offsets[MAX_MEMBERS];   /* bit offset within byte */
     int member_is_unsigned[MAX_MEMBERS];
     int member_is_ptr[MAX_MEMBERS];       /* 1 if member type is a pointer */
+    int member_type_kinds[MAX_MEMBERS];   /* HD_TYPE_* of the member (byte-addr: I8/U8) */
+    int member_elem_kinds[MAX_MEMBERS];  /* element base kind for array members (byte-addr: I8/U8) */
     char member_type_names[MAX_MEMBERS][HD_MAX_IDENT_LEN]; /* struct type name if member is struct */
     int n_members;
     int total_size;
@@ -822,9 +824,29 @@ static int mir_index_stride(HDMirGen *g, const HDASTNode *n) {
     const HDASTNode *p = n;
     while (p && p->kind == HD_AST_INDEX) { depth++; p = p->left; }
 
-    /* Traverse left spine to find the root IDENT */
+    /* Traverse left spine to find the root IDENT or MEMBER (u.arr[i]) */
     const HDASTNode *root = n;
     while (root && root->kind == HD_AST_INDEX) root = root->left;
+    /* Byte-addressable memory: u.arr[i] where arr is a char[] member of a
+     * struct/union strides by 1 byte. Resolve the member element type. */
+    if (root && root->kind == HD_AST_MEMBER && root->left &&
+        root->left->kind == HD_AST_IDENT && root->ident[0]) {
+        for (int i = 0; i < g->n_vars; i++)
+            if (strcmp(g->vars[i].name, root->left->ident) == 0 &&
+                g->vars[i].struct_name[0]) {
+                for (int si = 0; si < g->n_structs; si++)
+                    if (strcmp(g->structs[si].name, g->vars[i].struct_name) == 0) {
+                        for (int mi = 0; mi < g->structs[si].n_members; mi++)
+                            if (strcmp(g->structs[si].member_names[mi], root->ident) == 0) {
+                                int ek = g->structs[si].member_elem_kinds[mi];
+                                if (ek == HD_TYPE_I8 || ek == HD_TYPE_U8) return 1;
+                                break;
+                            }
+                        break;
+                    }
+                break;
+            }
+    }
     if (!root || root->kind != HD_AST_IDENT) return 8; /* default: 8 bytes */
     /* Byte-addressable memory: a char/uint8 POINTER strides by 1 byte per
      * element (p[i] advances 1 byte), not the 8-byte cell size. Check this
@@ -1156,6 +1178,8 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
                     s->member_bit_offsets[s->n_members] = n->type->members[i].bit_offset;
                     s->member_is_unsigned[s->n_members] = (n->type->members[i].type && (n->type->members[i].type->kind == HD_TYPE_U8 || n->type->members[i].type->kind == HD_TYPE_U16 || n->type->members[i].type->kind == HD_TYPE_U32 || n->type->members[i].type->kind == HD_TYPE_U64)) ? 1 : 0;
                     s->member_is_ptr[s->n_members] = (n->type->members[i].type && n->type->members[i].type->kind == HD_TYPE_PTR) ? 1 : 0;
+                    s->member_type_kinds[s->n_members] = n->type->members[i].type ? n->type->members[i].type->kind : 0;
+                    s->member_elem_kinds[s->n_members] = (n->type->members[i].type && n->type->members[i].type->kind == HD_TYPE_ARRAY && n->type->members[i].type->base) ? n->type->members[i].type->base->kind : 0;
                     if (n->type->members[i].type && n->type->members[i].type->kind == HD_TYPE_STRUCT && n->type->members[i].type->name[0])
                         strncpy(s->member_type_names[s->n_members], n->type->members[i].type->name, HD_MAX_IDENT_LEN - 1);
                     s->n_members++;
@@ -1227,6 +1251,8 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
                             s->member_offsets[mi] = (int)n->type->members[mi].offset;
                             s->member_is_unsigned[mi] = (n->type->members[mi].type && (n->type->members[mi].type->kind == HD_TYPE_U8 || n->type->members[mi].type->kind == HD_TYPE_U16 || n->type->members[mi].type->kind == HD_TYPE_U32 || n->type->members[mi].type->kind == HD_TYPE_U64)) ? 1 : 0;
                             s->member_is_ptr[mi] = (n->type->members[mi].type && n->type->members[mi].type->kind == HD_TYPE_PTR) ? 1 : 0;
+                            s->member_type_kinds[mi] = n->type->members[mi].type ? n->type->members[mi].type->kind : 0;
+                            s->member_elem_kinds[mi] = (n->type->members[mi].type && n->type->members[mi].type->kind == HD_TYPE_ARRAY && n->type->members[mi].type->base) ? n->type->members[mi].type->base->kind : 0;
                             if (n->type->members[mi].type && n->type->members[mi].type->kind == HD_TYPE_STRUCT && n->type->members[mi].type->name[0])
                                 strncpy(s->member_type_names[mi], n->type->members[mi].type->name, HD_MAX_IDENT_LEN - 1);
                             s->n_members++;
@@ -3749,9 +3775,11 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 }
             }
         }
-        /* Byte-addressable memory: a char/uint8 element loads ONE byte.
-         * Resolve the element type from the INDEX node's type OR the base
-         * pointer variable's pointee (when n->type is unset). */
+        /* Byte-addressable memory: a char/uint8 element loads ONE byte, not
+         * the whole 8-byte cell. Resolve the element type from: the INDEX
+         * node's own type; a char/uint8 POINTER base variable's pointee; or
+         * a struct/union MEMBER base (u.arr[i] where arr is char[]) whose
+         * registered member type is char or an array of char. */
         int char_elem = (n->type && (n->type->kind == HD_TYPE_I8 ||
                                      n->type->kind == HD_TYPE_U8));
         if (!char_elem && base_node && base_node->kind == HD_AST_IDENT &&
@@ -3763,6 +3791,30 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                     (g->vars[vi].type->base->kind == HD_TYPE_I8 ||
                      g->vars[vi].type->base->kind == HD_TYPE_U8)) {
                     char_elem = 1; break;
+                }
+        }
+        if (!char_elem && base_node && base_node->kind == HD_AST_MEMBER &&
+            base_node->left && base_node->left->kind == HD_AST_IDENT &&
+            base_node->ident[0]) {
+            for (int vi = 0; vi < g->n_vars; vi++)
+                if (strcmp(g->vars[vi].name, base_node->left->ident) == 0 &&
+                    g->vars[vi].struct_name[0]) {
+                    for (int si = 0; si < g->n_structs; si++)
+                        if (strcmp(g->structs[si].name, g->vars[vi].struct_name) == 0) {
+                            for (int mi = 0; mi < g->structs[si].n_members; mi++)
+                                if (strcmp(g->structs[si].member_names[mi],
+                                           base_node->ident) == 0) {
+                                    int mk = g->structs[si].member_type_kinds[mi];
+                                    int ek = g->structs[si].member_elem_kinds[mi];
+                                    /* char x, or char x[] (array of char) */
+                                    if (mk == HD_TYPE_I8 || mk == HD_TYPE_U8 ||
+                                        ek == HD_TYPE_I8 || ek == HD_TYPE_U8)
+                                        char_elem = 1;
+                                    break;
+                                }
+                            break;
+                        }
+                    break;
                 }
         }
         if (char_elem) return wubu_mir_load8(g->prog, addr);
