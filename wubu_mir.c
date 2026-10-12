@@ -211,6 +211,12 @@ wubu_vr_t wubu_mir_alloc(wubu_mir_prog_t *p, int64_t n_bytes)
     int64_t base = p->total_mem + 1;  /* addr 0 reserved as null */
     /* Align to 16-byte boundary for ABI compliance (SSE/AVX requirements) */
     if (base & 15) base += 16 - (base & 15);
+    /* The x86-64 backend's low address region (the first 16-byte cell at
+     * byte address 16) collides with the JIT frame/spill layout -- writes
+     * there do not persist and reads return the address, not the data.
+     * Start allocations above that reserved region so the very first
+     * allocation (e.g. a string literal) lands in stable memory. */
+    if (base < 32) base = 32;
     p->total_mem = base + n_bytes;
     return wubu_mir_const(p, base);
 }

@@ -1635,14 +1635,17 @@ extern_done:
                                     break;
                                 }
                         }
-                        /* Copy string data cell-by-cell (up to string length) */
+                        /* Copy string data into the array. The source string is
+                         * byte-packed (stride 1); the char array stores one char
+                         * per cell (stride 8). Byte-load the source, cell-store
+                         * the destination. */
                         int copy_len = (int)slen < arr_size ? (int)slen : arr_size;
                         if (src_addr > 0 && copy_len > 0) {
                             for (int m = 0; m < copy_len; m++) {
+                                wubu_vr_t src_elem = wubu_mir_binop(g->prog, MIR_ADD, src_addr, wubu_mir_const(g->prog, (int64_t)m));
                                 int byte_off = m * 8;
-                                wubu_vr_t src_elem = wubu_mir_binop(g->prog, MIR_ADD, src_addr, wubu_mir_const(g->prog, (int64_t)byte_off));
                                 wubu_vr_t dst_elem = wubu_mir_binop(g->prog, MIR_ADD, addr, wubu_mir_const(g->prog, (int64_t)byte_off));
-                                wubu_mir_store(g->prog, dst_elem, wubu_mir_load(g->prog, src_elem));
+                                wubu_mir_store(g->prog, dst_elem, wubu_mir_load8(g->prog, src_elem));
                             }
                         }
                         /* Zero remaining elements (C standard: uninitialized elements are 0) */
@@ -3688,13 +3691,14 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
     }
     case HD_AST_STRING_LIT: {
         /* Store string in memory and return address.
-         * Each character is stored in its own cell (8 bytes) for consistency
-         * with the cell-based memory model. */
+         * Characters are BYTE-PACKED (contiguous, stride 1) to match C string
+         * semantics and the char-pointer byte-stride. Each byte is written
+         * with a byte-width store so neighbouring characters share cells. */
         size_t len = strlen(n->str_val) + 1; /* include NUL */
         wubu_vr_t addr = wubu_mir_alloc(g->prog, (uint32_t)len);
         for (size_t i = 0; i < len; i++)
-            wubu_mir_store(g->prog, wubu_mir_binop(g->prog, MIR_ADD, addr, wubu_mir_const(g->prog, (int64_t)(i * 8))),
-                           wubu_mir_const(g->prog, (int64_t)(unsigned char)n->str_val[i]));
+            wubu_mir_store8(g->prog, wubu_mir_binop(g->prog, MIR_ADD, addr, wubu_mir_const(g->prog, (int64_t)i)),
+                            wubu_mir_const(g->prog, (int64_t)(unsigned char)n->str_val[i]));
         return addr;
     }
     case HD_AST_INDEX: {

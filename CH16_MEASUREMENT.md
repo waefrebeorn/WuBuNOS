@@ -1,45 +1,48 @@
 # Chapter 16 (chars/strings) full-depot measurement — 2026-10-12
 
-Measured with a batch harness running each valid test through test_single
-(expected=0). Baseline: **11/40 pass** (8 errored, 21 failed).
+Measured with a batch harness running each valid test through test_single,
+parsing each test's actual `return` expression (char constants, int
+literals). **Baseline: 16/33 pass** (3 parse-errors, 14 failed, 7 skipped
+as complex-return). The earlier "11/40" was wrong: the harness assumed
+expected=0, but char/string tests return char values (e.g. `return 'c'`==99).
 
-## What passes (11)
-Basic char literals, char arithmetic, return_char_constant, simple char
-expressions, byte store+load roundtrips on arrays, char pointer reads
-where the pointee is a freshly-allocated array.
+## Byte-addressable loads are CORRECT (verified, committed d2d9aa6)
+`(char*)&x` byte-punning works: `int x=0x41424344; char *p=(char*)&x;
+p[0]==0x44, p[1]==0x43`. `int* &x` deref works. char-array member loads
+work. The scalar-address-of "33" readings seen mid-session were an artifact
+of a broken experimental edit, NOT a real bug — at clean HEAD scalar `&x`
+byte access is correct.
 
-## The dominant blocker: scalar address-of (`&x`) cell layout
-`access_through_char_pointer.c` and friends fail because taking the
-address of a SCALAR local returns the wrong cell:
+## ROOT CAUSE of the string-pointer cluster: string-literal-to-pointer addr
+`char *s = "hi"; s[0]` returns 16 (a constant, regardless of string
+content/length) instead of 'h'=104. The string literal IS allocated
+correctly (`char s[]="hi"` array init works; `(char*)&int` byte-punning
+works), but assigning the literal's address to a `char *` POINTER stores
+16, not the byte address. `(int*)s` reads 16; `s` is always <=1000 (a
+VR/cell index, not a `total_mem*8` byte offset).
 
-    int x = 100; char *p = (char*)&x;
-    p[0] == 100   (correct)
-    p[1] == 33    (WRONG — should be 0; upper bytes of int 100)
+`mir_gen_expr(STRING_LIT)` returns `wubu_mir_alloc(...)` (a correct address
+VR), but the pointer-var VAR_DECL init path stores 16 into `s`. Pre-existing
+bug (present at the session's first commit 128dbe2 — NOT a regression from
+the byte-addressable work). This is THE blocker for the ~8 string-pointer
+tests: simple.c, empty_string, pointer_operations, strings_in_function_calls,
+addr_of_string, array_of_strings, cast_string_pointer, standard_library_calls.
 
-`p[1]` is a CONSTANT that scales with the number of locals (33 with 1
-local, 35 with 3) — it is the variable/VR count metadata, not x's value.
-So `&x` for a scalar points at a metadata cell, and byte 0 coincidentally
-holds the stored value while bytes 1+ hold allocator bookkeeping.
-
-Arrays are fine: `int a[2]; a[0]=100; a[1]=0; ((char*)a)[1] == 0` passes
-(fresh zeroed allocation). The bug is specific to scalars whose value
-lives in a VR and whose address is taken — the spill cell isn't where
-`mir_find_var_addr` points, or isn't zeroed.
-
-## Byte-addressable loads themselves are CORRECT
-`p[0]` reads the right byte every time; char pointers into arrays work;
-byte store+load roundtrips work. The gap is purely the scalar `&x`
-address resolution + cell zeroing, NOT the byte-load width (that work is
-done and verified: d2d9aa6).
+## Other real failure clusters
+- **access_through_char_pointer got=3**: the double `-0.0` byte layout
+  (byte 7 should be -128 / 0x80). Float bit-punning through char*.
+- **negative_zero got=7**: float special-value handling.
+- **got=1 cluster** (terminating_null_bytes, string_special_characters,
+  partial_initialize_via_string, literals_and_compound_initializers):
+  string-literal-to-array init with embedded NUL + escapes + static arrays
+  + external strcmp. Multi-feature; depends on the string-addr fix above.
+- **3 parse-errors** (type_specifiers, adjacent_strings x2): adjacent
+  string literal concatenation `"a" "b"` -> `"ab"`. Attempted in the
+  parser; destabilized ALL string parsing (the lexer leaves a phantom
+  STRING token after a literal's trailing quote) and was reverted. Needs
+  the lexer's string-trailing-quote quirk fixed first.
 
 ## Next fix target
-Make `&scalar` allocate/zero a dedicated cell and spill the scalar's
-current value there (full 8-byte store), so byte-punning through
-`(char*)&x` reads the scalar's actual bytes. Unlocks
-access_through_char_pointer.c + ~10 sibling tests.
-
-## Other failing clusters (lower priority)
-- escape_sequences / control_characters / string_special_characters:
-  string literal escape handling (\n, \t, \0 in the middle).
-- return_char_constant (got=99): char constant return value.
-- static_initializers, type_specifiers, adjacent_strings: parse/EROR.
+Fix the pointer-var VAR_DECL init to store the string literal's actual
+byte address (not 16). Unlocks the ~8 string-pointer tests — the single
+biggest lever in chapter_16.
