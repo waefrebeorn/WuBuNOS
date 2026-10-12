@@ -591,6 +591,17 @@ static HDASTNode *parse_primary(HDParser *p) {
              * after a previous token's trailing-quote advance). */
             strncpy(n->str_val, p->lex->tok.str_val, HD_MAX_STRING_LEN - 1);
             advance(p);
+            /* Adjacent string literal concatenation (C standard 5.1.1.2p6):
+             * "a" "b" is a single string "ab". The lexer emits each literal
+             * as its own STRING token; consume following STRING tokens and
+             * append their decoded values. */
+            while (p->lex->tok.type == HD_TOK_STRING) {
+                size_t cur = strlen(n->str_val);
+                if (cur < HD_MAX_STRING_LEN - 1)
+                    strncat(n->str_val, p->lex->tok.str_val,
+                            HD_MAX_STRING_LEN - 1 - cur);
+                advance(p);
+            }
             return n;
         }
         case HD_TOK_IDENT: {
