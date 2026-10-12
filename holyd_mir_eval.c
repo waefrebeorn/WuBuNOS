@@ -968,6 +968,7 @@ static int mir_index_stride(HDMirGen *g, const HDASTNode *n) {
                 break;
             }
     }
+    if (root && root->kind == HD_AST_STRING_LIT) return 1; /* byte-packed chars */
     if (!root || root->kind != HD_AST_IDENT) return 8; /* default: 8 bytes */
     /* Byte-addressable memory: a char/uint8 POINTER or byte-packed char
      * ARRAY strides by 1 byte per element (p[i] / s[i] advances 1 byte),
@@ -4164,6 +4165,9 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         int char_elem = (n->type && (n->type->kind == HD_TYPE_I8 ||
                                      n->type->kind == HD_TYPE_U8));
         int char_unsigned = (n->type && n->type->kind == HD_TYPE_U8);
+        /* String literal base: "ab"[1] is byte-packed char data. */
+        if (!char_elem && base_node && base_node->kind == HD_AST_STRING_LIT)
+            char_elem = 1;
         if (!char_elem && base_node && base_node->kind == HD_AST_IDENT &&
             base_node->ident[0]) {
             for (int vi = 0; vi < g->n_vars; vi++)
