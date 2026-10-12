@@ -1932,6 +1932,12 @@ done_params:
 
     /* Variable declaration: type name [= expr] ;  (also type name[N] for
      * arrays). Also handles multiple declarators: type a=0,b=1,c=2 ; */
+    /* The BASE scalar element type, captured BEFORE the first declarator's
+     * array brackets mutate `type` into an ARRAY type. Additional declarators
+     * (`, b`) must start from this scalar type, not the mutated array type —
+     * otherwise `int a[2], b;` gives b the array type and it reads as a
+     * pointer (garbage). */
+    HDType *elem_type = type;
     /* First declarator */
     HDASTNode *first_var = hd_ast_new(HD_AST_VAR_DECL);
     strncpy(first_var->ident, name, HD_MAX_IDENT_LEN - 1);
@@ -2035,7 +2041,7 @@ done_params:
             expect(p, HD_TOK_RBRACKET);
             if (n2 < 8) d2[n2++] = asz;
         }
-        HDType *vtype = type;
+        HDType *vtype = elem_type;
         if (n2 > 0) {
             HDType *bt = vtype;
             for (int d = n2 - 1; d >= 0; d--) {
