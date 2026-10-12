@@ -502,8 +502,41 @@ char *wubu_preprocess(const char *src)
         PP_Macro m;
         strncpy(m.name, builtins[i].name, PP_NAME_LEN - 1);
         strncpy(m.body, builtins[i].val, PP_BODY_LEN - 1);
+        /* Function-like builtins (name contains '(') must be registered as
+         * function-like macros so a call site 'va_arg(ap, int)' matches the
+         * parameterized body 'wubu_va_args[ap++]'. Registering them as object
+         * macros (the literal name with parens) never matches a call. */
         m.fn_like = 0;
         m.n_params = 0;
+        char *paren = strchr(m.name, '(');
+        if (paren) {
+            m.fn_like = 1;
+            /* Split name at '(' and collect the comma-separated param NAMES
+             * (needed by the function-like expansion to substitute them). */
+            char base[PP_NAME_LEN]; char params[PP_NAME_LEN];
+            size_t nlen = (size_t)(paren - m.name);
+            if (nlen >= PP_NAME_LEN) nlen = PP_NAME_LEN - 1;
+            memcpy(base, m.name, nlen); base[nlen] = '\0';
+            strncpy(params, paren + 1, PP_NAME_LEN - 1);
+            char *rp = strchr(params, ')'); if (rp) *rp = '\0';
+            strncpy(m.name, base, PP_NAME_LEN - 1);
+            /* split params by comma into m.params[], counting them */
+            int np = 0;
+            char *tok = params;
+            while (*tok && np < 8) {
+                while (*tok == ' ' || *tok == '\t') tok++;
+                char *start = tok;
+                while (*tok && *tok != ',') tok++;
+                char *end = tok;
+                while (end > start && (end[-1]==' '||end[-1]=='\t')) end--;
+                size_t plen = (size_t)(end - start);
+                if (plen >= PP_NAME_LEN) plen = PP_NAME_LEN - 1;
+                memcpy(m.params[np], start, plen); m.params[np][plen] = '\0';
+                if (plen > 0) np++;
+                if (*tok == ',') tok++;
+            }
+            m.n_params = np;
+        }
         int idx = pp_find(m.name);
         if (idx < 0) { idx = g_n_macros++; }
         g_macros[idx] = m;

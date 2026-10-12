@@ -5307,13 +5307,15 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
                 g.vars[va_args_idx].addr = wubu_mir_const(prog, mem_addr);
             }
             if (va_args_idx >= 0) {
-                /* Copy v1..vN to wubu_va_args[0..N-1] */
-                int n_fixed = fn->n_params; /* number of fixed params (0 if variadic with no fixed) */
-                /* Total args = max(n_fixed, actual). For now, copy up to 8 args. */
+                /* Copy the VARIADIC args (those after the fixed params) into
+                 * wubu_va_args[0..], so va_arg (which reads from index 0) sees
+                 * the first vararg, not the first fixed param. Fixed params
+                 * occupy v1..v{n_fixed}; the first vararg is v{n_fixed+1}. */
+                int n_fixed = fn->n_params;
                 for (int a = 0; a < 8; a++) {
                     wubu_vr_t elem_addr = wubu_mir_binop(prog, MIR_ADD, g.vars[va_args_idx].addr,
                                                           wubu_mir_const(prog, (int64_t)(a * 8)));
-                    wubu_vr_t arg_val = (wubu_vr_t)(a + 1); /* v1..v8 */
+                    wubu_vr_t arg_val = (wubu_vr_t)(n_fixed + a + 1); /* v{n_fixed+1}.. */
                     wubu_mir_store(prog, elem_addr, arg_val);
                 }
             }

@@ -1837,10 +1837,12 @@ done_extern_params:
                 strncpy(fn->param_names[fn->n_params], pname, HD_MAX_IDENT_LEN - 1);
                 fn->n_params++;
                 while (match(p, HD_TOK_COMMA) && fn->n_params < HD_MAX_PARAMS) {
-                    /* Handle variadic: `void f(int n, ...) */
+                    /* Handle variadic: `void f(int n, ...)`. The fixed params
+                     * parsed BEFORE the `...` are real parameters and MUST be
+                     * kept (n_params already counts them) — resetting to 0
+                     * here discards them and the callee never binds them. */
                     if (peek(p) == HD_TOK_ELLIPSIS) {
                         advance(p);
-                        fn->n_params = 0;
                         fn->is_variadic = 1;
                         expect(p, HD_TOK_RPAREN);
                         fn_params_void_consumed = 1;
