@@ -331,6 +331,30 @@ static HDType *parse_type(HDParser *p) {
                         continue;
                     }
                     if (peek(p) != HD_TOK_IDENT) {
+                        /* Anonymous struct/union member: `struct { int b; };`
+                         * or `union { int b; };` with no member name (C11
+                         * anonymous member). Flatten the inner members into
+                         * the outer struct at the current offset so `foo.b`
+                         * resolves directly. */
+                        if (peek(p) == HD_TOK_SEMI && member_type &&
+                            (member_type->kind == HD_TYPE_STRUCT ||
+                             member_type->kind == HD_TYPE_UNION) &&
+                            member_type->n_members > 0) {
+                            advance(p); /* consume ; */
+                            int base_off = (comp_kind == HD_TYPE_UNION) ? 0 : (int)t->size;
+                            for (int am = 0; am < member_type->n_members &&
+                                 t->n_members < HD_MAX_PARAMS; am++) {
+                                t->members[t->n_members] = member_type->members[am];
+                                t->members[t->n_members].offset += base_off;
+                                t->n_members++;
+                            }
+                            if (comp_kind != HD_TYPE_UNION) {
+                                int inner_bytes = (int)member_type->size;
+                                t->size += (inner_bytes > 0 ? inner_bytes : 1);
+                                t->align = 1;
+                            }
+                            continue;
+                        }
                         parse_error(p, "expected member name");
                         break;
                     }
