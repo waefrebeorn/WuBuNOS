@@ -39,7 +39,19 @@ slot (`mov [rbp-X], a_home`) right after the first call, so the second call cann
 touch it. Simplest robust version: always spill a call-result VR to its stack slot
 immediately (set `assign[rv].reg = -1`), making every call result memory-resident.
 Correctness first; the regalloc can re-optimize later.
-**Verify:** fib(2)=1, fib(10)=55, `a=fib(2);b=fib(2)`→11, ackermann, mutual recursion.
+
+**STATUS (0cd0145):** the regalloc spill (VRs whose live range crosses a MIR_CALL →
+stack slot) is DONE and gated green, but did NOT fix recursion. **Refined root cause
+(traced via MIR dump):** the MIR is correct (`store mem[g]=v46; call fib; mov v65544=v0;
+store mem[h]=v59`). The bug is in x86 codegen of **two sequential calls to the SAME
+function**: the internal-call register save/restore (`wubu_isa_x86_64.c` ~1594,
+`caller_saved[]={r11,r12,r13,r14,r15,r8,r9,rdx}` pushed before, popped after) interacts
+badly with the recursive callee's own frame. Symptom: the LAST global store before the
+second recursive call is dropped (`h=fib(n-2)` leaves h unchanged; `g=fib(n-1)` works).
+Single-call recursion and two-calls-to-DIFFERENT-functions both work. Next probe: the
+8-reg push/pop balance vs the callee prologue/epilogue, and whether r10 (VR0 return reg,
+excluded from the save list) survives the second same-function call. NOT yet fixed.
+**Verify when fixed:** fib(2)=1, fib(10)=55, `a=fib(2);b=fib(2)`→11, ackermann.
 
 ---
 
