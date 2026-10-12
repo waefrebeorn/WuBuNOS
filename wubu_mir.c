@@ -250,7 +250,18 @@ wubu_vr_t wubu_mir_load8(wubu_mir_prog_t *p, wubu_vr_t addr)
     i->op = MIR_LOAD;
     i->dst = (wubu_vr_t)p->n;
     i->a = addr;
-    i->imm = 1;   /* byte width */
+    i->imm = 1;   /* byte width, zero-extend (unsigned char) */
+    return i->dst;
+}
+
+wubu_vr_t wubu_mir_load8s(wubu_mir_prog_t *p, wubu_vr_t addr)
+{
+    wubu_mir_instr_t *i = emit(p);
+    if (!i) return 0;
+    i->op = MIR_LOAD;
+    i->dst = (wubu_vr_t)p->n;
+    i->a = addr;
+    i->imm = 2;   /* byte width, sign-extend (signed char) */
     return i->dst;
 }
 

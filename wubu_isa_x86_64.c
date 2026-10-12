@@ -1697,14 +1697,16 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             rex(&e,1,0,0,0); e8(&e, 0x89); e8(&e, 0xDE);   /* mov rsi, rbx */
             rex(&e,1,0,0,0); e8(&e, 0x01); e8(&e, 0xC6);   /* add rsi, rax */
             int sd = VR_ENC_SAFE(in->dst);
-            if (in->imm == 1) {
-                /* byte load: movzx reg, byte [rsi] (zero-extend) */
+            if (in->imm == 1 || in->imm == 2) {
+                /* byte load: imm==1 movzx (zero-extend, unsigned char);
+                 * imm==2 movsx (sign-extend, signed char). */
+                int ext = (in->imm == 2) ? 0xBE : 0xB6;  /* movsx / movzx */
                 if (sd >= 0) {
                     rex(&e,1,reg_needs_rex(sd),0,0);
-                    e8(&e, 0x0F); e8(&e, 0xB6);
+                    e8(&e, 0x0F); e8(&e, (uint8_t)ext);
                     e8(&e, (uint8_t)(0x06 | ((sd & 7) << 3)));
                 } else {
-                    rex(&e,1,0,0,0); e8(&e, 0x0F); e8(&e, 0xB6); e8(&e, 0x06); /* movzx rax, byte [rsi] */
+                    rex(&e,1,0,0,0); e8(&e, 0x0F); e8(&e, (uint8_t)ext); e8(&e, 0x06);
                     emit_store_rbp(&e, spill_off(assign, assign_count, &e, in->dst), 0);
                 }
             } else if (sd >= 0) {

@@ -394,6 +394,8 @@ op_load:
         int64_t addr = vr[in->a];
         if (in->imm == 1)
             vr[in->dst] = (addr >= 0 && addr < mem_size * 8) ? (int64_t)mem[addr] : 0;
+        else if (in->imm == 2)
+            vr[in->dst] = (addr >= 0 && addr < mem_size * 8) ? (int64_t)(signed char)mem[addr] : 0;
         else
             vr[in->dst] = (addr >= 0 && addr < mem_size * 8) ? mem_load64(mem, addr) : 0;
     }

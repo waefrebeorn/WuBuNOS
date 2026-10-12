@@ -3818,6 +3818,7 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
          * registered member type is char or an array of char. */
         int char_elem = (n->type && (n->type->kind == HD_TYPE_I8 ||
                                      n->type->kind == HD_TYPE_U8));
+        int char_unsigned = (n->type && n->type->kind == HD_TYPE_U8);
         if (!char_elem && base_node && base_node->kind == HD_AST_IDENT &&
             base_node->ident[0]) {
             for (int vi = 0; vi < g->n_vars; vi++)
@@ -3826,7 +3827,9 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                     g->vars[vi].type->base &&
                     (g->vars[vi].type->base->kind == HD_TYPE_I8 ||
                      g->vars[vi].type->base->kind == HD_TYPE_U8)) {
-                    char_elem = 1; break;
+                    char_elem = 1;
+                    if (g->vars[vi].type->base->kind == HD_TYPE_U8) char_unsigned = 1;
+                    break;
                 }
         }
         if (!char_elem && base_node && base_node->kind == HD_AST_MEMBER &&
@@ -3845,11 +3848,17 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                         if (mk == HD_TYPE_I8 || mk == HD_TYPE_U8 ||
                             ek == HD_TYPE_I8 || ek == HD_TYPE_U8)
                             char_elem = 1;
+                        if (mk == HD_TYPE_U8 || ek == HD_TYPE_U8)
+                            char_unsigned = 1;
                     }
                 }
             }
         }
-        if (char_elem) return wubu_mir_load8(g->prog, addr);
+        if (char_elem) {
+            /* signed char (I8) sign-extends; unsigned char (U8) zero-extends */
+            if (char_unsigned) return wubu_mir_load8(g->prog, addr);
+            return wubu_mir_load8s(g->prog, addr);
+        }
         return wubu_mir_load(g->prog, addr);
     }
     case HD_AST_ADDR: {
@@ -3916,7 +3925,10 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         }
         if (pt && (pt->kind == HD_TYPE_I8 || pt->kind == HD_TYPE_U8))
             char_load = 1;
-        if (char_load) return wubu_mir_load8(g->prog, addr);
+        if (char_load) {
+            if (pt->kind == HD_TYPE_U8) return wubu_mir_load8(g->prog, addr);
+            return wubu_mir_load8s(g->prog, addr);
+        }
         return wubu_mir_load(g->prog, addr);
     }
     case HD_AST_CALL:
