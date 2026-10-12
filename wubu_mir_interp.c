@@ -383,13 +383,19 @@ op_continue:
 op_store:
     {
         int64_t addr = vr[in->a];
-        if (addr >= 0 && addr < mem_size * 8) mem_store64(mem, addr, vr[in->b]);
+        if (addr >= 0 && addr < mem_size * 8) {
+            if (in->imm == 1) mem[addr] = (uint8_t)(vr[in->b] & 0xFF);
+            else mem_store64(mem, addr, vr[in->b]);
+        }
     }
     DISPATCH();
 op_load:
     {
         int64_t addr = vr[in->a];
-        vr[in->dst] = (addr >= 0 && addr < mem_size * 8) ? mem_load64(mem, addr) : 0;
+        if (in->imm == 1)
+            vr[in->dst] = (addr >= 0 && addr < mem_size * 8) ? (int64_t)mem[addr] : 0;
+        else
+            vr[in->dst] = (addr >= 0 && addr < mem_size * 8) ? mem_load64(mem, addr) : 0;
     }
     DISPATCH();
 op_alloc:

@@ -234,6 +234,30 @@ void wubu_mir_store(wubu_mir_prog_t *p, wubu_vr_t addr, wubu_vr_t val)
     i->b = val;
 }
 
+/* Byte-width load/store (imm=1 = 1 byte). For char/uint8 pointees, where a
+ * full 8-byte cell load would read neighbouring bytes. Zero-extends on
+ * load; masks to the low byte on store. */
+wubu_vr_t wubu_mir_load8(wubu_mir_prog_t *p, wubu_vr_t addr)
+{
+    wubu_mir_instr_t *i = emit(p);
+    if (!i) return 0;
+    i->op = MIR_LOAD;
+    i->dst = (wubu_vr_t)p->n;
+    i->a = addr;
+    i->imm = 1;   /* byte width */
+    return i->dst;
+}
+
+void wubu_mir_store8(wubu_mir_prog_t *p, wubu_vr_t addr, wubu_vr_t val)
+{
+    wubu_mir_instr_t *i = emit(p);
+    if (!i) return;
+    i->op = MIR_STORE;
+    i->a = addr;
+    i->b = val;
+    i->imm = 1;   /* byte width */
+}
+
 void wubu_mir_set_n_args(wubu_mir_prog_t *p, uint32_t n_args)
 {
     if (p) p->n_args = n_args;

@@ -1697,7 +1697,17 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             rex(&e,1,0,0,0); e8(&e, 0x89); e8(&e, 0xDE);   /* mov rsi, rbx */
             rex(&e,1,0,0,0); e8(&e, 0x01); e8(&e, 0xC6);   /* add rsi, rax */
             int sd = VR_ENC_SAFE(in->dst);
-            if (sd >= 0) {
+            if (in->imm == 1) {
+                /* byte load: movzx reg, byte [rsi] (zero-extend) */
+                if (sd >= 0) {
+                    rex(&e,1,reg_needs_rex(sd),0,0);
+                    e8(&e, 0x0F); e8(&e, 0xB6);
+                    e8(&e, (uint8_t)(0x06 | ((sd & 7) << 3)));
+                } else {
+                    rex(&e,1,0,0,0); e8(&e, 0x0F); e8(&e, 0xB6); e8(&e, 0x06); /* movzx rax, byte [rsi] */
+                    emit_store_rbp(&e, spill_off(assign, assign_count, &e, in->dst), 0);
+                }
+            } else if (sd >= 0) {
                 rex(&e,1,reg_needs_rex(sd),0,0);
                 e8(&e, 0x8B);
                 e8(&e, (uint8_t)(0x06 | ((sd & 7) << 3)));
@@ -1719,7 +1729,12 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             /* rsi = prog.mem + rax */
             rex(&e,1,0,0,0); e8(&e, 0x89); e8(&e, 0xDE);   /* mov rsi, rbx */
             rex(&e,1,0,0,0); e8(&e, 0x01); e8(&e, 0xC6);   /* add rsi, rax */
-            rex(&e,1,0,0,0); e8(&e, 0x89); e8(&e, 0x3E);   /* mov [rsi], rdi */
+            if (in->imm == 1) {
+                /* byte store: mov [rsi], dil (low byte of rdi) : 40 88 3E */
+                e8(&e, 0x40); e8(&e, 0x88); e8(&e, 0x3E);
+            } else {
+                rex(&e,1,0,0,0); e8(&e, 0x89); e8(&e, 0x3E);   /* mov [rsi], rdi */
+            }
             break;
         }
         case MIR_TO_PTR: {

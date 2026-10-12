@@ -301,6 +301,9 @@ wubu_vr_t wubu_mir_alloc(wubu_mir_prog_t *p, int64_t n_elements);
 /* load/store through an address held in a vr */
 wubu_vr_t wubu_mir_load(wubu_mir_prog_t *p, wubu_vr_t addr);
 void wubu_mir_store(wubu_mir_prog_t *p, wubu_vr_t addr, wubu_vr_t val);
+/* Byte-width (char/uint8) load/store: imm=1 selects a 1-byte access. */
+wubu_vr_t wubu_mir_load8(wubu_mir_prog_t *p, wubu_vr_t addr);
+void wubu_mir_store8(wubu_mir_prog_t *p, wubu_vr_t addr, wubu_vr_t val);
 void wubu_mir_ret(wubu_mir_prog_t *p, wubu_vr_t v);
 /* Emit MIR_T_GEMM: mem[dst] += A[i*N+k]*B[k*N+j] accumulation.
  * a=Abase, b=Bbase, dst=Cbase, M/N/K are the matrix shapes. */

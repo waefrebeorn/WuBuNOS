@@ -3737,6 +3737,23 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 }
             }
         }
+        /* Byte-addressable memory: a char/uint8 element loads ONE byte.
+         * Resolve the element type from the INDEX node's type OR the base
+         * pointer variable's pointee (when n->type is unset). */
+        int char_elem = (n->type && (n->type->kind == HD_TYPE_I8 ||
+                                     n->type->kind == HD_TYPE_U8));
+        if (!char_elem && base_node && base_node->kind == HD_AST_IDENT &&
+            base_node->ident[0]) {
+            for (int vi = 0; vi < g->n_vars; vi++)
+                if (strcmp(g->vars[vi].name, base_node->ident) == 0 &&
+                    g->vars[vi].type && g->vars[vi].type->kind == HD_TYPE_PTR &&
+                    g->vars[vi].type->base &&
+                    (g->vars[vi].type->base->kind == HD_TYPE_I8 ||
+                     g->vars[vi].type->base->kind == HD_TYPE_U8)) {
+                    char_elem = 1; break;
+                }
+        }
+        if (char_elem) return wubu_mir_load8(g->prog, addr);
         return wubu_mir_load(g->prog, addr);
     }
     case HD_AST_ADDR: {
@@ -3765,6 +3782,35 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 }
             }
         }
+        /* Byte-addressable memory: a char or uint8 pointee loads ONE byte,
+         * not the whole 8-byte cell (type-punning: p[0] on a char pointer
+         * reads the low byte, not the full word). Resolve the pointee type
+         * from the DEREF result type, the child pointer base, or the symbol
+         * table (when the child is an IDENT bound to a char-pointer var). */
+        int char_load = 0;
+        const HDType *pt = NULL;
+        if (n->type) pt = n->type;
+        else if (n->child && n->child->type &&
+                 n->child->type->kind == HD_TYPE_PTR) pt = n->child->type->base;
+        else if (n->child && n->child->kind == HD_AST_IDENT && n->child->ident[0]) {
+            for (int vi = 0; vi < g->n_vars; vi++)
+                if (strcmp(g->vars[vi].name, n->child->ident) == 0 &&
+                    g->vars[vi].type && g->vars[vi].type->kind == HD_TYPE_PTR) {
+                    pt = g->vars[vi].type->base; break;
+                }
+        }
+        else if (n->child && n->child->kind == HD_AST_ADD && n->child->left &&
+                 n->child->left->kind == HD_AST_IDENT && n->child->left->ident[0]) {
+            /* p[i] lowers to DEREF(ADD(p, i)) -- check the base pointer var */
+            for (int vi = 0; vi < g->n_vars; vi++)
+                if (strcmp(g->vars[vi].name, n->child->left->ident) == 0 &&
+                    g->vars[vi].type && g->vars[vi].type->kind == HD_TYPE_PTR) {
+                    pt = g->vars[vi].type->base; break;
+                }
+        }
+        if (pt && (pt->kind == HD_TYPE_I8 || pt->kind == HD_TYPE_U8))
+            char_load = 1;
+        if (char_load) return wubu_mir_load8(g->prog, addr);
         return wubu_mir_load(g->prog, addr);
     }
     case HD_AST_CALL:
