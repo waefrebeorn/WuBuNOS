@@ -1,6 +1,21 @@
 # HolyD Compiler Gap Analysis
 
-**Current gauntlet score: 2,503/4,431 (56.6%)**
+**Gauntlet (fresh binary, 4,588 tests, x86-64): PASS 1,790 · FAIL 329 · EROR 2,469**
+
+Of *runnable* tests (PASS+FAIL = 2,119), **84.5% pass**. The 2,469 EROR are
+mostly unrunnable snippets referencing undefined helper functions (test1,
+foo, ox, bug) — not compiler failures. The 329 FAILs are the real gap.
+
+Recent fixes (this session, all gated 195/195 + selfhost 155/155 + fuzz_diff 0):
+- signed char byte-load sign-extends; hex bit-63 literals; float-builtin typing
+- 3D+ arrays (uninitialized vla_dims); recursive brace-init flattening
+- byte-addressable char pointers / char arrays / string init
+- static char array from string; char*/ptr array brace-init stores pointer
+- MIR_TO_PTR double mem_base add (crashed all external string-arg calls)
+- inc/dec through subscript/deref/member lvalues (was a no-op); char* inc=1 byte
+
+Remaining FAIL categories: gcc_torture 97, extern_gcc 81, wcc 72, lacc 39.
+231/329 are exp=0 got=1 (fail first assertion).
 
 ## Passing Tests (2,503)
 - Integer arithmetic (add, sub, mul, div, mod, bitwise, shifts)
