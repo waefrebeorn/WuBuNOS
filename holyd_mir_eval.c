@@ -167,6 +167,39 @@ static int mir_lvalue_is_float(HDMirGen *g, const HDASTNode *n) {
     return (et && et->kind == HD_TYPE_F64) ? 1 : 0;
 }
 
+/* forward decls for the bit-field lvalue helper */
+static mir_struct_t *mir_find_struct(HDMirGen *g, const char *name);
+static const char *mir_dot_struct_type(HDMirGen *g, const HDASTNode *n);
+static const char *mir_find_var_struct_name(HDMirGen *g, const char *name);
+
+/* If an lvalue node names a struct bit-field member, return its width (>0)
+ * and write the bit-offset to *bo. Returns 0 if not a bit-field. Handles
+ * s.f, a[i].f, p->f (DOT/MEMBER/ARROW whose base resolves to a registered
+ * struct). */
+static int mir_lvalue_bitfield(HDMirGen *g, const HDASTNode *n, int *bo) {
+    if (!n) return 0;
+    if (n->kind != HD_AST_DOT && n->kind != HD_AST_MEMBER && n->kind != HD_AST_ARROW)
+        return 0;
+    if (!n->ident[0]) return 0;
+    const char *stype = NULL;
+    if (n->left && n->left->kind == HD_AST_IDENT && n->left->ident[0])
+        stype = mir_find_var_struct_name(g, n->left->ident);
+    if (!stype && n->left && (n->left->kind == HD_AST_INDEX))
+        stype = mir_dot_struct_type(g, n->left);
+    if (!stype) return 0;
+    mir_struct_t *st = mir_find_struct(g, stype);
+    if (!st) return 0;
+    for (int mi = 0; mi < st->n_members; mi++)
+        if (strcmp(st->member_names[mi], n->ident) == 0) {
+            if (st->member_bit_widths[mi] > 0) {
+                if (bo) *bo = st->member_bit_offsets[mi];
+                return st->member_bit_widths[mi];
+            }
+            return 0;
+        }
+    return 0;
+}
+
 static const HDASTNode *mir_find_func(HDMirGen *g, const char *name) {
     for (int i = g->n_funcs - 1; i >= 0; i--) {
         if (g->func_ast[i] && strcmp(g->func_ast[i]->ident, name) == 0)
@@ -2670,6 +2703,29 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         if (n->child) {
             wubu_vr_t laddr = mir_lvalue_addr(g, n->child);
             if (laddr) {
+                /* Bit-field member: post-inc/dec must read-modify-write the
+                 * shared cell (clear the field's bits, insert inc/dec value),
+                 * else it clobbers sibling bit-fields. */
+                int bf_bo = 0;
+                int bf_w = mir_lvalue_bitfield(g, n->child, &bf_bo);
+                if (bf_w > 0) {
+                    wubu_vr_t oldw = wubu_mir_load(g->prog, laddr);
+                    int64_t bmask = (bf_w >= 64) ? -1LL : ((1LL << bf_w) - 1);
+                    wubu_vr_t cur = wubu_mir_binop(g->prog, MIR_AND, oldw, wubu_mir_const(g->prog, bmask << bf_bo));
+                    if (bf_bo > 0) cur = wubu_mir_binop(g->prog, MIR_SHR, cur, wubu_mir_const(g->prog, (int64_t)bf_bo));
+                    wubu_vr_t tmp = mir_new_vr(g);
+                    wubu_mir_mov_to(g->prog, tmp, cur);
+                    wubu_vr_t one = wubu_mir_const(g->prog, 1);
+                    wubu_vr_t nv = (n->kind == HD_AST_POST_INC)
+                        ? wubu_mir_binop(g->prog, MIR_ADD, cur, one)
+                        : wubu_mir_binop(g->prog, MIR_SUB, cur, one);
+                    nv = wubu_mir_binop(g->prog, MIR_AND, nv, wubu_mir_const(g->prog, bmask));
+                    if (bf_bo > 0) nv = wubu_mir_binop(g->prog, MIR_SHL, nv, wubu_mir_const(g->prog, (int64_t)bf_bo));
+                    int64_t inv = ~(bmask << bf_bo);
+                    wubu_vr_t clr = wubu_mir_binop(g->prog, MIR_AND, oldw, wubu_mir_const(g->prog, inv));
+                    wubu_mir_store(g->prog, laddr, wubu_mir_binop(g->prog, MIR_OR, clr, nv));
+                    return tmp;
+                }
                 int is_float_lv = mir_lvalue_is_float(g, n->child);
                 wubu_vr_t tmp = mir_new_vr(g);
                 wubu_vr_t v = wubu_mir_load(g->prog, laddr);
@@ -2756,6 +2812,29 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         if (n->child) {
             wubu_vr_t laddr = mir_lvalue_addr(g, n->child);
             if (laddr) {
+                /* Bit-field member: pre-inc/dec RMW the shared cell. */
+                int bf_bo = 0;
+                int bf_w = mir_lvalue_bitfield(g, n->child, &bf_bo);
+                if (bf_w > 0) {
+                    wubu_vr_t oldw = wubu_mir_load(g->prog, laddr);
+                    int64_t bmask = (bf_w >= 64) ? -1LL : ((1LL << bf_w) - 1);
+                    wubu_vr_t cur = wubu_mir_binop(g->prog, MIR_AND, oldw, wubu_mir_const(g->prog, bmask << bf_bo));
+                    if (bf_bo > 0) cur = wubu_mir_binop(g->prog, MIR_SHR, cur, wubu_mir_const(g->prog, (int64_t)bf_bo));
+                    wubu_vr_t one = wubu_mir_const(g->prog, 1);
+                    wubu_vr_t nv = (n->kind == HD_AST_PRE_INC)
+                        ? wubu_mir_binop(g->prog, MIR_ADD, cur, one)
+                        : wubu_mir_binop(g->prog, MIR_SUB, cur, one);
+                    nv = wubu_mir_binop(g->prog, MIR_AND, nv, wubu_mir_const(g->prog, bmask));
+                    if (bf_bo > 0) nv = wubu_mir_binop(g->prog, MIR_SHL, nv, wubu_mir_const(g->prog, (int64_t)bf_bo));
+                    int64_t inv = ~(bmask << bf_bo);
+                    wubu_vr_t clr = wubu_mir_binop(g->prog, MIR_AND, oldw, wubu_mir_const(g->prog, inv));
+                    wubu_vr_t res = wubu_mir_binop(g->prog, MIR_OR, clr, nv);
+                    wubu_mir_store(g->prog, laddr, res);
+                    /* pre-inc returns the new field value (masked) */
+                    return wubu_mir_binop(g->prog, MIR_AND,
+                        wubu_mir_binop(g->prog, MIR_SHR, res, wubu_mir_const(g->prog, (int64_t)bf_bo)),
+                        wubu_mir_const(g->prog, bmask));
+                }
                 wubu_vr_t v = wubu_mir_load(g->prog, laddr);
                 wubu_vr_t upd;
                 if (mir_lvalue_is_float(g, n->child)) {
