@@ -1687,6 +1687,18 @@ extern_done:
                             offset = mir_struct_member_offset(g, struct_type_name, elem->ident);
                             if (offset < 0) offset = (int)e; /* fallback */
                         }
+                        /* Nested brace value: .c = {1,2,3} or [i] = {..} —
+                         * store each leaf at consecutive cells from the field
+                         * offset (mir_gen_expr on a BRACE_INIT yields one bogus
+                         * scalar). */
+                        if (elem->child && elem->child->kind == HD_AST_BRACE_INIT) {
+                            int cursor = offset;
+                            for (uint32_t se = 0; se < elem->child->n_args; se++)
+                                cursor = mir_store_brace_leaves(g, addr, cursor,
+                                                                elem->child->args[se]);
+                            offset = cursor;
+                            continue;
+                        }
                         ev = mir_gen_expr(g, elem->child);
                     } else {
                         /* If element is a struct IDENT and the corresponding member
