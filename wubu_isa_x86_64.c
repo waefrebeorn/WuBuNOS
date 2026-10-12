@@ -1035,12 +1035,17 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
                     e8(&e, 0x20); e8(&e, 0xC8);
                     break;
                 case MIR_FLT:
-                    /* setb al (CF=1 => a<b); movzx eax, al */
+                    /* setb al (CF=1 => a<b) ; setnp cl ; and al,cl
+                     * (NaN -> unordered -> PF=1 -> setnp cl=0 -> false) */
                     e8(&e, 0x0F); e8(&e, 0x92); e8(&e, 0xC0);
+                    e8(&e, 0x0F); e8(&e, 0x9B); e8(&e, 0xC1);
+                    e8(&e, 0x20); e8(&e, 0xC8);
                     break;
                 default:
-                    /* setbe al (CF=1 or ZF=1 => a<=b) */
+                    /* setbe al (CF=1 or ZF=1 => a<=b) ; setnp cl ; and al,cl */
                     e8(&e, 0x0F); e8(&e, 0x96); e8(&e, 0xC0);
+                    e8(&e, 0x0F); e8(&e, 0x9B); e8(&e, 0xC1);
+                    e8(&e, 0x20); e8(&e, 0xC8);
                     break;
                 }
                 /* movzx eax, al : 0F B6 C0 (for FEQ/FNE after AND) */
