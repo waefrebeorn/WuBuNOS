@@ -1744,8 +1744,9 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             int sa = VR_ENC_SAFE(in->a);
             if (sa >= 0) emit_mov_rax_from_vr(&e, sa);     /* rax = byte offset */
             else emit_load_rbp(&e, 0, spill_off(assign, assign_count, &e, in->a));
-            /* No shl — addresses are already byte offsets */
-            rex(&e,1,0,0,0); e8(&e, 0x01); e8(&e, 0xD8);   /* add rax, rbx (add mem base) */
+            /* No shl — addresses are already byte offsets.
+             * Add mem_base ONCE (rbx): a duplicate add corrupted external-call
+             * string pointers (offset + 2*mem_base -> segfault). */
             rex(&e,1,0,0,0); e8(&e, 0x01); e8(&e, 0xD8);   /* add rax, rbx (add mem base) */
             int sd = VR_ENC_SAFE(in->dst);
             if (sd >= 0) emit_mov_vr_from_rax(&e, sd);     /* dst = rax */
