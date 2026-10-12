@@ -192,6 +192,28 @@ Also: run `--target x86-64` (NOT positional `x86-64`, which is ignored → runs 
   compares signed (should be 0); large literals without `u` aren't treated as the
   unsigned value they exceed.
 
+## Session final state (measured, complete run FAIL=315, 2,818 x86-64 tests)
+True complete-run baseline: FAIL=329 (pre-session). After this session's fixes:
+FAIL=315. Net ~14 tests cleared, dominated by the __builtin_ off-by-one (d03c0db,
+which unblocked __builtin_memcpy/memset/mul_overflow/ffs and friends) and function
+pointers (5122b1a). The regalloc spill (0cd0145) is correct discipline but its
+"329→142" was a FALSE measurement (incomplete run); real impact is within the 329→315.
+
+Shipped this session (all gated 195/195 + selfhost 155/155 + fuzz_diff 0):
+regalloc call-crossing spill; function pointers; BITNOT unsigned propagation;
+__builtin_ prefix off-by-one; double* compound-assign float op; compound-assign
+RHS-before-LHS order; plus 8 earlier (signed char, hex, 3D arrays, byte-addressable
+char, static-char-array, MIR_TO_PTR, inc/dec lvalues, char*/ptr array).
+
+The gauntlet has PLATEAUED at 315. The remaining failures are heterogeneous:
+- recursion (needs frame-per-invocation, architectural, large)
+- function pointers work for simple cases but not all patterns
+- scattered gcc_torture constructs (attributes, builtins we lack, complex exprs)
+- some wcc/lacc tests have harness expected-value mismatches (not compiler bugs)
+No single localized fix clears a large cluster anymore. The next high-leverage move
+is the architectural frame-per-invocation change (unblocks all recursion) or
+accepting the plateau and moving to the OS/Brain repos per the standing goal.
+
 ## Current state (measured, FAIL=142 on clean rebuild)
 After the spill fix (0cd0145), the 142 remaining x86-64 FAILs are ALL gcc_torture
 (95) + extern_gcc (42) + gcc_compile (5) — the wcc/lacc failures are cleared. 130/142
