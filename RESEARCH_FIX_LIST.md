@@ -177,6 +177,20 @@ Also: run `--target x86-64` (NOT positional `x86-64`, which is ignored → runs 
 
 ---
 
+## Current state (measured, FAIL=142 on clean rebuild)
+After the spill fix (0cd0145), the 142 remaining x86-64 FAILs are ALL gcc_torture
+(95) + extern_gcc (42) + gcc_compile (5) — the wcc/lacc failures are cleared. 130/142
+are exp=0 got=1 (fail first assertion). They are HETEROGENEOUS feature gaps, not one
+cluster:
+- **Function pointers** (`int (*fp)(int)=f; fp(3)`) — not supported at all (`p!=0`→0,
+  function address not captured). Contained feature, moderate effort.
+- **Recursion** (frame-per-invocation, GAP 1 above) — large architectural change.
+- **`__attribute__((noinline/noclone))`, `__inline__`, `__builtin_*`, `__CHAR_BIT__`** —
+  parser/frontend features, each small but numerous.
+- **Complex expressions** (unsigned wraparound `--i < ~0`, compound-assign-with-cast).
+No single fix clears a large cluster; the spill fix already captured the big win
+(329→142). Function pointers are the most contained next feature.
+
 ## Prioritized order (highest leverage first)
 1. **GAP 1 + GAP 2** (recursion / call-result preservation) — chibicc push/pop discipline
    + spill call results. Unblocks fib, ackermann, mutual recursion, and most of the
