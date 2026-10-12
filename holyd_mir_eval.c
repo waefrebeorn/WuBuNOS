@@ -2672,8 +2672,10 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         /* left = left OP right — supports IDENT, INDEX (a[i]), DEREF (*p), MEMBER (s.f) */
         wubu_vr_t addr = mir_lvalue_addr(g, n->left);
         if (addr) {
-            wubu_vr_t lhs = wubu_mir_load(g->prog, addr);
+            /* Evaluate RHS FIRST so a side effect on the LHS (e.g. c -= (c += d))
+             * is visible when we then read the LHS value. */
             wubu_vr_t rhs = mir_gen_expr(g, n->right);
+            wubu_vr_t lhs = wubu_mir_load(g->prog, addr);
             /* Detect float operands so compound assign uses float MIR ops */
             int is_float = (n->left && n->left->type && n->left->type->kind == HD_TYPE_F64) ||
                            (n->right && n->right->type && n->right->type->kind == HD_TYPE_F64) ||
