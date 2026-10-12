@@ -445,6 +445,7 @@ char *wubu_preprocess(const char *src)
         {"FINISH", "return 0"},
         {"CONVERT(x)", "0"},
         {"int8_t", "char"},
+        {"wchar_t", "int"},
         {"int16_t", "short"},
         {"int32_t", "int"},
         {"int64_t", "long"},

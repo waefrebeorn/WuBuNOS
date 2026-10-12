@@ -449,6 +449,17 @@ HDTokenType hd_lex_next(HDLexer *lex) {
     char c = hd_advance(lex);
     lex->tok.text[0] = c;   /* remember the leading char (used by string/char scanner) */
 
+    /* Wide string/char literal prefix: L"..." / L'...' (also u/U/u8). The
+     * prefix char is followed immediately by a quote — consume it and scan
+     * the literal as a normal string/char (we treat wide as narrow; the
+     * VALUE is the same for ASCII). Without this, L lexes as an identifier
+     * and the quote becomes a separate token. */
+    if ((c == 'L' || c == 'u' || c == 'U') &&
+        !hd_is_at_end(lex) && (hd_peek(lex) == '"' || hd_peek(lex) == '\'')) {
+        c = hd_advance(lex);   /* consume the prefix, c is now the quote */
+        lex->tok.text[0] = c;
+    }
+
     switch (c) {
         /* Single-char tokens */
         case '(': return hd_make_token(lex, HD_TOK_LPAREN);
