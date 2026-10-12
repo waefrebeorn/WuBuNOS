@@ -1835,6 +1835,39 @@ done_extern_params:
                         strncpy(pname, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
                         advance(p);
                     }
+                    /* Array dimensions on a NON-first parameter: `int a, int b[5]`
+                     * or `int n, int arr[]`. parse_type read only the base type;
+                     * consume the [N] dims here and convert the param to a
+                     * pointer (C array-parameter decay), mirroring the first
+                     * parameter's handling above. Without this the trailing []
+                     * is left unconsumed and expect(RPAREN) fails. */
+                    if (peek(p) == HD_TOK_LBRACKET) {
+                        int dims2[8], nd2 = 0;
+                        while (peek(p) == HD_TOK_LBRACKET && nd2 < 8) {
+                            advance(p);
+                            if (peek(p) == HD_TOK_INT) { dims2[nd2++] = (int)p->lex->tok.int_val; advance(p); }
+                            else if (peek(p) == HD_TOK_IDENT) { dims2[nd2++] = 0; advance(p); }
+                            else if (peek(p) != HD_TOK_RBRACKET) {
+                                /* VLA dim with an expression / side effect
+                                 * (e.g. array[i++]): parse+discard it, size 0. */
+                                (void)parse_expr(p);
+                                dims2[nd2++] = 0;
+                            }
+                            else dims2[nd2++] = 0;
+                            expect(p, HD_TOK_RBRACKET);
+                        }
+                        HDType *inner2 = pt;
+                        for (int di = nd2 - 1; di >= 1; di--) {
+                            HDType *arr = (HDType *)calloc(1, sizeof(HDType));
+                            arr->kind = HD_TYPE_ARRAY; arr->base = inner2;
+                            arr->array_size = dims2[di];
+                            arr->size = hd_type_size(inner2) * (dims2[di] > 0 ? dims2[di] : 1);
+                            inner2 = arr;
+                        }
+                        HDType *ptr2 = (HDType *)calloc(1, sizeof(HDType));
+                        ptr2->kind = HD_TYPE_PTR; ptr2->base = inner2; ptr2->size = 8;
+                        pt = ptr2;
+                    }
                     fn->param_types[fn->n_params] = pt;
                     strncpy(fn->param_names[fn->n_params], pname, HD_MAX_IDENT_LEN - 1);
                     fn->n_params++;
