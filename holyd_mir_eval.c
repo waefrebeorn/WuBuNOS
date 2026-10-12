@@ -1411,8 +1411,12 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
         }
 extern_done:
         if (n->init) {
+            int is_char_array_from_string =
+                (n->init->kind == HD_AST_STRING_LIT && n->type &&
+                 n->type->kind == HD_TYPE_ARRAY && n->type->base &&
+                 (n->type->base->kind == HD_TYPE_U8 || n->type->base->kind == HD_TYPE_I8));
             if (n->is_static && g->in_function_body &&
-                n->init->kind != HD_AST_BRACE_INIT) {
+                n->init->kind != HD_AST_BRACE_INIT && !is_char_array_from_string) {
                 /* Static local: emit guard check + conditional init.
                  * Allocate a guard variable in global memory.
                  * Emit: if (guard == 0) { *addr = init_val; guard = 1; } */
