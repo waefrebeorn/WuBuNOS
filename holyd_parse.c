@@ -169,6 +169,8 @@ static HDType *parse_type(HDParser *p) {
                              /* `long long unsigned` */
                              if (peek(p) == HD_KW_U32) { t->kind = HD_TYPE_U64; advance(p); }
                              else if (peek(p) == HD_KW_U64) { t->kind = HD_TYPE_U64; advance(p); }
+                             /* `long long int` — redundant trailing int */
+                             else if (peek(p) == HD_KW_I32) advance(p);
                          }
                          /* `long int` == `long` — consume the redundant `int` */
                          else if (peek(p) == HD_KW_I32) { advance(p);
@@ -194,7 +196,10 @@ static HDType *parse_type(HDParser *p) {
                              advance(p);
                              t->kind = HD_TYPE_U64;  /* unsigned long is 64-bit */
                              /* `unsigned long long` */
-                             if (peek(p) == HD_KW_I64) { advance(p); }
+                             if (peek(p) == HD_KW_I64) { advance(p);
+                                 /* `unsigned long long int` — redundant trailing int */
+                                 if (peek(p) == HD_KW_I32) advance(p);
+                             }
                              else if (peek(p) == HD_KW_I32) { advance(p); }
                          }
                          else if (peek(p) == HD_KW_I32) { advance(p); }
