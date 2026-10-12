@@ -230,8 +230,8 @@ static void strip_builtin_prefix(char *line)
     while ((p = strstr(p, "__builtin_")) != NULL) {
         /* Check it's a whole word */
         if (p > line && (isalnum((unsigned char)p[-1]) || p[-1] == '_')) { p++; continue; }
-        /* Remove the __builtin_ prefix (11 chars) */
-        memmove(p, p + 11, strlen(p + 11) + 1);
+        /* Remove the __builtin_ prefix (10 chars: _ _ b u i l t i n _) */
+        memmove(p, p + 10, strlen(p + 10) + 1);
     }
     /* Strip __complex__ and __real__/__imag__ GCC extensions */
     char *q;
