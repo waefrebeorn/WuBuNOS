@@ -801,6 +801,22 @@ static HDTypeKind mir_common_cmp_type(HDMirGen *g, const HDASTNode *left, const 
         for (int i = 0; i < g->n_vars; i++)
             if (strcmp(g->vars[i].name, right->ident) == 0) { rt = g->vars[i].type; break; }
     }
+    /* If a node's type is NULL and it's a type-preserving unary op (BITNOT ~,
+     * NEG -), descend to its child to recover the type. */
+    if (!lt && left && (left->kind == HD_AST_BITNOT || left->kind == HD_AST_NEG) && left->child) {
+        const HDASTNode *c = left->child;
+        if (c->type) lt = c->type;
+        else if (c->kind == HD_AST_IDENT && c->ident[0])
+            for (int i = 0; i < g->n_vars; i++)
+                if (strcmp(g->vars[i].name, c->ident) == 0) { lt = g->vars[i].type; break; }
+    }
+    if (!rt && right && (right->kind == HD_AST_BITNOT || right->kind == HD_AST_NEG) && right->child) {
+        const HDASTNode *c = right->child;
+        if (c->type) rt = c->type;
+        else if (c->kind == HD_AST_IDENT && c->ident[0])
+            for (int i = 0; i < g->n_vars; i++)
+                if (strcmp(g->vars[i].name, c->ident) == 0) { rt = g->vars[i].type; break; }
+    }
     if (!lt) lt = rt;
     if (!rt) rt = lt;
     if (!lt || !rt) return HD_TYPE_I32; /* default */
