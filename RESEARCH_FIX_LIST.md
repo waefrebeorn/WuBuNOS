@@ -40,10 +40,15 @@ touch it. Simplest robust version: always spill a call-result VR to its stack sl
 immediately (set `assign[rv].reg = -1`), making every call result memory-resident.
 Correctness first; the regalloc can re-optimize later.
 
-**MEASURED IMPACT (0cd0145 spill, SHIPPED):** the regalloc spill (VRs whose live
-range crosses a MIR_CALL → stack slot) dropped the x86-64 gauntlet FAIL count from
-**329 → 142** (a 57% reduction, confirmed on a clean rebuild). This is the single
-highest-leverage fix and is shipped + gated (195/195 + selfhost 155/155 + fuzz_diff 0).
+**MEASURED IMPACT (0cd0145 spill + later fixes, SHIPPED):** CORRECTION — the earlier
+"329 → 142 (57%)" was a FALSE measurement: the 142 came from an INCOMPLETE gauntlet run
+(1,614 of 2,798 x86-64 tests; the run was cut short). The TRUE complete-run baseline is
+**FAIL=329** (pre-session, 2,798 tests) and the current complete run (2,818 tests, after
+spill + function-pointer + BITNOT + __builtin_ fixes) is **FAIL=315** — a real but modest
+~14-test reduction. The __builtin_ off-by-one fix (d03c0db) and function pointers cleared
+a verified cluster: func_ptr_1, pr68381 (__builtin_mul_overflow), pr97325 (__builtin_ffs),
+and ~11 others. ALWAYS verify a gauntlet run is COMPLETE (x86-64 line count ≈ 2,798)
+before trusting its FAIL count — a cut-short run undercounts failures dramatically.
 
 **EPILOGUE FIX REVERTED (6678d05 → a4976a3):** making every called function run the
 full epilogue fixed fib(2) but REGRESSED `x=5;y=f();return x` (the second call's
