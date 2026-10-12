@@ -391,7 +391,32 @@ static HDType *parse_type(HDParser *p) {
                                     else if (tk == HD_TOK_LPAREN || tk == HD_TOK_RPAREN) { advance(p); }
                                     else if (tk == HD_KW_U0 || tk == HD_KW_I32 || tk == HD_KW_I64
                                              || tk == HD_KW_U32 || tk == HD_KW_U64) { advance(p); }
-                                    else advance(p); /* sizeof, ident, etc: skip */
+                                    else if (tk == HD_KW_SIZEOF) {
+                                        /* sizeof(type) -> byte size of type. */
+                                        advance(p); /* consume sizeof */
+                                        long szv = 8;
+                                        if (peek(p) == HD_TOK_LPAREN) {
+                                            advance(p);
+                                            HDTokenType tt = peek(p);
+                                            if (tt == HD_KW_I32 || tt == HD_KW_U32) szv = 4;
+                                            else if (tt == HD_KW_I16 || tt == HD_KW_U16) szv = 2;
+                                            else if (tt == HD_KW_I8 || tt == HD_KW_U8) szv = 1;
+                                            else if (tt == HD_KW_I64 || tt == HD_KW_U64) szv = 8;
+                                            /* skip until matching close paren */
+                                            int depth = 1;
+                                            while (peek(p) != HD_TOK_EOF && depth > 0) {
+                                                if (peek(p) == HD_TOK_LPAREN) depth++;
+                                                else if (peek(p) == HD_TOK_RPAREN) depth--;
+                                                if (depth == 0) { advance(p); break; }
+                                                advance(p);
+                                            }
+                                        }
+                                        if (!have) { acc = szv; have = 1; }
+                                        else if (op=='+') acc+=szv; else if (op=='-') acc-=szv;
+                                        else if (op=='*') acc*=szv; else if (op=='/') acc = szv?acc/szv:0;
+                                        op = 0;
+                                    }
+                                    else advance(p); /* other ident: skip */
                                 }
                                 if (have && acc > 0 && acc < 64) bw = (int)acc;
                             }

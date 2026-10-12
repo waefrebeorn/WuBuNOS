@@ -1399,6 +1399,8 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
                             strncpy(s->member_names[mi], n->type->members[mi].name, HD_MAX_IDENT_LEN - 1);
                             s->member_names[mi][HD_MAX_IDENT_LEN - 1] = '\0';
                             s->member_offsets[mi] = (int)n->type->members[mi].offset;
+                            s->member_bit_widths[mi] = n->type->members[mi].bit_width;
+                            s->member_bit_offsets[mi] = n->type->members[mi].bit_offset;
                             s->member_is_unsigned[mi] = (n->type->members[mi].type && (n->type->members[mi].type->kind == HD_TYPE_U8 || n->type->members[mi].type->kind == HD_TYPE_U16 || n->type->members[mi].type->kind == HD_TYPE_U32 || n->type->members[mi].type->kind == HD_TYPE_U64)) ? 1 : 0;
                             s->member_is_ptr[mi] = (n->type->members[mi].type && n->type->members[mi].type->kind == HD_TYPE_PTR) ? 1 : 0;
                             s->member_type_kinds[mi] = n->type->members[mi].type ? n->type->members[mi].type->kind : 0;
