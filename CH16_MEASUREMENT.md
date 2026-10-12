@@ -67,13 +67,15 @@ Pointer-to-array types `T (*p)[N]` — the largest remaining cluster
 (3+ tests). `is_ptr_array` tracking already exists; need &a to produce a
 ptr-to-array and p[i][j] to decay/index correctly.
 
-### Precise blocker (diagnosed, commit 45e1b5a)
-`int a[3]={10,20,30}; int (*p)[3]=&a;` — p holds the array address (48),
-and `int *q=*p; q[1]` works (20). But `(*p)[1]` and `p[0][1]` fail:
-ptr-to-array variables expose their value INCONSISTENTLY across access
-paths. `(long)p` reads p's memory cell (48, correct), but the DEREF and
-INDEX base paths read p's VR, which holds a corrupted value (65540 =
-0x10004, a VR-encoding artifact). The fix needs ptr-to-array vars to
-expose their value uniformly (cell or VR, not both) — a variable-storage
-consistency fix, deeper than a localized stride/deref patch. The
-is_ptr_array marking + use_value (45e1b5a) are correct prerequisites.
+### FIXED this session (43ae5b2, 799f6b4)
+Pointer-to-array types `int (*p)[N]` now work. Root cause: the `(*p)`
+declarator path mis-parsed `int (*p)[3]` as ARRAY(PTR(int),3) (array-of-
+pointers) instead of PTR(ARRAY(int,3)). Fixed in the parser (build the
+correct type) + DEREF decay (*p returns the sub-array address). All forms
+verified: (*p)[1]==20, p[0][1]==20, int *q=*p; q[1]==20, (*p)[0]==10.
+Gate 195/195, selfhost 155/155, fuzz_diff 0 mismatches.
+
+The chapter_16 batch stays 16/33 because the remaining failures need
+OTHER features (external puts/strcmp stdout verification, static arrays
+with NUL, escape sequences in compound initializers, double -0.0 layout),
+not ptr-to-array (now correct).
