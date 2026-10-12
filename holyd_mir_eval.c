@@ -729,6 +729,14 @@ static HDType *mir_binop_result_type(HDMirGen *g, const HDASTNode *left, const H
         for (int i = 0; i < g->n_vars; i++)
             if (strcmp(g->vars[i].name, right->ident) == 0) { rt = g->vars[i].type; break; }
     }
+    /* An operand whose AST type is unset may still be float (e.g. a DIV node
+     * like `1.0/a`, or a NEG of a float literal). Detect it via
+     * mir_is_float_node so a float comparison operand is NOT truncated to
+     * 32 bits (which corrupts the double bit pattern, e.g. -inf). */
+    static HDType f64t;
+    if (f64t.kind == 0) { f64t.kind = HD_TYPE_F64; f64t.size = 8; }
+    if (!lt && mir_is_float_node(g, left)) lt = &f64t;
+    if (!rt && mir_is_float_node(g, right)) rt = &f64t;
     /* If either is 64-bit (including f64), result is 64-bit */
     if ((lt && (lt->kind == HD_TYPE_I64 || lt->kind == HD_TYPE_U64 || lt->kind == HD_TYPE_F64)) ||
         (rt && (rt->kind == HD_TYPE_I64 || rt->kind == HD_TYPE_U64 || rt->kind == HD_TYPE_F64)))
