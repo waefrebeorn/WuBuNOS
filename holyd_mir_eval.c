@@ -565,6 +565,15 @@ static bool mir_is_float_node(HDMirGen *g, const HDASTNode *n) {
     if (n->kind == HD_AST_FUNC_CALL || n->kind == HD_AST_CALL) {
         /* Function call: check the function's return type */
         if (n->callee && n->callee->kind == HD_AST_IDENT) {
+            /* Float-returning builtins/externals (fabs, copysign, sqrt, ...)
+             * aren't in func_ast, so recognize them by name — their result is
+             * a double bit pattern and must NOT be int->double converted. */
+            { static const char *fret[] = {"fabs","fabsf","copysign","sqrt",
+                "sin","cos","tan","exp","log","pow","atan","atan2","floor",
+                "ceil","fmod","hypot","fma","ldexp","cbrt","round","trunc",
+                "nearbyint","rint","fmin","fmax","fdim","remainder",NULL};
+              for (int fi=0; fret[fi]; fi++)
+                  if (strcmp(n->callee->ident, fret[fi]) == 0) return true; }
             for (int i = 0; i < g->n_funcs; i++) {
                 if (g->func_ast[i] && strcmp(g->func_ast[i]->ident, n->callee->ident) == 0) {
                     HDASTNode *fn = (HDASTNode *)g->func_ast[i];

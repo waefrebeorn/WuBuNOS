@@ -318,7 +318,12 @@ static HDTokenType hd_scan_number(HDLexer *lex) {
         }
         lex->tok.is_unsigned = is_unsigned;
         lex->tok.is_long = is_long;
-        lex->tok.int_val = is_unsigned ? (int64_t)strtoull(buf, NULL, 16) : strtoll(buf, NULL, 16);
+        /* Use strtoull always: strtoll saturates at LLONG_MAX for hex values
+         * with bit 63 set (e.g. 0x8000000000000000LL -> 0x7FFFFFFFFFFFFFFF),
+         * corrupting the bit pattern. strtoull parses the full 64 bits; the
+         * cast to int64_t reinterprets them (two's complement), which is the
+         * correct signed value for a bit pattern with the high bit set. */
+        lex->tok.int_val = (int64_t)strtoull(buf, NULL, 16);
     } else if (is_bin) {
         lex->tok.is_unsigned = 0;
         lex->tok.is_long = 0;
