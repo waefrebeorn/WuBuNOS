@@ -1340,6 +1340,19 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
             vr = mir_decl_var_float(g, n->ident);
         else
             vr = mir_decl_var_unsigned(g, n->ident, is_uns);
+        /* Function-pointer initializer: int (*fp)(int)=f; — record the target
+         * func_id so fp(args) resolves to an indirect call. */
+        if (n->init && n->init->kind == HD_AST_IDENT && n->init->ident[0]) {
+            for (int fi = 0; fi < g->prog->n_funcs; fi++)
+                if (strcmp(g->prog->funcs[fi].name, n->init->ident) == 0) {
+                    for (int i = g->n_vars - 1; i >= 0; i--)
+                        if (strcmp(g->vars[i].name, n->ident) == 0) {
+                            g->vars[i].fn_ptr_func_id = fi;
+                            break;
+                        }
+                    break;
+                }
+        }
         /* Store the type and is_static flag for compound assignment type conversion */
         for (int i = g->n_vars - 1; i >= 0; i--)
             if (strcmp(g->vars[i].name, n->ident) == 0) {
@@ -2352,9 +2365,11 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             }
         }
         /* Function pointer assignment: s.fn = add — store func_id in var for later indirect calls.
-         * Detects: LHS is a DOT/MEMBER on a struct var, RHS is a function IDENT. */
-        if (n->left && (n->left->kind == HD_AST_DOT || n->left->kind == HD_AST_MEMBER) &&
-            n->right && n->right->kind == HD_AST_IDENT && n->right->ident[0]) {
+         * Detects: LHS is a DOT/MEMBER on a struct var OR a plain IDENT
+         * function-pointer variable, RHS is a function IDENT. */
+        if (n->right && n->right->kind == HD_AST_IDENT && n->right->ident[0] &&
+            n->left && (n->left->kind == HD_AST_DOT || n->left->kind == HD_AST_MEMBER ||
+                        n->left->kind == HD_AST_IDENT)) {
             /* Resolve the root variable and the function */
             const HDASTNode *lhs = n->left;
             while (lhs && (lhs->kind == HD_AST_DOT || lhs->kind == HD_AST_MEMBER))
@@ -4024,6 +4039,13 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
              * the actual definition comes later and has a body. */
             for (int i = g->prog->n_funcs - 1; i >= 0; i--)
                 if (strcmp(g->prog->funcs[i].name, n->callee->ident) == 0) { fid = i; break; }
+            /* Not a direct function name: maybe a function-pointer VARIABLE
+             * (int (*fp)(int)=f; fp(args)). Use its recorded fn_ptr_func_id. */
+            if (fid < 0) {
+                for (int i = 0; i < g->n_vars; i++)
+                    if (strcmp(g->vars[i].name, n->callee->ident) == 0 &&
+                        g->vars[i].fn_ptr_func_id >= 0) { fid = g->vars[i].fn_ptr_func_id; break; }
+            }
         }
         /* Function pointer member call: s.fn(args) where callee is a DOT/MEMBER expr.
          * The function pointer was previously stored as a func_id in the var.
