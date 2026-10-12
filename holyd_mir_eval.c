@@ -3850,6 +3850,16 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
          * sub-array which decays to a pointer. In our flat memory model,
          * this is the same address (no load). */
         wubu_vr_t addr = mir_gen_expr(g, n->child);
+        /* *p where p is a pointer-to-array (int (*p)[N]): *p is the sub-array,
+         * which decays to its address. Return the address, don't load (the
+         * value there is the first element, not the array). */
+        if (n->child && n->child->kind == HD_AST_IDENT && n->child->ident[0]) {
+            for (int vi = 0; vi < g->n_vars; vi++)
+                if (strcmp(g->vars[vi].name, n->child->ident) == 0 &&
+                    g->vars[vi].is_ptr_array) {
+                    return addr;
+                }
+        }
         if (n->child && n->child->kind == HD_AST_ADD && n->child->left) {
             const HDASTNode *base = n->child->left;
             if (base && base->kind == HD_AST_IDENT && base->ident[0]) {
