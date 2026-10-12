@@ -2027,6 +2027,12 @@ done_params:
     HDASTNode *block = NULL;
     while (match(p, HD_TOK_COMMA)) {
         HDASTNode *var = hd_ast_new(HD_AST_VAR_DECL);
+        /* Pointer declarator: `, *q` or `, **q`. Consume the stars and
+         * wrap the base element type in that many PTR levels (mirrors the
+         * first declarator's `int *p` handling). Without this, `int *p, *q;`
+         * or `int a, *b;` hit the "expected ident after comma" error. */
+        int extra_ptrs = 0;
+        while (peek(p) == HD_TOK_STAR) { advance(p); extra_ptrs++; }
         if (peek(p) != HD_TOK_IDENT) { parse_error(p, "expected ident after comma"); break; }
         strncpy(var->ident, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
         advance(p);
@@ -2052,6 +2058,12 @@ done_params:
                 bt = arr;
             }
             vtype = bt;
+        }
+        /* Wrap in PTR levels for `, *q` / `, **q` declarators. */
+        for (int pi = 0; pi < extra_ptrs; pi++) {
+            HDType *pt = (HDType *)calloc(1, sizeof(HDType));
+            pt->kind = HD_TYPE_PTR; pt->base = vtype; pt->size = 8;
+            vtype = pt;
         }
         var->type = vtype;
         if (match(p, HD_TOK_ASSIGN)) {
