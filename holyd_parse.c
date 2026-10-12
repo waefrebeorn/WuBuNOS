@@ -319,14 +319,41 @@ static HDType *parse_type(HDParser *p) {
                     if (t->n_members < HD_MAX_PARAMS) {
                         strncpy(t->members[t->n_members].name, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
                         advance(p); /* consume member name */
-                        /* Parse bit field width: `int name : N;` */
+                        /* Parse bit field width: `int name : N;` The width may
+                         * be a constant expression (`(sizeof(int)*8-2)`,
+                         * `(30-2)`), not just a literal. Fold simple integer
+                         * arithmetic; if it can't be folded, default to 32
+                         * (full-width int) so the member still parses. */
                         if (peek(p) == HD_TOK_COLON) {
                             advance(p); /* consume : */
+                            int bw = 32;
                             if (peek(p) == HD_TOK_INT) {
-                                int bw = (int)p->lex->tok.int_val;
+                                bw = (int)p->lex->tok.int_val;
                                 advance(p);
-                                t->members[t->n_members].bit_width = bw;
+                            } else if (peek(p) == HD_TOK_LPAREN || peek(p) == HD_TOK_IDENT) {
+                                /* Fold a constant arithmetic expression. */
+                                long acc = 0; char op = 0; int have = 0;
+                                while (peek(p) != HD_TOK_SEMI && peek(p) != HD_TOK_RBRACE
+                                       && peek(p) != HD_TOK_EOF) {
+                                    HDTokenType tk = peek(p);
+                                    if (tk == HD_TOK_INT) {
+                                        long v = (long)p->lex->tok.int_val;
+                                        if (!have) { acc = v; have = 1; }
+                                        else if (op=='+') acc+=v; else if (op=='-') acc-=v;
+                                        else if (op=='*') acc*=v; else if (op=='/') acc = v?acc/v:0;
+                                        op = 0; advance(p);
+                                    } else if (tk == HD_TOK_PLUS) { op='+'; advance(p); }
+                                    else if (tk == HD_TOK_MINUS) { op='-'; advance(p); }
+                                    else if (tk == HD_TOK_STAR) { op='*'; advance(p); }
+                                    else if (tk == HD_TOK_SLASH) { op='/'; advance(p); }
+                                    else if (tk == HD_TOK_LPAREN || tk == HD_TOK_RPAREN) { advance(p); }
+                                    else if (tk == HD_KW_U0 || tk == HD_KW_I32 || tk == HD_KW_I64
+                                             || tk == HD_KW_U32 || tk == HD_KW_U64) { advance(p); }
+                                    else advance(p); /* sizeof, ident, etc: skip */
+                                }
+                                if (have && acc > 0 && acc < 64) bw = (int)acc;
                             }
+                            t->members[t->n_members].bit_width = bw;
                         }
                         if (mem_is_fnp) {
                             /* `int (*fn)(int,int)` — consume `)` then `(params)`.
