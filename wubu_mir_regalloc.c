@@ -89,6 +89,22 @@ typedef struct {
     int32_t  end;     /* last_use position */
 } interval_t;
 
+/* Does the instruction range [start, end] contain a MIR_CALL? A VR live
+ * across a call must live in a callee-saved physical register (or be
+ * spilled), otherwise the callee clobbers it. On x86-64 the callee-saved
+ * allocatable regs are r12-r15. */
+static int range_crosses_call(const wubu_mir_prog_t *p, int32_t start, int32_t end)
+{
+    if (!p || start < 0) return 0;
+    for (size_t i = (size_t)start; i < p->n && (int32_t)i <= end; i++)
+        if (p->ins[i].op == MIR_CALL) return 1;
+    return 0;
+}
+
+/* x86-64 callee-saved allocatable physical-reg indices (r12,r13,r14,r15).
+ * reg_x86[] order: 0=r10 1=r11 2=r12 3=r13 4=r14 5=r15 6=r8 7=r9 8=rdx. */
+static const int x86_callee_saved[4] = {2, 3, 4, 5};
+
 static int interval_cmp(const void *a, const void *b)
 {
     const interval_t *ia = (const interval_t *)a;
@@ -406,18 +422,31 @@ wubu_reg_assign_t *wubu_mir_alloc_regs(const wubu_mir_prog_t *p,
         }
         active_count = write;
 
-        /* Find a free physical register */
+        /* Find a free physical register. If this VR's live range crosses a
+         * MIR_CALL, SPILL it to a stack slot (memory-resident) so no callee
+         * can clobber it. This is the chibicc discipline: values live across
+         * a call live in memory, never in a (caller-saved) register. Correct
+         * first; the allocator can re-optimize to callee-saved regs later. */
         int32_t chosen = -1;
         if (getenv("WUBU_DEBUG_REGS")) {
             fprintf(stderr, "[DEBUG_REGS] allocating vr=%u pos=%d active_count=%d reg_vr=", vr, pos, active_count);
             for (int r = 0; r < n_phys_regs; r++) fprintf(stderr, "%d ", reg_vr[r]);
             fprintf(stderr, "\n");
         }
+        int crosses = range_crosses_call(p, intervals[i].start, intervals[i].end);
+        if (crosses) {
+            /* Force spill: give it a unique stack slot, no register. */
+            assign[vr].reg   = -1;
+            assign[vr].stack = -(next_spill_slot + 1) * 8;
+            assign[vr].spill_after = 0;
+            assign[vr].split_until = 0;
+            next_spill_slot++;
+            if (getenv("WUBU_DEBUG_REGS"))
+                fprintf(stderr, "[DEBUG_REGS] vr=%u SPILLED across call slot=%d\n", vr, assign[vr].stack);
+            continue;  /* do not add to active / reg_vr */
+        }
         for (int r = 0; r < n_phys_regs; r++) {
-            if (reg_vr[r] < 0) {
-                chosen = r;
-                break;
-            }
+            if (reg_vr[r] < 0) { chosen = r; break; }
         }
 
         if (chosen >= 0) {
