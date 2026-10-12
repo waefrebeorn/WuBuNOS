@@ -66,3 +66,14 @@ All need ONE of these advanced features:
 Pointer-to-array types `T (*p)[N]` — the largest remaining cluster
 (3+ tests). `is_ptr_array` tracking already exists; need &a to produce a
 ptr-to-array and p[i][j] to decay/index correctly.
+
+### Precise blocker (diagnosed, commit 45e1b5a)
+`int a[3]={10,20,30}; int (*p)[3]=&a;` — p holds the array address (48),
+and `int *q=*p; q[1]` works (20). But `(*p)[1]` and `p[0][1]` fail:
+ptr-to-array variables expose their value INCONSISTENTLY across access
+paths. `(long)p` reads p's memory cell (48, correct), but the DEREF and
+INDEX base paths read p's VR, which holds a corrupted value (65540 =
+0x10004, a VR-encoding artifact). The fix needs ptr-to-array vars to
+expose their value uniformly (cell or VR, not both) — a variable-storage
+consistency fix, deeper than a localized stride/deref patch. The
+is_ptr_array marking + use_value (45e1b5a) are correct prerequisites.
