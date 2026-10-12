@@ -2681,6 +2681,14 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                            (n->right && n->right->kind == HD_AST_IDENT && mir_find_var_is_float(g, n->right->ident)) ||
                            (n->left && n->left->kind == HD_AST_FLOAT_LIT) ||
                            (n->right && n->right->kind == HD_AST_FLOAT_LIT);
+            /* *p OP= rhs where p is a double* : the DEREF left is a double. */
+            if (!is_float && n->left && n->left->kind == HD_AST_DEREF && n->left->child
+                && n->left->child->kind == HD_AST_IDENT && n->left->child->ident[0]) {
+                for (int vi = 0; vi < g->n_vars; vi++)
+                    if (strcmp(g->vars[vi].name, n->left->child->ident) == 0 && g->vars[vi].type
+                        && g->vars[vi].type->kind == HD_TYPE_PTR && g->vars[vi].type->base
+                        && g->vars[vi].type->base->kind == HD_TYPE_F64) { is_float = 1; break; }
+            }
             wubu_mir_op_t op = MIR_ADD;
             switch (n->kind) {
                 case HD_AST_ADD_ASSIGN: op = is_float ? MIR_DADD : MIR_ADD; break;
