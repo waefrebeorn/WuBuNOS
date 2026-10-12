@@ -2505,7 +2505,13 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                     for (int i = 0; i < g->n_vars; i++) {
                         if (strcmp(g->vars[i].name, n->child->ident) == 0 && g->vars[i].type
                             && g->vars[i].type->kind == HD_TYPE_PTR) {
-                            inc_val = 8;
+                            /* char* / unsigned char*: byte-addressable, inc by 1 */
+                            if (g->vars[i].type->base &&
+                                (g->vars[i].type->base->kind == HD_TYPE_I8 ||
+                                 g->vars[i].type->base->kind == HD_TYPE_U8))
+                                inc_val = 1;
+                            else
+                                inc_val = 8;
                             break;
                         }
                     }
@@ -2526,6 +2532,23 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                     }
                 }
                 wubu_mir_store(g->prog, addr, upd);
+                return tmp;
+            }
+        }
+        /* General lvalue (subscript / deref / member): a[i]++ / *p++ / s.x++ */
+        if (n->child) {
+            wubu_vr_t laddr = mir_lvalue_addr(g, n->child);
+            if (laddr) {
+                int is_ptr = (n->child->kind == HD_AST_DEREF);
+                wubu_vr_t tmp = mir_new_vr(g);
+                wubu_vr_t v = wubu_mir_load(g->prog, laddr);
+                wubu_mir_mov_to(g->prog, tmp, v);
+                wubu_vr_t one = wubu_mir_const(g->prog, 1);
+                wubu_vr_t upd = (n->kind == HD_AST_POST_INC)
+                    ? wubu_mir_binop(g->prog, MIR_ADD, tmp, one)
+                    : wubu_mir_binop(g->prog, MIR_SUB, tmp, one);
+                wubu_mir_store(g->prog, laddr, upd);
+                (void)is_ptr;
                 return tmp;
             }
         }
@@ -2560,7 +2583,13 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                     for (int i = 0; i < g->n_vars; i++) {
                         if (strcmp(g->vars[i].name, n->child->ident) == 0 && g->vars[i].type
                             && g->vars[i].type->kind == HD_TYPE_PTR) {
-                            inc_val = 8;
+                            /* char* / unsigned char*: byte-addressable, inc by 1 */
+                            if (g->vars[i].type->base &&
+                                (g->vars[i].type->base->kind == HD_TYPE_I8 ||
+                                 g->vars[i].type->base->kind == HD_TYPE_U8))
+                                inc_val = 1;
+                            else
+                                inc_val = 8;
                             break;
                         }
                     }
@@ -2581,6 +2610,19 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                     }
                 }
                 wubu_mir_store(g->prog, addr, upd);
+                return upd;
+            }
+        }
+        /* General lvalue (subscript / deref / member): ++a[i] / ++*p / ++s.x */
+        if (n->child) {
+            wubu_vr_t laddr = mir_lvalue_addr(g, n->child);
+            if (laddr) {
+                wubu_vr_t v = wubu_mir_load(g->prog, laddr);
+                wubu_vr_t one = wubu_mir_const(g->prog, 1);
+                wubu_vr_t upd = (n->kind == HD_AST_PRE_INC)
+                    ? wubu_mir_binop(g->prog, MIR_ADD, v, one)
+                    : wubu_mir_binop(g->prog, MIR_SUB, v, one);
+                wubu_mir_store(g->prog, laddr, upd);
                 return upd;
             }
         }
