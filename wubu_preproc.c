@@ -245,48 +245,6 @@ static void strip_builtin_prefix(char *line)
         memmove(q, q + 8, strlen(q + 8) + 1);
     }
 }
-static void strip_bitfields(char *line)
-{
-    char *p = line;
-    char *out = line;
-    /* A ':' is only a bit-field width when no conditional operator is in
-     * flight on this line. Without this, the ternary in `(0)?0:42` looked
-     * like a bit field (the char before ':' is the digit '0', which is
-     * alnum) and `:42` was deleted outright, so hd_eval saw "(0)?0;" and the
-     * else branch vanished -- every ternary returned the then value. */
-    int pending_cond = 0;
-    while (*p) {
-        if (*p == '?') {
-            /* '?' in `a ? b : c`. A '?' or ':' inside a string/char literal or
-             * comment is handled by the lexer's own scan, not here; counting
-             * them is the conservative choice -- worst case we leave a
-             * bit-field width in place, which is harmless, whereas the
-             * previous behaviour silently deleted live code. */
-            pending_cond++;
-            *out++ = *p++;
-            continue;
-        }
-        if (*p == ':' && pending_cond > 0) {
-            pending_cond--;
-            *out++ = *p++;
-            continue;
-        }
-        /* Look for ':' followed by a digit (bit field width) */
-        if (*p == ':' && p[1] >= '0' && p[1] <= '9') {
-            /* Check this is a bit field (preceded by an identifier) */
-            char *q = out - 1;
-            while (q >= line && (*q == ' ' || *q == '\t')) q--;
-            if (q >= line && (isalnum((unsigned char)*q) || *q == '_')) {
-                /* This is a bit field — skip the ':' and all digits */
-                p++;
-                while (*p >= '0' && *p <= '9') p++;
-                continue;
-            }
-        }
-        *out++ = *p++;
-    }
-    *out = '\0';
-}
 static void strip_inline_asm(char *line)
 {
     char *p = line;
@@ -632,7 +590,6 @@ char *wubu_preprocess(const char *src)
             strip_compiler_keywords(exp);
             strip_attributes(exp);
             strip_inline_asm(exp);
-            strip_bitfields(exp);
             strip_builtin_prefix(exp);
             /* expand macros in this line */
             char exp2[8192];

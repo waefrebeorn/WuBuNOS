@@ -307,14 +307,27 @@ static HDType *parse_type(HDParser *p) {
                             hd_lex_next(p->lex);
                         }
                     }
-                    /* Anonymous bit-field: `unsigned : N;` (padding). The next
-                     * token after the type is ':' with no member name. Consume
-                     * the width and skip — it advances layout but has no
-                     * accessible member. */
+                    /* Anonymous bit-field: `unsigned : N;` (padding, no name).
+                     * Advance the bit layout exactly like a named bit-field
+                     * (pack into the current word, respect 32-bit boundaries,
+                     * grow the struct size) but register no member. Consume
+                     * the trailing ';' here (this path is outside the named-
+                     * member block that owns the shared expect(SEMI)). */
                     if (peek(p) == HD_TOK_COLON) {
                         advance(p); /* : */
-                        if (peek(p) == HD_TOK_INT) advance(p); /* width */
-                        if (peek(p) == HD_TOK_SEMI) advance(p);
+                        int abw = 0;
+                        if (peek(p) == HD_TOK_INT) { abw = (int)p->lex->tok.int_val; advance(p); }
+                        if (abw > 0) {
+                            int bit_offset = t->bit_pos;
+                            int bits_available = 32 - (bit_offset % 32);
+                            if (abw > bits_available)
+                                t->bit_pos = (bit_offset + 31) & ~31;
+                            else
+                                t->bit_pos = bit_offset + abw;
+                            int end_byte = (t->bit_pos + 7) / 8;
+                            if (end_byte > (int)t->size) t->size = end_byte;
+                        }
+                        expect(p, HD_TOK_SEMI);
                         continue;
                     }
                     if (peek(p) != HD_TOK_IDENT) {
@@ -429,8 +442,13 @@ static HDType *parse_type(HDParser *p) {
                                 }
                                 t->members[t->n_members].bit_offset = bit_offset;
                                 t->bit_pos = bit_offset + bw;
-                                int byte_offset = bit_offset / 8;
-                                t->members[t->n_members].offset = byte_offset;
+                                /* member_offsets is consumed as CELLS by the
+                                 * codegen (mir_struct_member_offset does *8),
+                                 * and the bitfield read/write shifts by the
+                                 * full bit_offset within the loaded cell. So
+                                 * the cell index is bit_offset/64; bitfields
+                                 * in the first cell all share offset 0. */
+                                t->members[t->n_members].offset = bit_offset / 64;
                                 /* Update struct size if bit field extends past current size */
                                 int end_byte = (t->bit_pos + 7) / 8;
                                 if (end_byte > t->size) t->size = end_byte;

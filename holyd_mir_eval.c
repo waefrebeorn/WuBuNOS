@@ -1600,7 +1600,8 @@ extern_done:
                             break;
                         }
                 }
-                int n_array_elems = g->array_elements_pending > 0 ? g->array_elements_pending : arr_size;
+                int n_array_elems = is_struct_var ? (int)n->init->n_args
+                                  : (g->array_elements_pending > 0 ? g->array_elements_pending : arr_size);
                 for (uint32_t e = 0; e < n->init->n_args && e < (uint32_t)n_array_elems; e++) {
                     int elem_sz = 8; /* default: 1 cell */
                     if (n->type && n->type->kind == HD_TYPE_ARRAY && n->type->base
@@ -1704,7 +1705,24 @@ extern_done:
                     }
                     wubu_vr_t elem_addr = wubu_mir_binop(g->prog, MIR_ADD, addr,
                                                           wubu_mir_const(g->prog, (int64_t)offset));
-                    wubu_mir_store(g->prog, elem_addr, ev);
+                    int init_bfw = 0, init_bfo = 0;
+                    if (is_struct_var && n->type && e < (uint32_t)n->type->n_members) {
+                        init_bfw = n->type->members[e].bit_width;
+                        init_bfo = n->type->members[e].bit_offset;
+                    }
+                    if (init_bfw > 0) {
+                        wubu_vr_t oldw = wubu_mir_load(g->prog, elem_addr);
+                        int64_t bmask = (init_bfw >= 64) ? -1LL : ((1LL << init_bfw) - 1);
+                        wubu_vr_t nv = wubu_mir_binop(g->prog, MIR_AND, ev, wubu_mir_const(g->prog, bmask));
+                        if (init_bfo > 0)
+                            nv = wubu_mir_binop(g->prog, MIR_SHL, nv, wubu_mir_const(g->prog, (int64_t)init_bfo));
+                        int64_t inv = ~(bmask << init_bfo);
+                        wubu_vr_t clr = wubu_mir_binop(g->prog, MIR_AND, oldw, wubu_mir_const(g->prog, inv));
+                        wubu_vr_t res = wubu_mir_binop(g->prog, MIR_OR, clr, nv);
+                        wubu_mir_store(g->prog, elem_addr, res);
+                    } else {
+                        wubu_mir_store(g->prog, elem_addr, ev);
+                    }
                 }
                 /* Close the static-init-once guard: set guard = 1 and jump
                  * target so a second call skips the whole initializer. */
@@ -5110,6 +5128,8 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
                 strncpy(s->member_names[s->n_members], t->members[j].name, HD_MAX_IDENT_LEN - 1);
                 s->member_names[s->n_members][HD_MAX_IDENT_LEN - 1] = '\0';
                 s->member_offsets[s->n_members] = (int)t->members[j].offset;
+                s->member_bit_widths[s->n_members] = t->members[j].bit_width;
+                s->member_bit_offsets[s->n_members] = t->members[j].bit_offset;
                 s->member_is_unsigned[s->n_members] = (t->members[j].type && (t->members[j].type->kind == HD_TYPE_U8 || t->members[j].type->kind == HD_TYPE_U16 || t->members[j].type->kind == HD_TYPE_U32 || t->members[j].type->kind == HD_TYPE_U64)) ? 1 : 0;
                 s->member_is_ptr[s->n_members] = (t->members[j].type && t->members[j].type->kind == HD_TYPE_PTR) ? 1 : 0;
                 s->member_type_kinds[s->n_members] = t->members[j].type ? t->members[j].type->kind : 0;
