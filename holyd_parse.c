@@ -302,6 +302,16 @@ static HDType *parse_type(HDParser *p) {
                             hd_lex_next(p->lex);
                         }
                     }
+                    /* Anonymous bit-field: `unsigned : N;` (padding). The next
+                     * token after the type is ':' with no member name. Consume
+                     * the width and skip — it advances layout but has no
+                     * accessible member. */
+                    if (peek(p) == HD_TOK_COLON) {
+                        advance(p); /* : */
+                        if (peek(p) == HD_TOK_INT) advance(p); /* width */
+                        if (peek(p) == HD_TOK_SEMI) advance(p);
+                        continue;
+                    }
                     if (peek(p) != HD_TOK_IDENT) {
                         parse_error(p, "expected member name");
                         break;
