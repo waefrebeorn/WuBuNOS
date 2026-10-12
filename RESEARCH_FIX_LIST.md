@@ -177,6 +177,16 @@ Also: run `--target x86-64` (NOT positional `x86-64`, which is ignored → runs 
 
 ---
 
+## Additional fixes shipped this session (after FAIL=142 baseline)
+- **Function pointers** (5122b1a): `int (*fp)(int)=f; fp(x)` works via fn_ptr_func_id
+  (record target func_id on init/assign; resolve indirect call to it). Gated green.
+- **BITNOT unsigned propagation** (1333d77): `~0u > 5` was signed-compared (-1<5=0);
+  mir_common_cmp_type now descends through ~ / NEG unary nodes to recover the type.
+  Fixes `--i < ~0u` unsigned-wraparound loop guards. Gated green.
+- Pre-existing (NOT a regression, NOT yet fixed): `0 < 4294967295` (no `u` suffix)
+  compares signed (should be 0); large literals without `u` aren't treated as the
+  unsigned value they exceed.
+
 ## Current state (measured, FAIL=142 on clean rebuild)
 After the spill fix (0cd0145), the 142 remaining x86-64 FAILs are ALL gcc_torture
 (95) + extern_gcc (42) + gcc_compile (5) — the wcc/lacc failures are cleared. 130/142
