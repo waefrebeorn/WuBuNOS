@@ -116,6 +116,39 @@ static HDType *mir_find_var_type(HDMirGen *g, const char *name) {
     return NULL;
 }
 
+/* Resolve the SCALAR element type of an lvalue node, so callers (compound
+ * assignment truncation) can narrow the result to the target's width. For a
+ * plain IDENT this is the variable's declared type; for an INDEX a[i] it is
+ * the base variable's ARRAY element type (or a POINTER's pointee); for a
+ * DEREF *p it is the pointer's pointee. Returns NULL when unresolvable. */
+static HDType *mir_lvalue_elem_type(HDMirGen *g, const HDASTNode *n) {
+    if (!n) return NULL;
+    if (n->kind == HD_AST_IDENT && n->ident[0])
+        return mir_find_var_type(g, n->ident);
+    if (n->kind == HD_AST_INDEX) {
+        const HDASTNode *base = n->left;
+        /* nested index a[i][j]: recurse into the base */
+        if (base && base->kind == HD_AST_INDEX)
+            return mir_lvalue_elem_type(g, base);
+        if (base && base->kind == HD_AST_IDENT && base->ident[0]) {
+            HDType *vt = mir_find_var_type(g, base->ident);
+            if (vt && (vt->kind == HD_TYPE_ARRAY || vt->kind == HD_TYPE_PTR) && vt->base)
+                return vt->base;
+            if (vt) return vt;
+        }
+    }
+    if (n->kind == HD_AST_DEREF) {
+        const HDASTNode *base = n->child;
+        if (base && base->kind == HD_AST_IDENT && base->ident[0]) {
+            HDType *vt = mir_find_var_type(g, base->ident);
+            if (vt && vt->kind == HD_TYPE_PTR && vt->base)
+                return vt->base;
+        }
+    }
+    if (n->type) return n->type;
+    return NULL;
+}
+
 static const HDASTNode *mir_find_func(HDMirGen *g, const char *name) {
     for (int i = g->n_funcs - 1; i >= 0; i--) {
         if (g->func_ast[i] && strcmp(g->func_ast[i]->ident, name) == 0)
@@ -624,6 +657,10 @@ static wubu_vr_t mir_promote_to_float(HDMirGen *g, wubu_vr_t val, const HDASTNod
     case HD_AST_OR:
     case HD_AST_BITXOR:
     case HD_AST_IDENT:
+    case HD_AST_INDEX:
+    case HD_AST_DEREF:
+    case HD_AST_MEMBER:
+    case HD_AST_ARROW:
         break;
     default:
         return val;  /* don't promote ambiguous nodes */
@@ -2726,6 +2763,11 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 }
                 if (!lhs_type && n->left && n->left->type)
                     lhs_type = n->left->type;
+                /* INDEX/DEREF lvalues (a[i] -= 10.0): resolve the element
+                 * type so the double result converts back to the right
+                 * integer width/signedness. */
+                if (!lhs_type && n->left)
+                    lhs_type = mir_lvalue_elem_type(g, n->left);
                 if (lhs_type && (lhs_type->kind == HD_TYPE_I8 || lhs_type->kind == HD_TYPE_U8 ||
                     lhs_type->kind == HD_TYPE_I16 || lhs_type->kind == HD_TYPE_U16 ||
                     lhs_type->kind == HD_TYPE_I32 || lhs_type->kind == HD_TYPE_U32 ||
@@ -2755,6 +2797,12 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 }
                 if (!lhs_type && n->left && n->left->type)
                     lhs_type = n->left->type;
+                /* INDEX/DEREF lvalues (a[i] += 2, *p += 2): resolve the
+                 * ELEMENT type so the result is truncated to the target
+                 * width. Without this, an unsigned 32-bit array element
+                 * accumulates at 64-bit and never wraps. */
+                if (!lhs_type && n->left)
+                    lhs_type = mir_lvalue_elem_type(g, n->left);
                 if (lhs_type && (lhs_type->kind == HD_TYPE_I8 || lhs_type->kind == HD_TYPE_U8 ||
                                 lhs_type->kind == HD_TYPE_I16 || lhs_type->kind == HD_TYPE_U16 ||
                                 lhs_type->kind == HD_TYPE_I32 || lhs_type->kind == HD_TYPE_U32)) {
