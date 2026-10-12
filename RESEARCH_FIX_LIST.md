@@ -50,15 +50,25 @@ full epilogue fixed fib(2) but REGRESSED `x=5;y=f();return x` (the second call's
 result leaked into x) — FAIL 142→588. It trades the recursion bug for the
 local-store bug; they are DIFFERENT bugs. Reverted. Do not re-ship the epilogue change.
 
-**STATUS:** `x=5;y=add(1,2);return x` works correctly on the current spill-only
-binary. The ONLY remaining bug from this line is recursion `fib(n-1)+fib(n-2)`=0.
-Root cause (MIR verified correct): the bug is purely x86 codegen of two sequential
-calls — the second call clobbers the first call's result. The first call's result is
-captured into a spill slot, but the second call's execution overwrites it. Next probe:
-the internal-call 8-register save/restore (`caller_saved[]` push/pop at
-wubu_isa_x86_64.c ~1594) vs the recursive callee's frame — specifically whether the
-save/restore is unbalanced, leaving the first call's spill slot corrupted. NOT the
-epilogue, NOT the regalloc (both now correct). **Refined root cause
+**ROOT CAUSE DEFINITIVELY FOUND (the real recursion bug):** parameters and locals
+live at FIXED `prog.mem` addresses (params at mem[16], mem[32], ...; locals bumped
+sequentially). A recursive call re-enters the SAME function and writes its params/
+locals to the SAME addresses, clobbering the caller's. Proof: `f(5){int m=n; f(n-1);
+return m;}` returns 2 (f(4) overwrote n at mem[16], so the 2nd-arg computation n-2
+used the clobbered n). `f(3)` returns 1. Non-recursive multi-call works (distinct
+functions get distinct addresses).
+
+**THE FIX (chibicc codegen.c):** parameters and locals must live in the STACK FRAME
+(rbp-relative, unique per invocation), NOT flat `prog.mem`. chibicc assigns each
+local/param a stack offset; `gen_addr` computes `rbp - offset`. This is the
+architectural change that makes recursion correct. Scope: frontend must emit
+rbp-relative addressing for params/locals instead of `mem[fixed_addr]`; the x86
+backend already has the frame machinery (push rbp; mov rbp,rsp; sub rsp,frame). The
+interpreter needs matching per-call frame slots. This is GAP 1's real fix — larger
+than a localized patch, but it is the proven approach and unblocks ALL recursion
+(fib, ackermann, mutual, deep). The regalloc spill (0cd0145, 329→142) and the
+reverted epilogue fix were both correct-but-insufficient; this frame-per-invocation
+change is the actual fix. **Refined root cause
 (traced via MIR dump):** the MIR is correct (`store mem[g]=v46; call fib; mov v65544=v0;
 store mem[h]=v59`). The bug is in x86 codegen of **two sequential calls to the SAME
 function**: the internal-call register save/restore (`wubu_isa_x86_64.c` ~1594,
