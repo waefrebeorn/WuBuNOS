@@ -895,6 +895,8 @@ static int mir_index_stride(HDMirGen *g, const HDASTNode *n) {
     return 8; /* default: 1 cell = 8 bytes */
 }
 static wubu_vr_t mir_lvalue_addr(HDMirGen *g, const HDASTNode *n); /* forward decl */
+static int mir_store_brace_leaves(HDMirGen *g, wubu_vr_t addr, int off,
+                                  const HDASTNode *elem); /* forward decl */
 
 /* True if the DOT/MEMBER/ARROW node names a member whose type is a pointer
  * (so the member's cell holds a pointer VALUE that must be loaded before
@@ -1512,24 +1514,15 @@ extern_done:
                     HDASTNode *elem = n->init->args[e];
                     wubu_vr_t ev;
                     if (elem->kind == HD_AST_BRACE_INIT) {
-                        /* Nested brace-init (multi-dimensional array): flatten */
-                        for (uint32_t se = 0; se < elem->n_args; se++) {
-                            int sub_off = offset + (int)se * 8;
-                            wubu_vr_t sub_ev = mir_gen_expr(g, elem->args[se]);
-                            /* Truncate float values to element type */
-                            if (n->type && n->type->base && n->type->base->kind != HD_TYPE_F64 &&
-                                n->type->base->kind != HD_TYPE_PTR && n->type->base->kind != HD_TYPE_VOID) {
-                                /* If the init expr is a float, convert to int first */
-                                if (elem->args[se] && elem->args[se]->type &&
-                                    elem->args[se]->type->kind == HD_TYPE_F64) {
-                                    sub_ev = wubu_mir_unop(g->prog, MIR_DTOI, sub_ev);
-                                }
-                                sub_ev = mir_truncate_to_type(g, sub_ev, n->type->base);
-                            }
-                            wubu_vr_t sub_addr = wubu_mir_binop(g->prog, MIR_ADD, addr,
-                                wubu_mir_const(g->prog, (int64_t)sub_off));
-                            wubu_mir_store(g->prog, sub_addr, sub_ev);
-                        }
+                        /* Nested brace-init (multi-dimensional array): flatten
+                         * to arbitrary depth. `offset` is a BYTE offset; each
+                         * leaf element occupies one 8-byte cell. Recurse into
+                         * nested braces so 3D+ arrays store every leaf. */
+                        int cursor = offset;
+                        for (uint32_t se = 0; se < elem->n_args; se++)
+                            cursor = mir_store_brace_leaves(g, addr, cursor,
+                                                            elem->args[se]);
+                        offset = cursor;
                         continue;
                     } else if (elem->kind == HD_AST_DESIG_INIT) {
                         /* Designated initializer: compute offset */
@@ -2023,6 +2016,25 @@ static void mir_promote_cmp_operands(HDMirGen *g, wubu_vr_t *a, wubu_vr_t *b,
     } else if (!left_float && right_float) {
         *a = mir_promote_to_float(g, *a, left);
     }
+}
+
+/* Recursively store the scalar leaves of a (possibly nested) brace-init
+ * element into `addr` starting at byte offset `off`. Returns the byte
+ * offset just past the last leaf stored. Each leaf occupies one 8-byte
+ * cell. Handles arbitrary nesting depth (3D+ arrays). */
+static int mir_store_brace_leaves(HDMirGen *g, wubu_vr_t addr, int off,
+                                  const HDASTNode *elem) {
+    if (!elem) return off;
+    if (elem->kind == HD_AST_BRACE_INIT) {
+        for (uint32_t i = 0; i < elem->n_args; i++)
+            off = mir_store_brace_leaves(g, addr, off, elem->args[i]);
+        return off;
+    }
+    wubu_vr_t ev = mir_gen_expr(g, elem);
+    wubu_vr_t ea = wubu_mir_binop(g->prog, MIR_ADD, addr,
+                                  wubu_mir_const(g->prog, (int64_t)off));
+    wubu_mir_store(g->prog, ea, ev);
+    return off + 8;
 }
 
 static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
