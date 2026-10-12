@@ -659,14 +659,6 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
         if (prog->funcs[f].end > max_func_end) max_func_end = prog->funcs[f].end;
     size_t entry_off = (size_t)-1;
     size_t entry_jmp_pos = 0;
-    /* Pre-scan: which functions are invoked via MIR_CALL (call rel32 pushes a
-     * return address). Such a callee MUST run the full epilogue to unwind its
-     * own frame; the trampoline-entered top-level code (never called) must not
-     * (it has no return address and unwinds to x86_run). */
-    unsigned char *is_called = (unsigned char *)calloc((size_t)(prog->n_funcs > 0 ? prog->n_funcs : 1), 1);
-    for (size_t i = 0; i < prog->n; i++)
-        if (prog->ins[i].op == MIR_CALL && prog->ins[i].func_id < (uint32_t)prog->n_funcs)
-            is_called[prog->ins[i].func_id] = 1;
     typedef struct { size_t pos; uint32_t func_id; char name[HD_MAX_IDENT_LEN]; } x86_call_fixup_t;
     x86_call_fixup_t *callps = NULL;
     size_t ncallp = 0, ccap = 0;
@@ -1645,7 +1637,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
                  * DATA slot as the return address and jumps into the
                  * environment strings on the stack. Functions entered via
                  * MIR_CALL are callees: bare ret, caller tears down. */
-                int owns_frame = (ret_func >= 0 && ret_func < prog->n_funcs && is_called[ret_func]);
+                int owns_frame = (ret_func == 0 && entry_jmp_pos != 0);
                 int sret = VR_ENC_SAFE(in->a);
                 int v0h  = VR_ENC_SAFE(0);
                 if (sret >= 0 && v0h >= 0) {
