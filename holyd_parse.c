@@ -1596,6 +1596,7 @@ done_extern_params:
      * Parenthesized `(name)` for plain function decls is uncommon and
      * treated as identical to the non-paren form. */
     int is_ptr = 0;
+    int is_ptr_to_array = 0;  /* `int (*p)[N]` — pointer to array (type already built) */
     char name[HD_MAX_IDENT_LEN];
 
     if (peek(p) == HD_TOK_STAR) {
@@ -1627,6 +1628,26 @@ done_extern_params:
             expect(p, HD_TOK_RPAREN);
             if (peek(p) == HD_TOK_LPAREN) {
                 is_func_ptr = 1;
+            } else if (peek(p) == HD_TOK_LBRACKET) {
+                /* `(*p)[N]` — pointer to array. Build PTR(ARRAY(base, N))
+                 * directly; the generic array-declarator path would wrongly
+                 * produce ARRAY(PTR(base), N). */
+                is_ptr_to_array = 1;
+                advance(p); /* [ */
+                int asz = 0;
+                if (peek(p) == HD_TOK_INT) { asz = (int)p->lex->tok.int_val; advance(p); }
+                else if (peek(p) == HD_TOK_CHAR) { asz = (int)p->lex->tok.int_val; advance(p); }
+                expect(p, HD_TOK_RBRACKET);
+                HDType *arr = (HDType *)calloc(1, sizeof(HDType));
+                arr->kind = HD_TYPE_ARRAY;
+                arr->base = type;
+                arr->array_size = asz;
+                arr->size = (asz > 0) ? hd_type_size(type) * asz : hd_type_size(type);
+                HDType *pt = (HDType *)calloc(1, sizeof(HDType));
+                pt->kind = HD_TYPE_PTR;
+                pt->base = arr;
+                pt->size = 8;
+                type = pt;
             } else {
                 /* `(*p)` with no params — treat as plain pointer */
                 is_ptr = 1;
@@ -1870,7 +1891,7 @@ done_params:
     }
 
     /* Simple pointer variable: `int *p = expr ;` — wrap base type in PTR. */
-    if (is_ptr) {
+    if (is_ptr && !is_ptr_to_array) {
         HDType *pt = (HDType *)calloc(1, sizeof(HDType));
         pt->kind = HD_TYPE_PTR; pt->base = type; pt->size = 8;
         type = pt;
@@ -1923,7 +1944,7 @@ done_params:
     int vla_dims[8]; /* 1 if this dim is VLA (runtime expr) */
     HDASTNode *vla_exprs[8]; /* expression nodes for VLA dims */
     memset(vla_exprs, 0, sizeof(vla_exprs));
-    while (peek(p) == HD_TOK_LBRACKET) {
+    while (!is_ptr_to_array && peek(p) == HD_TOK_LBRACKET) {
         advance(p); /* [ */
         int arr_size = 0;
         if (peek(p) != HD_TOK_RBRACKET) {
