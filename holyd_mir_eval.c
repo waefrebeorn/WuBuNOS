@@ -3796,26 +3796,22 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         if (!char_elem && base_node && base_node->kind == HD_AST_MEMBER &&
             base_node->left && base_node->left->kind == HD_AST_IDENT &&
             base_node->ident[0]) {
-            for (int vi = 0; vi < g->n_vars; vi++)
-                if (strcmp(g->vars[vi].name, base_node->left->ident) == 0 &&
-                    g->vars[vi].struct_name[0]) {
-                    for (int si = 0; si < g->n_structs; si++)
-                        if (strcmp(g->structs[si].name, g->vars[vi].struct_name) == 0) {
-                            for (int mi = 0; mi < g->structs[si].n_members; mi++)
-                                if (strcmp(g->structs[si].member_names[mi],
-                                           base_node->ident) == 0) {
-                                    int mk = g->structs[si].member_type_kinds[mi];
-                                    int ek = g->structs[si].member_elem_kinds[mi];
-                                    /* char x, or char x[] (array of char) */
-                                    if (mk == HD_TYPE_I8 || mk == HD_TYPE_U8 ||
-                                        ek == HD_TYPE_I8 || ek == HD_TYPE_U8)
-                                        char_elem = 1;
-                                    break;
-                                }
-                            break;
-                        }
-                    break;
+            for (int vi = 0; vi < g->n_vars; vi++) {
+                if (strcmp(g->vars[vi].name, base_node->left->ident) != 0 ||
+                    !g->vars[vi].struct_name[0]) continue;
+                for (int si = 0; si < g->n_structs; si++) {
+                    if (strcmp(g->structs[si].name, g->vars[vi].struct_name) != 0) continue;
+                    for (int mi = 0; mi < g->structs[si].n_members; mi++) {
+                        if (strcmp(g->structs[si].member_names[mi], base_node->ident) != 0) continue;
+                        int mk = g->structs[si].member_type_kinds[mi];
+                        int ek = g->structs[si].member_elem_kinds[mi];
+                        /* char x, or char x[] (array of char) */
+                        if (mk == HD_TYPE_I8 || mk == HD_TYPE_U8 ||
+                            ek == HD_TYPE_I8 || ek == HD_TYPE_U8)
+                            char_elem = 1;
+                    }
                 }
+            }
         }
         if (char_elem) return wubu_mir_load8(g->prog, addr);
         return wubu_mir_load(g->prog, addr);
@@ -4817,6 +4813,8 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
                 s->member_offsets[s->n_members] = (int)t->members[j].offset;
                 s->member_is_unsigned[s->n_members] = (t->members[j].type && (t->members[j].type->kind == HD_TYPE_U8 || t->members[j].type->kind == HD_TYPE_U16 || t->members[j].type->kind == HD_TYPE_U32 || t->members[j].type->kind == HD_TYPE_U64)) ? 1 : 0;
                 s->member_is_ptr[s->n_members] = (t->members[j].type && t->members[j].type->kind == HD_TYPE_PTR) ? 1 : 0;
+                s->member_type_kinds[s->n_members] = t->members[j].type ? t->members[j].type->kind : 0;
+                s->member_elem_kinds[s->n_members] = (t->members[j].type && t->members[j].type->kind == HD_TYPE_ARRAY && t->members[j].type->base) ? t->members[j].type->base->kind : 0;
                 if (t->members[j].type && t->members[j].type->kind == HD_TYPE_STRUCT && t->members[j].type->name[0])
                     strncpy(s->member_type_names[s->n_members], t->members[j].type->name, HD_MAX_IDENT_LEN - 1);
                 s->n_members++;
