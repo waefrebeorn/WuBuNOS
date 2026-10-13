@@ -33,6 +33,7 @@ struct HDASTNode {
     HDType *param_types[HD_MAX_PARAMS];
     int n_params;
     int is_variadic;           /* For func_decl: 1 if ... parameter */
+    int is_knr;                /* For func_decl: 1 if K&R old-style definition */
 
     /* For VLA (variable-length array) declarations */
     int is_vla;                /* 1 if this var_decl is a VLA */

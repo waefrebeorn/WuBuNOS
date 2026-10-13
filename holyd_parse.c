@@ -1973,6 +1973,24 @@ done_extern_params:
                 goto done_params;
             }
             if (peek(p) != HD_TOK_RPAREN) {
+                /* K&R detection: a bare identifier (not a type keyword) as the
+                 * first parameter means an old-style definition
+                 * `int f(a, b) int a; int b; { }`. Collect the names, then the
+                 * caller parses the declaration list after ')'. */
+                if (peek(p) == HD_TOK_IDENT) {
+                    fn->is_knr = 1;
+                    while (fn->n_params < HD_MAX_PARAMS) {
+                        if (peek(p) != HD_TOK_IDENT) break;
+                        strncpy(fn->param_names[fn->n_params], p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
+                        fn->param_names[fn->n_params][HD_MAX_IDENT_LEN - 1] = '\0';
+                        fn->param_types[fn->n_params] = NULL;  /* filled from decl list */
+                        advance(p);
+                        fn->n_params++;
+                        if (peek(p) == HD_TOK_COMMA) { advance(p); continue; }
+                        break;
+                    }
+                    goto done_params;   /* skip normal param parsing */
+                }
                 HDType *pt = parse_type(p);
                 char pname[HD_MAX_IDENT_LEN] = {0};
                 /* Detect function pointer parameter by scanning source for '(*'
@@ -2139,6 +2157,34 @@ done_params:
          * For all other paths we still need to consume ')'. */
         if (!fn_params_void_consumed) {
             expect(p, HD_TOK_RPAREN);  /* consume the closing paren */
+        }
+        /* K&R declaration list: `int a; int b;` between ) and { — assign the
+         * declared types to the matching parameter names; unlisted params
+         * default to int. */
+        if (fn->is_knr && peek(p) != HD_TOK_LBRACE) {
+            while (peek(p) != HD_TOK_LBRACE && peek(p) != HD_TOK_EOF) {
+                HDType *dt = parse_type(p);
+                for (;;) {
+                    if (peek(p) != HD_TOK_IDENT) break;
+                    char dn[HD_MAX_IDENT_LEN];
+                    strncpy(dn, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
+                    dn[HD_MAX_IDENT_LEN - 1] = '\0';
+                    advance(p);
+                    for (int k = 0; k < (int)fn->n_params; k++) {
+                        if (strcmp(fn->param_names[k], dn) == 0) { fn->param_types[k] = dt; break; }
+                    }
+                    while (peek(p) == HD_TOK_LBRACKET) { advance(p); if (peek(p) != HD_TOK_RBRACKET) parse_expr(p); expect(p, HD_TOK_RBRACKET); }
+                    if (peek(p) == HD_TOK_COMMA) { advance(p); continue; }
+                    break;
+                }
+                match(p, HD_TOK_SEMI);
+            }
+            for (int k = 0; k < (int)fn->n_params; k++) {
+                if (!fn->param_types[k]) {
+                    fn->param_types[k] = (HDType *)calloc(1, sizeof(HDType));
+                    fn->param_types[k]->kind = HD_TYPE_I64;
+                }
+            }
         }
             if (peek(p) == HD_TOK_LBRACE) {
                 fn->body = parse_block(p);
