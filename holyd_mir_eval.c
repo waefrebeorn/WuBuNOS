@@ -1688,6 +1688,40 @@ extern_done:
                 }
                 int n_array_elems = is_struct_var ? (int)n->init->n_args
                                   : (g->array_elements_pending > 0 ? g->array_elements_pending : arr_size);
+                /* Flat initializer of a multi-dim array: int a[2][2]={1,2,3,4}.
+                 * The C standard flattens the braces, so the scalars fill
+                 * consecutive cells. The per-row loop below assumes each init
+                 * arg is a nested BRACE_INIT (a row); with flat scalars it only
+                 * stored the first row. Detect flat scalars and store them all
+                 * at 1 cell each, then skip the row loop. */
+                bool flat_multi = false;
+                if (!is_struct_var && n->type && n->type->kind == HD_TYPE_ARRAY &&
+                    n->type->base && n->type->base->kind == HD_TYPE_ARRAY &&
+                    n->init->n_args > 0) {
+                    flat_multi = true;
+                    for (uint32_t e = 0; e < n->init->n_args; e++)
+                        if (n->init->args[e] && n->init->args[e]->kind == HD_AST_BRACE_INIT) {
+                            flat_multi = false; break;
+                        }
+                }
+                if (flat_multi) {
+                    HDType *elemt = n->type->base->base; /* innermost scalar type */
+                    int flat_is_byte = elemt && (elemt->kind == HD_TYPE_I8 || elemt->kind == HD_TYPE_U8);
+                    int total_cells = 1;
+                    { HDType *t = n->type; while (t && t->kind == HD_TYPE_ARRAY) { total_cells *= (t->array_size>0?t->array_size:1); t = t->base; } }
+                    uint32_t cnt = n->init->n_args;
+                    if ((int)cnt > total_cells) cnt = total_cells;
+                    for (uint32_t e = 0; e < cnt; e++) {
+                        wubu_vr_t ev = mir_gen_expr(g, n->init->args[e]);
+                        if (!flat_is_byte) ev = mir_truncate_to_type(g, ev, elemt);
+                        wubu_vr_t ea = wubu_mir_binop(g->prog, MIR_ADD, addr,
+                                                      wubu_mir_const(g->prog, (int64_t)(flat_is_byte ? (int)e : (int)e * 8)));
+                        if (flat_is_byte) wubu_mir_store8(g->prog, ea, ev);
+                        else wubu_mir_store(g->prog, ea, ev);
+                    }
+                    if (guard_addr) wubu_mir_place_label(g->prog, skip_label);
+                    return vr;
+                }
                 for (uint32_t e = 0; e < n->init->n_args && e < (uint32_t)n_array_elems; e++) {
                     int elem_sz = 8; /* default: 1 cell */
                     int elem_is_byte = 0; /* char/u8 array: byte-packed */
