@@ -1025,6 +1025,12 @@ static int mir_index_stride(HDMirGen *g, const HDASTNode *n) {
                     if (stride < 8) stride = 8;
                     return (int)stride;
                 }
+                /* depth beyond the array dims (e.g. char* d[N], d[i][j]): the
+                 * innermost element is a POINTER. If it points at char/u8, the
+                 * further index strides by 1 byte, not a cell. */
+                if (p && p->kind == HD_TYPE_PTR && p->base &&
+                    (p->base->kind == HD_TYPE_I8 || p->base->kind == HD_TYPE_U8))
+                    return 1;
                 /* fallthrough: default cell stride */
                 return 8;
             }
