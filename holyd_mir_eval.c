@@ -4185,6 +4185,14 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                         if (base_node->kind == HD_AST_DEREF && t->kind == HD_TYPE_PTR) {
                             use_value = 1;
                         }
+                        /* Array of pointers (char* d[N]): d[0] is a POINTER
+                         * VALUE, so d[0][i] must index from the loaded pointer,
+                         * not from d[0]'s slot address. Without this, d[0][0]
+                         * read the slot's own bytes (garbage). */
+                        if (t->kind == HD_TYPE_ARRAY && t->base &&
+                            t->base->kind == HD_TYPE_PTR) {
+                            use_value = 1;
+                        }
                         if (t->kind == HD_TYPE_PTR && t->base &&
                             t->base->kind == HD_TYPE_ARRAY && g->vars[vi].is_ptr_array) {
                             /* ptr-to-array: p[i] is a sub-array that decays to
@@ -4276,6 +4284,25 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                     }
                 }
             }
+        }
+        /* d[0][0] where d is char*[N]: the base INDEX d[0] yields a char*
+         * element, so this index loads ONE byte. Resolve the array element's
+         * pointee (ARRAY of PTR -> base->base). */
+        if (!char_elem && base_node && base_node->kind == HD_AST_INDEX &&
+            base_node->left && base_node->left->kind == HD_AST_IDENT &&
+            base_node->left->ident[0]) {
+            for (int vi = 0; vi < g->n_vars; vi++)
+                if (strcmp(g->vars[vi].name, base_node->left->ident) == 0 &&
+                    g->vars[vi].type && g->vars[vi].type->kind == HD_TYPE_ARRAY &&
+                    g->vars[vi].type->base && g->vars[vi].type->base->kind == HD_TYPE_PTR &&
+                    g->vars[vi].type->base->base &&
+                    (g->vars[vi].type->base->base->kind == HD_TYPE_I8 ||
+                     g->vars[vi].type->base->base->kind == HD_TYPE_U8)) {
+                    char_elem = 1;
+                    if (g->vars[vi].type->base->base->kind == HD_TYPE_U8)
+                        char_unsigned = 1;
+                    break;
+                }
         }
         if (char_elem) {
             /* signed char (I8) sign-extends; unsigned char (U8) zero-extends */
