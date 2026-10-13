@@ -1674,7 +1674,13 @@ extern_done:
                                   : (g->array_elements_pending > 0 ? g->array_elements_pending : arr_size);
                 for (uint32_t e = 0; e < n->init->n_args && e < (uint32_t)n_array_elems; e++) {
                     int elem_sz = 8; /* default: 1 cell */
+                    int elem_is_byte = 0; /* char/u8 array: byte-packed */
                     if (n->type && n->type->kind == HD_TYPE_ARRAY && n->type->base
+                        && (n->type->base->kind == HD_TYPE_I8 ||
+                            n->type->base->kind == HD_TYPE_U8)) {
+                        elem_sz = 1;
+                        elem_is_byte = 1;
+                    } else if (n->type && n->type->kind == HD_TYPE_ARRAY && n->type->base
                         && n->type->base->kind == HD_TYPE_ARRAY) {
                         /* Multi-dimensional: element size = total cells of inner array * 8 bytes. */
                         int inner_cells = 1;
@@ -1804,6 +1810,12 @@ extern_done:
                         wubu_vr_t clr = wubu_mir_binop(g->prog, MIR_AND, oldw, wubu_mir_const(g->prog, inv));
                         wubu_vr_t res = wubu_mir_binop(g->prog, MIR_OR, clr, nv);
                         wubu_mir_store(g->prog, elem_addr, res);
+                    } else if (elem_is_byte) {
+                        /* Byte-packed char/u8 array: store ONE byte at the
+                         * element's byte offset so consecutive elements pack
+                         * into the same cell (a full 8-byte store would clobber
+                         * siblings, e.g. b[]={255,0,128} lost b[2]). */
+                        wubu_mir_store8(g->prog, elem_addr, ev);
                     } else {
                         wubu_mir_store(g->prog, elem_addr, ev);
                     }
