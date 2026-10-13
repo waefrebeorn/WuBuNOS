@@ -52,6 +52,13 @@ static void parse_error(HDParser *p, const char *msg) {
     p->has_error = true;
 }
 
+/* A hard error (failed _Static_assert, etc.) that must survive the block
+ * parser's missing-semicolon error recovery. */
+static void parse_fatal(HDParser *p, const char *msg) {
+    parse_error(p, msg);
+    p->fatal_error = true;
+}
+
 static HDTokenType peek(HDParser *p) {
     return p->lex->tok.type;
 }
@@ -1304,8 +1311,9 @@ HDASTNode *parse_block(HDParser *p) {
         }
         if (p->has_error) {
             /* If the error is a missing semicolon before '}', clear it —
-             * the last statement in a block doesn't need one. */
-            if (peek(p) == HD_TOK_RBRACE) {
+             * the last statement in a block doesn't need one. A fatal error
+             * (failed _Static_assert) is NOT clearable. */
+            if (peek(p) == HD_TOK_RBRACE && !p->fatal_error) {
                 p->has_error = false;
                 p->n_errors = 0;
             } else {
@@ -1328,6 +1336,37 @@ static HDASTNode *parse_stmt(HDParser *p) {
     if (peek(p) == HD_TOK_SEMI) {
         advance(p);
         return hd_ast_new(HD_AST_EXPR_STMT);  /* no-op expr stmt */
+    }
+    /* _Static_assert(constant, "msg") — compile-time assertion. If the constant
+     * is a compile-time-known false, this is a compile ERROR. */
+    if (peek(p) == HD_TOK_IDENT &&
+        strcmp(p->lex->tok.text, "_Static_assert") == 0) {
+        advance(p);                       /* consume _Static_assert */
+        expect(p, HD_TOK_LPAREN);
+        /* _Static_assert's first operand is an integer constant expression.
+         * Read a bare integer literal directly (the common case); otherwise
+         * parse the full expression and treat any constant-false as a failure. */
+        long long cval = 0; int have_const = 0;
+        if (peek(p) == HD_TOK_INT) {
+            cval = p->lex->tok.int_val;
+            have_const = 1;
+        }
+        HDASTNode *cond = parse_expr(p);
+        /* optional string message */
+        if (peek(p) == HD_TOK_STRING) advance(p);
+        else if (peek(p) == HD_TOK_COMMA) { advance(p); if (peek(p) == HD_TOK_STRING) advance(p); }
+        expect(p, HD_TOK_RPAREN);
+        /* enforce: a compile-time-known false assertion fails to compile */
+        if (have_const && cval == 0)
+            parse_fatal(p, "static assertion failed");
+        else if (!have_const && cond && cond->int_val == 0 &&
+                 (cond->kind == HD_AST_INT_LIT || cond->kind == HD_AST_EQ ||
+                  cond->kind == HD_AST_NE || cond->kind == HD_AST_LT ||
+                  cond->kind == HD_AST_GT || cond->kind == HD_AST_LE ||
+                  cond->kind == HD_AST_GE))
+            parse_fatal(p, "static assertion failed");
+        match(p, HD_TOK_SEMI);
+        return hd_ast_new(HD_AST_EXPR_STMT);  /* no-op on success */
     }
     /* If statement */
     if (match(p, HD_KW_IF)) {

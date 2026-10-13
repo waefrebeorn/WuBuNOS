@@ -341,6 +341,7 @@ struct HDParser {
     HDLexer *lex;
     HDASTNode *ast;
     bool has_error;
+    bool fatal_error;   /* set for hard errors (e.g. failed _Static_assert) that must NOT be cleared */
     char errors[HD_MAX_ERRORS][256];
     int n_errors;
     /* named-type registry: struct/union/enum tags defined with a body are

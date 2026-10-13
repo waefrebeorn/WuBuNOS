@@ -129,6 +129,7 @@ int64_t hd_eval(const char *source) {
 
     /* If expression parsing failed or didn't consume all input, try block parsing */
     if (parse.has_error || (hd_parse_peek(&parse) != HD_TOK_EOF && hd_parse_peek(&parse) != HD_TOK_SEMI)) {
+        if (parse.fatal_error) { hd_ast_free(ast); return 0; }   /* hard error: don't retry */
         hd_ast_free(ast);
         parse.has_error = false;
         parse.n_errors = 0;
