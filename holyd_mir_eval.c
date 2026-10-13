@@ -1079,6 +1079,12 @@ static wubu_vr_t mir_address_of(HDMirGen *g, const HDASTNode *n) {
     }
     if (n->kind == HD_AST_DEREF)
         return mir_gen_expr(g, n->child);      /* *p: address is p's value */
+    /* (ptr + i)[j] / *(ptr + i): an ADD whose result is already a pointer
+     * value (array decay or pointer arithmetic). Its VALUE is the address to
+     * index from, so generate the expression rather than treating it as an
+     * lvalue base (mir_address_of had no ADD case, so (a+1)[0] read garbage). */
+    if (n->kind == HD_AST_ADD || n->kind == HD_AST_SUB)
+        return mir_gen_expr(g, n);
     if (n->kind == HD_AST_CALL || n->kind == HD_AST_FUNC_CALL) {
         /* A call returning a struct yields the struct address in its result vr */
         wubu_vr_t rv = mir_gen_expr(g, n);
@@ -4275,8 +4281,17 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             if (base && base->kind == HD_AST_IDENT && base->ident[0]) {
                 for (int vi = 0; vi < g->n_vars; vi++) {
                     if (strcmp(g->vars[vi].name, base->ident) == 0 && g->vars[vi].is_array) {
-                        /* *(array + i) — return address, don't load */
-                        return addr;
+                        /* *(array + i) decays to a sub-array ONLY when the
+                         * element is itself an array (e.g. int a[N][M]). For a
+                         * 1-D array of scalars, *(a + i) is a scalar and MUST
+                         * load the element -- returning the address here made
+                         * *(a+1) yield the address (e.g. 16) instead of a[1]
+                         * (e.g. 2). */
+                        HDType *at = g->vars[vi].type;
+                        bool elem_is_array = at && at->kind == HD_TYPE_ARRAY &&
+                                             at->base && at->base->kind == HD_TYPE_ARRAY;
+                        if (elem_is_array) return addr;  /* sub-array decays */
+                        break;  /* scalar element -> fall through to load */
                     }
                 }
             }
@@ -4300,10 +4315,14 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         }
         else if (n->child && n->child->kind == HD_AST_ADD && n->child->left &&
                  n->child->left->kind == HD_AST_IDENT && n->child->left->ident[0]) {
-            /* p[i] lowers to DEREF(ADD(p, i)) -- check the base pointer var */
+            /* p[i] lowers to DEREF(ADD(p, i)); *(s+i) for a char array decays
+             * the same way. Check the base var: a PTR uses its pointee type;
+             * an ARRAY of char uses its element type (both byte-addressable). */
             for (int vi = 0; vi < g->n_vars; vi++)
                 if (strcmp(g->vars[vi].name, n->child->left->ident) == 0 &&
-                    g->vars[vi].type && g->vars[vi].type->kind == HD_TYPE_PTR) {
+                    g->vars[vi].type &&
+                    (g->vars[vi].type->kind == HD_TYPE_PTR ||
+                     g->vars[vi].type->kind == HD_TYPE_ARRAY)) {
                     pt = g->vars[vi].type->base; break;
                 }
         }
