@@ -4346,6 +4346,20 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                     pt = g->vars[vi].type->base; break;
                 }
         }
+        /* *d[0] where d is char*[N] (array of char pointers): the INDEX child
+         * yields a char* element, so the deref loads ONE byte. Resolve the
+         * array's element type (PTR(I8/U8)) through the INDEX base var. */
+        else if (n->child && n->child->kind == HD_AST_INDEX &&
+                 n->child->left && n->child->left->kind == HD_AST_IDENT &&
+                 n->child->left->ident[0]) {
+            for (int vi = 0; vi < g->n_vars; vi++)
+                if (strcmp(g->vars[vi].name, n->child->left->ident) == 0 &&
+                    g->vars[vi].type && g->vars[vi].type->kind == HD_TYPE_ARRAY &&
+                    g->vars[vi].type->base &&
+                    g->vars[vi].type->base->kind == HD_TYPE_PTR) {
+                    pt = g->vars[vi].type->base->base; break;
+                }
+        }
         else if (n->child && n->child->kind == HD_AST_ADD && n->child->left &&
                  n->child->left->kind == HD_AST_IDENT && n->child->left->ident[0]) {
             /* p[i] lowers to DEREF(ADD(p, i)); *(s+i) for a char array decays
