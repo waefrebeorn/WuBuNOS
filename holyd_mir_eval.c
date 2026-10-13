@@ -2957,7 +2957,32 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 lhs = mir_promote_to_float(g, lhs, n->left);
             }
             wubu_vr_t upd = wubu_mir_binop(g->prog, op, lhs, rhs);
-            /* For float compound assignments to integer LHS, convert result back */
+            /* Pointer compound assignment: p += n / p -= n scales the integer
+             * by the pointee size (cell model: 8, char*: 1). Without this,
+             * p += 2 advanced the pointer by 2 bytes, not 2 cells, so *p read
+             * the wrong slot. Only for ADD/SUB on a pointer lvalue. */
+            if ((n->kind == HD_AST_ADD_ASSIGN || n->kind == HD_AST_SUB_ASSIGN) &&
+                !is_float && n->left && n->left->kind == HD_AST_IDENT &&
+                n->left->ident[0]) {
+                int pscale = 0;
+                for (int vi = 0; vi < g->n_vars; vi++)
+                    if (strcmp(g->vars[vi].name, n->left->ident) == 0 &&
+                        g->vars[vi].type && g->vars[vi].type->kind == HD_TYPE_PTR &&
+                        g->vars[vi].type->base) {
+                        if (g->vars[vi].type->base->kind == HD_TYPE_I8 ||
+                            g->vars[vi].type->base->kind == HD_TYPE_U8)
+                            pscale = 1;
+                        else if (g->vars[vi].type->base->kind == HD_TYPE_ARRAY)
+                            pscale = g->vars[vi].type->base->array_size * 8;
+                        else
+                            pscale = 8;
+                        break;
+                    }
+                if (pscale > 1)
+                    rhs = wubu_mir_binop(g->prog, MIR_MUL, rhs,
+                                         wubu_mir_const(g->prog, (int64_t)pscale));
+                upd = wubu_mir_binop(g->prog, op, lhs, rhs);
+            }
             if (is_float) {
                 /* Check if LHS is an integer type */
                 HDType *lhs_type = NULL;
