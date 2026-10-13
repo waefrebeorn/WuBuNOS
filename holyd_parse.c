@@ -167,6 +167,10 @@ static HDType *parse_type(HDParser *p) {
                              if (peek(p) == HD_KW_I64) advance(p); /* long long */
                              else if (peek(p) == HD_KW_I32) advance(p); /* long int */
                          }
+                         /* `int _Complex` / `float _Complex` (base type first) */
+                         if (peek(p) == HD_KW_COMPLEX) { advance(p);
+                             if (peek(p) == HD_KW_F64 || peek(p) == HD_KW_I32) advance(p);
+                         }
                          break;
         case HD_KW_I64:  t->kind = HD_TYPE_I64;  advance(p);
                          /* `long long` = two I64 tokens (both 64-bit on
@@ -219,7 +223,12 @@ static HDType *parse_type(HDParser *p) {
                          /* `unsigned long` == `unsigned long int` */
                          if (peek(p) == HD_KW_I64 || peek(p) == HD_KW_I32) advance(p);
                          break;
-        case HD_KW_F64:  t->kind = HD_TYPE_F64;  advance(p); break;
+        case HD_KW_F64:  t->kind = HD_TYPE_F64;  advance(p);
+                         /* `double _Complex` (base type first) */
+                         if (peek(p) == HD_KW_COMPLEX) { advance(p);
+                             if (peek(p) == HD_KW_F64 || peek(p) == HD_KW_I32) advance(p);
+                         }
+                         break;
         case HD_KW_BOOL:  t->kind = HD_TYPE_BOOL; advance(p); break;
         case HD_KW_ENUM: {
             /* enum [Name] { A, B=2, C } — parse enumerators, register each
