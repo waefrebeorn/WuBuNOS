@@ -4326,6 +4326,22 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                     pt = g->vars[vi].type->base; break;
                 }
         }
+        /* *s++ / *++s / *s--: the child is a pre/post increment whose operand
+         * is the pointer var. Resolve the pointee through the increment so a
+         * char* deref after *s++ loads ONE byte, not the whole 8-byte cell
+         * (otherwise while(*s++) n++ over-reads and counts garbage). */
+        else if (n->child && n->child->child &&
+                 (n->child->kind == HD_AST_POST_INC || n->child->kind == HD_AST_PRE_INC ||
+                  n->child->kind == HD_AST_POST_DEC || n->child->kind == HD_AST_PRE_DEC) &&
+                 n->child->child->kind == HD_AST_IDENT && n->child->child->ident[0]) {
+            for (int vi = 0; vi < g->n_vars; vi++)
+                if (strcmp(g->vars[vi].name, n->child->child->ident) == 0 &&
+                    g->vars[vi].type &&
+                    (g->vars[vi].type->kind == HD_TYPE_PTR ||
+                     g->vars[vi].type->kind == HD_TYPE_ARRAY)) {
+                    pt = g->vars[vi].type->base; break;
+                }
+        }
         if (pt && (pt->kind == HD_TYPE_I8 || pt->kind == HD_TYPE_U8))
             char_load = 1;
         if (char_load) {
