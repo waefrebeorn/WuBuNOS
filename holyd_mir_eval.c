@@ -95,6 +95,17 @@ typedef struct {
      * record param_fnptr[callee][pi] = func_id(fn). Seeded by a pre-pass so a
      * callee body can resolve a bare `f(args)` where f is a func-ptr param. */
     int param_fnptr[MIR_MAX_FUNCTIONS][16];
+    /* C11 threads (COMPILER #51), cooperative model: thrd_create records the
+     * callee func_id + a memory slot holding the arg; thrd_join emits a direct
+     * MIR_CALL to that func_id with the stored arg and returns the result. */
+    int  thrd_func_id[64];   /* func_id per thread, -1 = free */
+    int  thrd_arg_slot[64];  /* mem cell holding the arg per thread */
+    int  n_thrd;
+    /* handle-variable name -> thread id, so thrd_join(&t) resolves the tid at
+     * compile time and emits a direct call (no runtime-tid branch). */
+    char thrd_handle_name[64][HD_MAX_IDENT_LEN];
+    int  thrd_handle_tid[64];
+    int  n_thrd_handles;
     /* enum constant table */
     char enum_const_names[64][HD_MAX_IDENT_LEN];
     int64_t enum_const_vals[64];
@@ -4829,6 +4840,97 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 strcmp(fname, "__atomic_signal_fence") == 0) {
                 return wubu_mir_const(g->prog, 0);
             }
+            /* C11 threads (COMPILER #51), cooperative model. thrd_create(&t,
+             * fn, arg) records the callee's func_id + a memory slot holding
+             * arg, maps handle var t -> thread id, writes the id into *t, and
+             * returns 0. thrd_join(t, &res) resolves t's thread id at compile
+             * time (when t is a known handle var) and emits a direct MIR_CALL
+             * to the recorded func_id with the stored arg, storing the result
+             * into *res. Falls back to a runtime tid==i dispatch otherwise. */
+            if (strcmp(fname, "thrd_create") == 0 && n->n_args >= 3) {
+                /* resolve fn (arg 1) to a func_id */
+                int fn_fid = -1;
+                const HDASTNode *fnarg = n->args[1];
+                if (fnarg && fnarg->kind == HD_AST_IDENT && fnarg->ident[0]) {
+                    for (int i = 0; i < g->n_funcs; i++)
+                        if (strcmp(g->func_ast[i]->ident, fnarg->ident) == 0) { fn_fid = i; break; }
+                }
+                if (fn_fid < 0) return wubu_mir_const(g->prog, -1);  /* unknown fn */
+                int tid = g->n_thrd;
+                if (tid >= 64) return wubu_mir_const(g->prog, -1);
+                g->thrd_func_id[tid] = fn_fid;
+                int64_t cell = (int64_t)(g->prog->total_mem + 1);
+                g->prog->total_mem = cell + 8;
+                g->thrd_arg_slot[tid] = (int)cell;
+                g->n_thrd++;
+                /* record handle var name -> tid for compile-time join resolution */
+                const HDASTNode *h = n->args[0];
+                if (h && h->kind == HD_AST_ADDR && h->child &&
+                    h->child->kind == HD_AST_IDENT && h->child->ident[0] &&
+                    g->n_thrd_handles < 64) {
+                    strncpy(g->thrd_handle_name[g->n_thrd_handles], h->child->ident, HD_MAX_IDENT_LEN - 1);
+                    g->thrd_handle_name[g->n_thrd_handles][HD_MAX_IDENT_LEN - 1] = '\0';
+                    g->thrd_handle_tid[g->n_thrd_handles] = tid;
+                    g->n_thrd_handles++;
+                }
+                /* store arg into the cell */
+                wubu_vr_t argv = mir_gen_expr(g, n->args[2]);
+                wubu_mir_store(g->prog, wubu_mir_const(g->prog, cell), argv);
+                /* write thread id into *t (arg 0) */
+                wubu_vr_t taddr = mir_gen_expr(g, n->args[0]);
+                wubu_mir_store(g->prog, taddr, wubu_mir_const(g->prog, tid));
+                return wubu_mir_const(g->prog, 0);   /* thrd_success */
+            }
+            if (strcmp(fname, "thrd_join") == 0 && n->n_args >= 1) {
+                /* resolve the handle's tid at compile time if it is a known
+                 * handle var (thrd_join(t, ...) reads t, not &t). */
+                int join_tid = -1;
+                const HDASTNode *hj = n->args[0];
+                if (hj && hj->kind == HD_AST_IDENT && hj->ident[0]) {
+                    for (int i = 0; i < g->n_thrd_handles; i++)
+                        if (strcmp(g->thrd_handle_name[i], hj->ident) == 0) { join_tid = g->thrd_handle_tid[i]; break; }
+                }
+                if (join_tid >= 0 && g->thrd_func_id[join_tid] >= 0) {
+                    /* direct call: load stored arg, call, capture vr0 */
+                    wubu_vr_t arg = wubu_mir_load(g->prog,
+                                    wubu_mir_const(g->prog, g->thrd_arg_slot[join_tid]));
+                    wubu_mir_mov_to(g->prog, 1, arg);
+                    wubu_mir_call(g->prog, (uint32_t)g->thrd_func_id[join_tid]);
+                    wubu_vr_t result = mir_new_vr(g);
+                    wubu_mir_mov_to(g->prog, result, 0);   /* callee returns in vr0 */
+                    if (n->n_args >= 2 && n->args[1]) {
+                        wubu_vr_t resaddr = mir_gen_expr(g, n->args[1]);
+                        wubu_mir_store(g->prog, resaddr, result);
+                    }
+                    return wubu_mir_const(g->prog, 0);
+                }
+                /* fallback: runtime tid dispatch over all created threads */
+                wubu_vr_t taddr = mir_gen_expr(g, n->args[0]);
+                wubu_vr_t tid_vr = wubu_mir_load(g->prog, taddr);
+                wubu_vr_t result = wubu_mir_const(g->prog, 0);
+                for (int tid = 0; tid < g->n_thrd; tid++) {
+                    if (g->thrd_func_id[tid] < 0) continue;
+                    wubu_vr_t cond = wubu_mir_binop(g->prog, MIR_EQ, tid_vr,
+                                                    wubu_mir_const(g->prog, tid));
+                    uint32_t l_end = wubu_mir_new_label(g->prog);
+                    wubu_mir_jz(g->prog, cond, l_end);
+                    wubu_vr_t arg = wubu_mir_load(g->prog,
+                                    wubu_mir_const(g->prog, g->thrd_arg_slot[tid]));
+                    wubu_mir_mov_to(g->prog, 1, arg);
+                    wubu_mir_call(g->prog, (uint32_t)g->thrd_func_id[tid]);
+                    result = mir_new_vr(g);
+                    wubu_mir_mov_to(g->prog, result, 0);
+                    wubu_mir_place_label(g->prog, l_end);
+                }
+                if (n->n_args >= 2 && n->args[1]) {
+                    wubu_vr_t resaddr = mir_gen_expr(g, n->args[1]);
+                    wubu_mir_store(g->prog, resaddr, result);
+                }
+                return wubu_mir_const(g->prog, 0);
+            }
+            if (strcmp(fname, "thrd_detach") == 0 && n->n_args >= 1) {
+                return wubu_mir_const(g->prog, 0);   /* no-op in cooperative model */
+            }
             /* __builtin_ffs(x) — find first set bit. */
             if (strcmp(fname, "ffs") == 0 && n->n_args >= 1) {
                 wubu_vr_t x = mir_gen_expr(g, n->args[0]);
@@ -5341,6 +5443,7 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
     g.prog = prog;
     g.next_vr = 1u << 16;  /* 65536 — far above any instr-index vr */
     g.has_error = 0;
+    for (int ti = 0; ti < 64; ti++) g.thrd_func_id[ti] = -1;  /* C11 threads: none created */
     prog->next_vr_hi = g.next_vr;  /* reserve mem up to the high-vr param-slot range */
 
     /* Register struct/union types from the parser's named_types table.
