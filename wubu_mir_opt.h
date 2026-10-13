@@ -33,6 +33,14 @@ typedef enum {
     MIR_OPT_FUSE    = 1024,/* operator fusion */
 } mir_opt_flags_t;
 
+/* Canonical -O2 pipeline (COMPILER #53): the standard aggressive-but-safe set
+ * -- constant folding, strength reduction, dead-code elimination, instruction
+ * combining, common-subexpression elimination, and loop-invariant code motion.
+ * This is the level gcc/clang -O2 maps to; passes run in wubu_mir_optimize's
+ * canonical order regardless of the bit order here. */
+#define MIR_OPT_O2 (MIR_OPT_FOLD | MIR_OPT_STRENGTH | MIR_OPT_DCE | \
+                    MIR_OPT_COMBINE | MIR_OPT_CSE | MIR_OPT_LICM)
+
 /* Run all requested optimization passes on program p.
  * Passes execute in a canonical order so later passes consume the
  * results of earlier ones:

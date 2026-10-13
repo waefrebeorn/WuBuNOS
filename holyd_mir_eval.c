@@ -5769,9 +5769,7 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
      * safe passes only; the optimizer preserves semantics, so the differential
      * battery (every driver agrees with the portable interp oracle) proves
      * cross-target correctness. */
-    wubu_mir_optimize(prog,
-                      MIR_OPT_FOLD | MIR_OPT_STRENGTH | MIR_OPT_DCE |
-                      MIR_OPT_COMBINE | MIR_OPT_CSE);
+    wubu_mir_optimize(prog, MIR_OPT_O2);
 
     /* DEBUG: dump MIR after optimization */
     if (getenv("WUBU_DEBUG_MIR_AFTER")) {
