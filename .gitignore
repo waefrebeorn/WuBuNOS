@@ -17,6 +17,41 @@ gauntlet_output
 test_single
 test_gauntlet_output
 
+# Test / bench / debug binaries (untrack; build artifacts)
+bench_*
+cleveland_browns_album_test
+debug_*
+hedge_verify
+holyc_test
+jit_test
+mir_driver_test
+selfhost_battery
+test_backend_diff
+test_elf_cubin
+test_fib_debug
+test_fuzz_diff
+test_fuzz_diff.c
+test_gap_audit
+test_mir_battery
+test_mir_debug
+test_mir_float
+test_mir_opt
+test_peephole
+test_selfhost_battery
+test_softfloat
+test_tgemm
+peephole_superopt/peephole_superopt
+tools/vk_probe
+tools/vk_run
+
+# Dependency files (make -MMD output)
+*.d
+
+# Scratch / debug source
+holyd_lex.c
+holyd_mir_eval_dbg.c
+holyd_mir_eval_dbg2.c
+
 # Ignore logs
 *.log
 /tmp/gv*.log
