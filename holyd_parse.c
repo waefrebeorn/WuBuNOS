@@ -773,7 +773,8 @@ static HDASTNode *parse_primary(HDParser *p) {
              * support). _Alignas is a declaration specifier, handled in
              * parse_type; if it appears as an expression we treat it as a
              * no-op cast. */
-            if (strcmp(p->lex->tok.text, "_Alignof") == 0) {
+            if (strcmp(p->lex->tok.text, "_Alignof") == 0 ||
+                strcmp(p->lex->tok.text, "alignof") == 0) {
                 advance(p); /* _Alignof */
                 HDASTNode *n = hd_ast_new(HD_AST_SIZEOF);
                 if (peek(p) == HD_TOK_LPAREN) {

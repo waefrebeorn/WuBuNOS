@@ -228,6 +228,16 @@ static HDTokenType hd_scan_number(HDLexer *lex) {
 
     while (!hd_is_at_end(lex) && i < HD_MAX_TOKEN_LEN - 1) {
         char c = hd_peek(lex);
+        /* C14 digit separator: ' between digits is ignored (1'000'000).
+         * Only skip it when a digit follows, so it never swallows a char
+         * literal quote or a trailing separator. */
+        if (c == '\'' && i > 0) {
+            char nx = lex->src[lex->pos + 1];  /* char after the quote */
+            bool sep = is_hex ? isxdigit((unsigned char)nx)
+                    : is_bin ? (nx == '0' || nx == '1')
+                             : isdigit((unsigned char)nx);
+            if (sep) { hd_advance(lex); continue; }
+        }
         if (is_hex && isxdigit((unsigned char)c)) {
             buf[i++] = hd_advance(lex);
         } else if (is_bin && (c == '0' || c == '1')) {
