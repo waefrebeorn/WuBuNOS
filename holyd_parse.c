@@ -1218,7 +1218,7 @@ static HDASTNode *parse_cast(HDParser *p) {
                         }
                         if (peek(p) == HD_TOK_ASSIGN) advance(p); /* skip = */
                     }
-                    HDASTNode *elem = parse_expr(p);
+                    HDASTNode *elem = parse_assign(p);  /* NOT parse_expr: parse_expr=parse_comma would eat the element-separator commas */
                     if (elem_count >= args_cap) {
                         args_cap *= 2;
                         elems = (HDASTNode **)realloc(elems, sizeof(HDASTNode *) * args_cap);
