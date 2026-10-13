@@ -798,6 +798,40 @@ static HDASTNode *parse_primary(HDParser *p) {
                 n->int_val = 0;
                 return n;
             }
+            /* _Generic(ctrl, T1: e1, ..., default: ed) — C17 type-generic
+             * selection. Parse the controlling expr, determine its type kind,
+             * then return the expression whose associated type matches (or the
+             * default). All associations are parsed (for side-effect-free
+             * validity) but only the selected one is emitted. */
+            if (strcmp(p->lex->tok.text, "_Generic") == 0) {
+                advance(p); /* _Generic */
+                expect(p, HD_TOK_LPAREN);
+                HDASTNode *ctrl = parse_assign(p);
+                int ctrl_kind = (ctrl && ctrl->type) ? ctrl->type->kind : -1;
+                expect(p, HD_TOK_COMMA);
+                HDASTNode *selected = NULL;
+                HDASTNode *default_expr = NULL;
+                for (;;) {
+                    if (peek(p) == HD_KW_DEFAULT) {
+                        advance(p);
+                        expect(p, HD_TOK_COLON);
+                        default_expr = parse_assign(p);
+                    } else {
+                        HDType *assoc_t = parse_type(p);
+                        int akind = assoc_t ? assoc_t->kind : -1;
+                        expect(p, HD_TOK_COLON);
+                        HDASTNode *e = parse_assign(p);
+                        if (!selected && ctrl_kind >= 0 && akind == ctrl_kind)
+                            selected = e;
+                    }
+                    if (peek(p) == HD_TOK_COMMA) { advance(p); continue; }
+                    break;
+                }
+                expect(p, HD_TOK_RPAREN);
+                HDASTNode *result = selected ? selected : default_expr;
+                if (!result) { result = hd_ast_new(HD_AST_INT_LIT); result->int_val = 0; }
+                return result;
+            }
             HDASTNode *n = hd_ast_new(HD_AST_IDENT);
             strncpy(n->ident, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
             n->type = NULL;  /* Type will be resolved during codegen */
