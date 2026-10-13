@@ -5252,6 +5252,42 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
                 s->member_elem_kinds[s->n_members] = (t->members[j].type && t->members[j].type->kind == HD_TYPE_ARRAY && t->members[j].type->base) ? t->members[j].type->base->kind : 0;
                 if (t->members[j].type && t->members[j].type->kind == HD_TYPE_STRUCT && t->members[j].type->name[0])
                     strncpy(s->member_type_names[s->n_members], t->members[j].type->name, HD_MAX_IDENT_LEN - 1);
+                /* Named member of an ANONYMOUS struct type: `struct{int i1;int i2;} t;`
+                 * The inner struct has no name, so it was never registered and
+                 * member_type_names stays empty -> `o.t.i1` cannot resolve the
+                 * inner struct type. Register the inner struct under a synthetic
+                 * name and point member_type_names at it so nested access works. */
+                else if (t->members[j].type && t->members[j].type->kind == HD_TYPE_STRUCT &&
+                         t->members[j].type->name[0] == '\0' && t->members[j].type->n_members > 0 &&
+                         g.n_structs < MAX_STRUCTS) {
+                    HDType *inner = t->members[j].type;
+                    char synth[HD_MAX_IDENT_LEN];
+                    snprintf(synth, sizeof synth, "__anon_%s_%s",
+                             parse.named_type_names[i], t->members[j].name);
+                    /* register the inner struct (if not already) */
+                    int already = 0;
+                    for (int si = 0; si < g.n_structs; si++)
+                        if (strcmp(g.structs[si].name, synth) == 0) { already = 1; break; }
+                    if (!already) {
+                        mir_struct_t *is = &g.structs[g.n_structs++];
+                        strncpy(is->name, synth, HD_MAX_IDENT_LEN - 1);
+                        is->name[HD_MAX_IDENT_LEN - 1] = '\0';
+                        is->n_members = 0;
+                        is->total_size = 0;
+                        for (int im = 0; im < inner->n_members && is->n_members < MAX_MEMBERS; im++) {
+                            strncpy(is->member_names[is->n_members], inner->members[im].name, HD_MAX_IDENT_LEN - 1);
+                            is->member_names[is->n_members][HD_MAX_IDENT_LEN - 1] = '\0';
+                            is->member_offsets[is->n_members] = (int)inner->members[im].offset;
+                            is->member_bit_widths[is->n_members] = inner->members[im].bit_width;
+                            is->member_bit_offsets[is->n_members] = inner->members[im].bit_offset;
+                            is->member_type_kinds[is->n_members] = inner->members[im].type ? inner->members[im].type->kind : 0;
+                            is->n_members++;
+                        }
+                        is->total_size = (int)inner->size;
+                        if (is->total_size <= 0) is->total_size = 1;
+                    }
+                    strncpy(s->member_type_names[s->n_members], synth, HD_MAX_IDENT_LEN - 1);
+                }
                 s->n_members++;
             }
             s->total_size = (int)t->size;  /* size in int64 cells */

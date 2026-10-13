@@ -512,6 +512,24 @@ static HDType *parse_type(HDParser *p) {
                                     int elem_cells = (int)((hd_type_size(member_type->base) + 7) / 8);
                                     if (elem_cells < 1) elem_cells = 1;
                                     member_cells = elem_cells * member_type->array_size;
+                                } else if (member_type->kind == HD_TYPE_STRUCT || member_type->kind == HD_TYPE_UNION) {
+                                    /* A struct/union member occupies its CELL count (the MIR
+                                     * model addresses members as offset*8, one cell per
+                                     * member). hd_type_size() returns the true C BYTE size
+                                     * (2 ints = 8 bytes -> 1 cell), which would collapse a
+                                     * 2-member inner struct into 1 cell and overlap the
+                                     * next member. Use the inner struct's cell size
+                                     * (member_type->size, which the parser keeps in cells). */
+                                    member_cells = (int)member_type->size;
+                                    if (member_cells < 1) {
+                                        /* fall back: sum member cell sizes */
+                                        int cells = 0;
+                                        for (int im = 0; im < member_type->n_members; im++) {
+                                            size_t imsz = hd_type_size(member_type->members[im].type);
+                                            cells += (int)((imsz + 7) / 8);
+                                        }
+                                        member_cells = cells > 0 ? cells : 1;
+                                    }
                                 } else {
                                     member_cells = (int)((msz + 7) / 8);
                                 }
