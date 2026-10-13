@@ -4771,6 +4771,50 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 wubu_vr_t mask = wubu_mir_const(g->prog, 0x7FFFFFFF);
                 return wubu_mir_binop(g->prog, MIR_AND, x, mask);
             }
+            /* __atomic_load_n(ptr, order) — atomic load through ptr. */
+            if (strcmp(fname, "__atomic_load_n") == 0 && n->n_args >= 1) {
+                wubu_vr_t ptr = mir_gen_expr(g, n->args[0]);
+                return wubu_mir_load(g->prog, ptr);
+            }
+            /* __atomic_store_n(ptr, val, order) — atomic store through ptr. */
+            if (strcmp(fname, "__atomic_store_n") == 0 && n->n_args >= 2) {
+                wubu_vr_t ptr = mir_gen_expr(g, n->args[0]);
+                wubu_vr_t val = mir_gen_expr(g, n->args[1]);
+                wubu_mir_store(g->prog, ptr, val);
+                return val;
+            }
+            /* __atomic_fetch_add(ptr, val, order) — *ptr += val, return old. */
+            if (strcmp(fname, "__atomic_fetch_add") == 0 && n->n_args >= 2) {
+                wubu_vr_t ptr = mir_gen_expr(g, n->args[0]);
+                wubu_vr_t val = mir_gen_expr(g, n->args[1]);
+                wubu_vr_t old = wubu_mir_load(g->prog, ptr);
+                wubu_vr_t nv = wubu_mir_binop(g->prog, MIR_ADD, old, val);
+                wubu_mir_store(g->prog, ptr, nv);
+                return old;
+            }
+            /* __atomic_fetch_sub(ptr, val, order) — *ptr -= val, return old. */
+            if (strcmp(fname, "__atomic_fetch_sub") == 0 && n->n_args >= 2) {
+                wubu_vr_t ptr = mir_gen_expr(g, n->args[0]);
+                wubu_vr_t val = mir_gen_expr(g, n->args[1]);
+                wubu_vr_t old = wubu_mir_load(g->prog, ptr);
+                wubu_vr_t nv = wubu_mir_binop(g->prog, MIR_SUB, old, val);
+                wubu_mir_store(g->prog, ptr, nv);
+                return old;
+            }
+            /* __atomic_exchange_n(ptr, val, order) — swap, return old. */
+            if (strcmp(fname, "__atomic_exchange_n") == 0 && n->n_args >= 2) {
+                wubu_vr_t ptr = mir_gen_expr(g, n->args[0]);
+                wubu_vr_t val = mir_gen_expr(g, n->args[1]);
+                wubu_vr_t old = wubu_mir_load(g->prog, ptr);
+                wubu_mir_store(g->prog, ptr, val);
+                return old;
+            }
+            /* __atomic_thread_fence(order) / __atomic_signal_fence — no-op
+             * (single-threaded codegen; ordering is trivially preserved). */
+            if (strcmp(fname, "__atomic_thread_fence") == 0 ||
+                strcmp(fname, "__atomic_signal_fence") == 0) {
+                return wubu_mir_const(g->prog, 0);
+            }
             /* __builtin_ffs(x) — find first set bit. */
             if (strcmp(fname, "ffs") == 0 && n->n_args >= 1) {
                 wubu_vr_t x = mir_gen_expr(g, n->args[0]);
