@@ -2390,6 +2390,28 @@ done_params:
 
     if (match(p, HD_TOK_ASSIGN)) {
         first_var->init = parse_assign(p);
+        /* Infer an unspecified array dimension (`int a[] = {...}` or
+         * `char s[] = "..."`) from the initializer, and recompute the byte
+         * size. Without this, sizeof(a) on an inferred-size array is wrong
+         * (it stayed at the 1-element placeholder size set above). */
+        if (first_var->init && first_var->type &&
+            first_var->type->kind == HD_TYPE_ARRAY &&
+            first_var->type->array_size == 0) {
+            int ne = 0;
+            if (first_var->init->kind == HD_AST_BRACE_INIT) {
+                ne = first_var->init->n_args;
+            } else if (first_var->init->kind == HD_AST_STRING_LIT &&
+                       first_var->type->base &&
+                       (first_var->type->base->kind == HD_TYPE_I8 ||
+                        first_var->type->base->kind == HD_TYPE_U8)) {
+                ne = (int)strlen(first_var->init->str_val) + 1;  /* incl NUL */
+            }
+            if (ne > 0) {
+                first_var->type->array_size = ne;
+                first_var->type->size =
+                    hd_type_size(first_var->type->base) * ne;
+            }
+        }
     }
 
     /* Additional declarators: , name [= expr] */
@@ -2437,6 +2459,17 @@ done_params:
         var->type = vtype;
         if (match(p, HD_TOK_ASSIGN)) {
             var->init = parse_assign(p);
+            /* Infer unspecified array dim from init count (see first decl). */
+            if (var->init && var->type &&
+                var->type->kind == HD_TYPE_ARRAY &&
+                var->type->array_size == 0 &&
+                var->init->kind == HD_AST_BRACE_INIT) {
+                int ne = var->init->n_args;
+                if (ne > 0) {
+                    var->type->array_size = ne;
+                    var->type->size = hd_type_size(var->type->base) * ne;
+                }
+            }
         }
         if (!block) {
             block = hd_ast_new(HD_AST_BLOCK);
