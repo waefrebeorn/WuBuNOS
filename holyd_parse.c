@@ -759,6 +759,45 @@ static HDASTNode *parse_primary(HDParser *p) {
             return n;
         }
         case HD_TOK_IDENT: {
+            /* _Alignof(type) / _Alignof expr — C11 alignment query. Reuse the
+             * SIZEOF node (alignment == size for the simple scalar types we
+             * support). _Alignas is a declaration specifier, handled in
+             * parse_type; if it appears as an expression we treat it as a
+             * no-op cast. */
+            if (strcmp(p->lex->tok.text, "_Alignof") == 0) {
+                advance(p); /* _Alignof */
+                HDASTNode *n = hd_ast_new(HD_AST_SIZEOF);
+                if (peek(p) == HD_TOK_LPAREN) {
+                    advance(p); /* ( */
+                    int t = peek(p);
+                    int is_type_kw = (t >= HD_KW_I0 && t <= HD_KW_VOLATILE);
+                    if (is_type_kw) {
+                        n->type = parse_type(p);
+                        expect(p, HD_TOK_RPAREN);
+                        return n;
+                    }
+                    n->child = parse_expr(p);
+                    expect(p, HD_TOK_RPAREN);
+                    return n;
+                }
+                n->child = parse_cast(p);
+                return n;
+            }
+            if (strcmp(p->lex->tok.text, "_Alignas") == 0) {
+                /* _Alignas(n) as an expression is a no-op; consume it. */
+                advance(p);
+                if (peek(p) == HD_TOK_LPAREN) {
+                    int depth = 0;
+                    do {
+                        if (peek(p) == HD_TOK_LPAREN) depth++;
+                        else if (peek(p) == HD_TOK_RPAREN) depth--;
+                        advance(p);
+                    } while (peek(p) != HD_TOK_EOF && depth > 0);
+                }
+                HDASTNode *n = hd_ast_new(HD_AST_INT_LIT);
+                n->int_val = 0;
+                return n;
+            }
             HDASTNode *n = hd_ast_new(HD_AST_IDENT);
             strncpy(n->ident, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
             n->type = NULL;  /* Type will be resolved during codegen */
