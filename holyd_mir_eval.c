@@ -3242,7 +3242,15 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         else if (n->right && n->right->kind == HD_AST_IDENT && n->right->ident[0]) {
             for (int i = 0; i < g->n_vars; i++) {
                 if (strcmp(g->vars[i].name, n->right->ident) == 0) {
-                    if (g->vars[i].type && g->vars[i].type->kind == HD_TYPE_PTR)
+                    /* An ARRAY name decays to a pointer in subtraction, so
+                     * ptr - array is a pointer difference (divide by scale),
+                     * NOT ptr - int. Without this, p - a multiplied the array
+                     * base address by the scale and returned garbage. */
+                    if (g->vars[i].type &&
+                        (g->vars[i].type->kind == HD_TYPE_PTR ||
+                         g->vars[i].type->kind == HD_TYPE_ARRAY))
+                        b_is_pointer = true;
+                    else if (g->vars[i].is_array)
                         b_is_pointer = true;
                     break;
                 }
