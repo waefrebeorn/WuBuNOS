@@ -1685,8 +1685,10 @@ extern_done:
                     } else if (elem->kind == HD_AST_DESIG_INIT) {
                         /* Designated initializer: compute offset */
                         if (elem->ident[0] == '@') {
-                            /* Array index designator: [index] */
-                            offset = (int)elem->int_val;
+                            /* Array index designator: [index] — offset is a BYTE
+                             * offset (each cell is 8 bytes), so scale the index
+                             * by elem_sz. */
+                            offset = (int)elem->int_val * elem_sz;
                         } else {
                             /* Field designator: .field — look up struct member offset */
                             offset = mir_struct_member_offset(g, struct_type_name, elem->ident);
