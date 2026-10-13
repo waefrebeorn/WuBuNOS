@@ -1359,8 +1359,16 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
                     s->member_is_ptr[s->n_members] = (n->type->members[i].type && n->type->members[i].type->kind == HD_TYPE_PTR) ? 1 : 0;
                     s->member_type_kinds[s->n_members] = n->type->members[i].type ? n->type->members[i].type->kind : 0;
                     s->member_elem_kinds[s->n_members] = (n->type->members[i].type && n->type->members[i].type->kind == HD_TYPE_ARRAY && n->type->members[i].type->base) ? n->type->members[i].type->base->kind : 0;
-                    if (n->type->members[i].type && n->type->members[i].type->kind == HD_TYPE_STRUCT && n->type->members[i].type->name[0])
-                        strncpy(s->member_type_names[s->n_members], n->type->members[i].type->name, HD_MAX_IDENT_LEN - 1);
+                    if (n->type->members[i].type && n->type->members[i].type->name[0] &&
+                        (n->type->members[i].type->kind == HD_TYPE_STRUCT ||
+                         (n->type->members[i].type->kind == HD_TYPE_PTR &&
+                          n->type->members[i].type->base &&
+                          n->type->members[i].type->base->kind == HD_TYPE_STRUCT)))
+                        strncpy(s->member_type_names[s->n_members],
+                                n->type->members[i].type->kind == HD_TYPE_PTR
+                                    ? n->type->members[i].type->base->name
+                                    : n->type->members[i].type->name,
+                                HD_MAX_IDENT_LEN - 1);
                     s->n_members++;
                 }
             }
@@ -1434,8 +1442,16 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
                             s->member_is_ptr[mi] = (n->type->members[mi].type && n->type->members[mi].type->kind == HD_TYPE_PTR) ? 1 : 0;
                             s->member_type_kinds[mi] = n->type->members[mi].type ? n->type->members[mi].type->kind : 0;
                             s->member_elem_kinds[mi] = (n->type->members[mi].type && n->type->members[mi].type->kind == HD_TYPE_ARRAY && n->type->members[mi].type->base) ? n->type->members[mi].type->base->kind : 0;
-                            if (n->type->members[mi].type && n->type->members[mi].type->kind == HD_TYPE_STRUCT && n->type->members[mi].type->name[0])
-                                strncpy(s->member_type_names[mi], n->type->members[mi].type->name, HD_MAX_IDENT_LEN - 1);
+                            if (n->type->members[mi].type && n->type->members[mi].type->name[0] &&
+                                (n->type->members[mi].type->kind == HD_TYPE_STRUCT ||
+                                 (n->type->members[mi].type->kind == HD_TYPE_PTR &&
+                                  n->type->members[mi].type->base &&
+                                  n->type->members[mi].type->base->kind == HD_TYPE_STRUCT)))
+                                strncpy(s->member_type_names[mi],
+                                        n->type->members[mi].type->kind == HD_TYPE_PTR
+                                            ? n->type->members[mi].type->base->name
+                                            : n->type->members[mi].type->name,
+                                        HD_MAX_IDENT_LEN - 1);
                             s->n_members++;
                         }
                         s->total_size = (int)n->type->size;  /* size in int64 cells */
@@ -2344,6 +2360,28 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 /* Also try mir_dot_struct_type for complex expressions like (p+1)->a */
                 if (!struct_type)
                     struct_type = mir_dot_struct_type(g, n->left);
+                /* a.pb->w: the base is a MEMBER whose type is a pointer to a
+                 * struct. If the member node carries a PTR type annotation, the
+                 * pointee's name IS the struct to index into. Without this, a
+                 * struct-pointer member's -> access resolved no type and read 0. */
+                if (!struct_type && n->left->kind == HD_AST_MEMBER &&
+                    n->left->type && n->left->type->kind == HD_TYPE_PTR &&
+                    n->left->type->base && n->left->type->base->name[0])
+                    struct_type = n->left->type->base->name;
+                /* a.pb->w fallback: member_type_names wasn't populated for a
+                 * PTR member, so look the member's base type name up directly. */
+                if (!struct_type && n->left->kind == HD_AST_MEMBER &&
+                    n->left->left && n->left->left->kind == HD_AST_IDENT) {
+                    const char *outer = mir_find_var_struct_name(g, n->left->left->ident);
+                    mir_struct_t *ost = outer ? mir_find_struct(g, outer) : NULL;
+                    if (ost)
+                        for (int mi = 0; mi < ost->n_members; mi++)
+                            if (strcmp(ost->member_names[mi], n->left->ident) == 0 &&
+                                ost->member_is_ptr[mi] && ost->member_type_names[mi][0]) {
+                                struct_type = ost->member_type_names[mi];
+                                break;
+                            }
+                }
                 /* Also handle &s->member where n->left is ADDR(s) */
                 if (!struct_type && n->left->kind == HD_AST_ADDR && n->left->child) {
                     const HDASTNode *addr_child = n->left->child;
@@ -5594,8 +5632,15 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
                 s->member_is_ptr[s->n_members] = (t->members[j].type && t->members[j].type->kind == HD_TYPE_PTR) ? 1 : 0;
                 s->member_type_kinds[s->n_members] = t->members[j].type ? t->members[j].type->kind : 0;
                 s->member_elem_kinds[s->n_members] = (t->members[j].type && t->members[j].type->kind == HD_TYPE_ARRAY && t->members[j].type->base) ? t->members[j].type->base->kind : 0;
-                if (t->members[j].type && t->members[j].type->kind == HD_TYPE_STRUCT && t->members[j].type->name[0])
-                    strncpy(s->member_type_names[s->n_members], t->members[j].type->name, HD_MAX_IDENT_LEN - 1);
+                if (t->members[j].type && t->members[j].type->name[0] &&
+                    (t->members[j].type->kind == HD_TYPE_STRUCT ||
+                     (t->members[j].type->kind == HD_TYPE_PTR &&
+                      t->members[j].type->base &&
+                      t->members[j].type->base->kind == HD_TYPE_STRUCT)))
+                    strncpy(s->member_type_names[s->n_members],
+                            t->members[j].type->kind == HD_TYPE_PTR
+                                ? t->members[j].type->base->name
+                                : t->members[j].type->name, HD_MAX_IDENT_LEN - 1);
                 /* Named member of an ANONYMOUS struct type: `struct{int i1;int i2;} t;`
                  * The inner struct has no name, so it was never registered and
                  * member_type_names stays empty -> `o.t.i1` cannot resolve the
