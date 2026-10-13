@@ -1682,6 +1682,26 @@ HDASTNode *hd_parse_decl(HDParser *p) {
             p->n_typedefs++;
         }
         advance(p); /* consume the typedef name */
+        /* Array suffix: `typedef int arr_t[i]` / `[N]` (VLA if size is a
+         * variable). Wrap the base type in an ARRAY type. */
+        while (peek(p) == HD_TOK_LBRACKET) {
+            advance(p);
+            HDType *arr = (HDType *)calloc(1, sizeof(HDType));
+            arr->kind = HD_TYPE_ARRAY;
+            arr->base = base;
+            if (peek(p) == HD_TOK_INT) {
+                arr->array_size = (int)p->lex->tok.int_val;
+                advance(p);
+            } else {
+                arr->array_size = 0;   /* variable-length (VLA) */
+                if (peek(p) != HD_TOK_RBRACKET) parse_expr(p);
+            }
+            arr->size = hd_type_size(base) * (arr->array_size > 0 ? arr->array_size : 1);
+            base = arr;
+            /* update the typedef registry entry to the array type */
+            p->typedef_types[p->n_typedefs - 1] = base;
+            expect(p, HD_TOK_RBRACKET);
+        }
         expect(p, HD_TOK_SEMI);
         HDASTNode *n = hd_ast_new(HD_AST_STRUCT_DECL); /* no-op */
         n->type = base;
