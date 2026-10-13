@@ -786,6 +786,12 @@ static wubu_vr_t mir_truncate_to_type(HDMirGen *g, wubu_vr_t val, const HDType *
         return wubu_mir_unop(g->prog, MIR_DITOF, val);
     case HD_TYPE_I64:
     case HD_TYPE_U64:
+    case HD_TYPE_BOOL:
+        /* _Bool/bool normalizes any nonzero value to 1, zero to 0. */
+        {
+            wubu_vr_t nz = wubu_mir_binop(g->prog, MIR_NE, val, wubu_mir_const(g->prog, 0));
+            return nz;
+        }
     default:
         return val;
     }
@@ -802,6 +808,10 @@ static wubu_vr_t mir_gen_cast(HDMirGen *g, wubu_vr_t val, const HDType *target_t
 
     /* Same type: no conversion needed */
     if (src_k == tgt_k) return val;
+
+    /* Any -> _Bool/bool: normalize nonzero to 1, zero to 0 */
+    if (tgt_k == HD_TYPE_BOOL)
+        return wubu_mir_binop(g->prog, MIR_NE, val, wubu_mir_const(g->prog, 0));
 
     /* Float -> int */
     if (src_k == HD_TYPE_F64 && (tgt_k == HD_TYPE_I8 || tgt_k == HD_TYPE_U8 ||
@@ -2012,7 +2022,8 @@ extern_done:
                     }
                     if (n->type && (n->type->kind == HD_TYPE_I8 || n->type->kind == HD_TYPE_U8 ||
                         n->type->kind == HD_TYPE_I16 || n->type->kind == HD_TYPE_U16 ||
-                        n->type->kind == HD_TYPE_I32 || n->type->kind == HD_TYPE_U32)) {
+                        n->type->kind == HD_TYPE_I32 || n->type->kind == HD_TYPE_U32 ||
+                        n->type->kind == HD_TYPE_BOOL)) {
                         val = mir_truncate_to_type(g, val, n->type);
                     }
                     wubu_mir_store(g->prog, addr, val);
@@ -3720,6 +3731,9 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
     case HD_AST_CAST: {
         wubu_vr_t val = mir_gen_expr(g, n->child);
         if (!n->type) return val;
+        /* Cast to _Bool/bool: normalize nonzero to 1, zero to 0 */
+        if (n->type->kind == HD_TYPE_BOOL)
+            return wubu_mir_binop(g->prog, MIR_NE, val, wubu_mir_const(g->prog, 0));
         /* Determine if the source is f64: check the AST node type, or
          * look up the variable type from the symbol table for IDENT nodes */
         bool from_f64 = mir_is_float_node(g, n->child);
