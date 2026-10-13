@@ -3669,23 +3669,30 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
 
         /* Store initializer elements */
         if (n->type && (n->type->kind == HD_TYPE_STRUCT || n->type->kind == HD_TYPE_UNION)) {
-            /* Struct: store elements at member offsets */
+            /* Struct: store elements at member offsets. Prefer the struct
+             * registry's offsets (mir_struct_member_offset_by_index), the same
+             * source the working normal-init path uses; fall back to the parsed
+             * type's cell offsets (*8). */
+            char cl_sname[HD_MAX_IDENT_LEN]; cl_sname[0] = '\0';
+            if (n->type->name[0]) strncpy(cl_sname, n->type->name, HD_MAX_IDENT_LEN - 1), cl_sname[HD_MAX_IDENT_LEN-1]='\0';
             for (int i = 0; i < elem_count && i < 64; i++) {
                 wubu_vr_t elem_val = mir_gen_expr(g, n->args[i]);
                 int moffset = -1;
                 /* Check if this element has a designated field name */
                 if (n->args[i] && n->args[i]->ident[0]) {
-                    /* Look up the member offset by field name */
                     for (int m = 0; m < n->type->n_members; m++) {
                         if (strcmp(n->type->members[m].name, n->args[i]->ident) == 0) {
-                            moffset = n->type->members[m].offset;
+                            if (cl_sname[0]) { int r = mir_struct_member_offset_by_index(g, cl_sname, m); if (r >= 0) moffset = r; }
+                            if (moffset < 0) moffset = n->type->members[m].offset * 8;
                             break;
                         }
                     }
                 }
                 if (moffset < 0) {
-                    /* No designated initializer — use sequential index */
-                    if (i < n->type->n_members) moffset = n->type->members[i].offset;
+                    if (i < n->type->n_members) {
+                        if (cl_sname[0]) { int r = mir_struct_member_offset_by_index(g, cl_sname, i); if (r >= 0) moffset = r; }
+                        if (moffset < 0) moffset = n->type->members[i].offset * 8;
+                    }
                     else continue;
                 }
                 wubu_vr_t elem_addr = wubu_mir_binop(g->prog, MIR_ADD, addr,
