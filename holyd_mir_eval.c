@@ -90,6 +90,11 @@ typedef struct {
     const HDASTNode *func_ast[MIR_MAX_FUNCTIONS];
     int func_id_of[MIR_MAX_FUNCTIONS];     /* -1 until assigned */
     int n_funcs;
+    /* cross-function func-ptr param map: for a call `callee(fn,...)` where
+     * callee's param `pi` is a function pointer and `fn` is a named function,
+     * record param_fnptr[callee][pi] = func_id(fn). Seeded by a pre-pass so a
+     * callee body can resolve a bare `f(args)` where f is a func-ptr param. */
+    int param_fnptr[MIR_MAX_FUNCTIONS][16];
     /* enum constant table */
     char enum_const_names[64][HD_MAX_IDENT_LEN];
     int64_t enum_const_vals[64];
@@ -4317,6 +4322,15 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                         g->vars[i].fn_ptr_func_id >= 0) { fid = g->vars[i].fn_ptr_func_id; break; }
             }
         }
+        /* Bare function-pointer call: f(args) where f is an IDENT naming a
+         * func-ptr variable (e.g. a parameter `int(*f)(int,int)`). Resolve via
+         * that var's recorded fn_ptr_func_id. */
+        if (fid < 0 && n->callee && n->callee->kind == HD_AST_IDENT &&
+            n->callee->ident[0]) {
+            for (int i = 0; i < g->n_vars; i++)
+                if (strcmp(g->vars[i].name, n->callee->ident) == 0 &&
+                    g->vars[i].fn_ptr_func_id >= 0) { fid = g->vars[i].fn_ptr_func_id; break; }
+        }
         /* Deref call: (*fp)(args) — callee is a DEREF of a function-pointer
          * IDENT. Resolve via that var's recorded fn_ptr_func_id. */
         if (fid < 0 && n->callee && n->callee->kind == HD_AST_DEREF &&
@@ -5170,6 +5184,53 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
  * consumed by every ISA driver, so building it ONCE and running it through
  * all N backends is both correct and fast (the differential battery).
  */
+
+/* Is `t` a function-pointer type (PTR whose base is FUNC)? */
+static int hd_is_func_ptr_type(const HDType *t)
+{
+    return t && t->kind == HD_TYPE_PTR && t->base && t->base->kind == HD_TYPE_FUNC;
+}
+
+/* Recursively walk the AST recording cross-function func-ptr param bindings. */
+static void mir_collect_param_fnptr(HDMirGen *g, const HDASTNode *n)
+{
+    if (!n) return;
+    if (n->kind == HD_AST_FUNC_CALL && n->callee &&
+        n->callee->kind == HD_AST_IDENT && n->callee->ident[0]) {
+        /* find the callee function */
+        int callee_id = -1;
+        for (int i = 0; i < g->n_funcs; i++)
+            if (strcmp(g->func_ast[i]->ident, n->callee->ident) == 0) { callee_id = i; break; }
+        if (callee_id >= 0) {
+            const HDASTNode *fn = g->func_ast[callee_id];
+            for (uint32_t a = 0; a < n->n_args && a < 16; a++) {
+                const HDASTNode *arg = n->args[a];
+                if (!arg || arg->kind != HD_AST_IDENT || !arg->ident[0]) continue;
+                /* arg names a function? */
+                int arg_fid = -1;
+                for (int i = 0; i < g->n_funcs; i++)
+                    if (strcmp(g->func_ast[i]->ident, arg->ident) == 0) { arg_fid = i; break; }
+                if (arg_fid < 0) continue;
+                /* callee's param at this position must be a func-ptr type */
+                if ((int)a < fn->n_params && hd_is_func_ptr_type(fn->param_types[a]))
+                    g->param_fnptr[callee_id][a] = arg_fid;
+            }
+        }
+    }
+    /* recurse into children generically */
+    if (n->body) mir_collect_param_fnptr(g, n->body);
+    if (n->callee) mir_collect_param_fnptr(g, n->callee);
+    if (n->left) mir_collect_param_fnptr(g, n->left);
+    if (n->right) mir_collect_param_fnptr(g, n->right);
+    if (n->cond) mir_collect_param_fnptr(g, n->cond);
+    if (n->child) mir_collect_param_fnptr(g, n->child);
+    if (n->init) mir_collect_param_fnptr(g, n->init);
+    if (n->then_branch) mir_collect_param_fnptr(g, n->then_branch);
+    if (n->else_branch) mir_collect_param_fnptr(g, n->else_branch);
+    for (uint32_t i = 0; i < n->n_args; i++) mir_collect_param_fnptr(g, n->args[i]);
+    for (uint32_t i = 0; i < n->n_stmts; i++) mir_collect_param_fnptr(g, n->stmts[i]);
+}
+
 int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
     /* Preprocess #define / strip directives — must match hd_eval exactly so
      * the MIR path parses the same sources the x86-64 JIT (golden) does. */
@@ -5351,6 +5412,15 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
      * (assign stable ids so CALL sites resolve regardless of order). */
     mir_collect_funcs(&g, ast);
 
+    /* Phase 1a: cross-function func-ptr param propagation. For every call
+     * `callee(fn, ...)` where `fn` names a function and callee's param at that
+     * position is a function-pointer type, record param_fnptr[callee][pi] =
+     * func_id(fn). This lets a callee body resolve a bare `f(args)` where f is
+     * a func-ptr parameter (COMPILER #40). */
+    for (int fi = 0; fi < g.n_funcs; fi++)
+        for (int pi = 0; pi < 16; pi++) g.param_fnptr[fi][pi] = -1;
+    mir_collect_param_fnptr(&g, ast);
+
     /* Phase 1b: determine max args in the program and pre-allocate argument VRs.
      * v1..vN are pre-assigned to physical regs 1..N (capped at 6 per ABI). */
     int max_args = mir_count_max_args(ast);
@@ -5439,6 +5509,17 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
                     param_is_unsigned = 1;
             }
             mir_bind_var(&g, fn->param_names[pi], addr, addr, param_is_unsigned);
+            /* Cross-function func-ptr param (COMPILER #40): if a call site
+             * passed a named function into this param position, seed the param
+             * var's fn_ptr_func_id so a bare `f(args)` in the body resolves;
+             * otherwise clear it so a stale func_id from another function's
+             * same-named var doesn't leak in. */
+            {
+                int seed = (pi < 16) ? g.param_fnptr[fi][pi] : -1;
+                for (int i = 0; i < g.n_vars; i++)
+                    if (strcmp(g.vars[i].name, fn->param_names[pi]) == 0)
+                        g.vars[i].fn_ptr_func_id = seed;
+            }
             /* Store parameter type for type-aware codegen */
             if (fn->param_types[pi]) {
                 for (int i = 0; i < g.n_vars; i++) {
