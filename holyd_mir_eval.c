@@ -363,7 +363,7 @@ static wubu_vr_t mir_find_var_addr(HDMirGen *g, const char *name) {
 /* struct helpers */
 static mir_struct_t *mir_find_struct(HDMirGen *g, const char *name) {
     for (int i = 0; i < g->n_structs; i++)
-        if (strcmp(g->structs[i].name, name) == 0) return &g->structs[i];
+        if (strcmp(g->structs[i].name, name) == 0) { fprintf(stderr,"[DBG_FS] name=%s idx=%d m0=%s n_structs=%d\n",name,i,g->structs[i].member_names[0],g->n_structs); return &g->structs[i]; }
     return NULL;
 }
 static int mir_struct_member_offset(HDMirGen *g, const char *struct_name, const char *member) {
@@ -1552,6 +1552,44 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
                     snprintf(struct_type_name, HD_MAX_IDENT_LEN, "__anon_%s", n->ident);
                 }
                 int struct_size = 0;
+                /* Inline struct/union definition on a var (struct T{int x} s;):
+                 * the parser dedups named_types by tag, so a same-tag
+                 * redefinition with different members (struct T{int x} s1;
+                 * struct T{int y} s2;) leaves only the last layout registered.
+                 * Register THIS var's inline type under a disambiguated name
+                 * when a same-tag entry has different members, and point the
+                 * var at it, so s1.x and s2.y each use their own layout. */
+                if (n->type && n->type->n_members > 0 && struct_type_name[0]) {
+                    int differs = 0, exists = 0;
+                    for (int si = 0; si < g->n_structs; si++)
+                        if (strcmp(g->structs[si].name, struct_type_name) == 0) {
+                            exists = 1;
+                            if (g->structs[si].n_members != (int)n->type->n_members) { differs = 1; break; }
+                            for (int mi = 0; mi < (int)n->type->n_members; mi++)
+                                if (strcmp(g->structs[si].member_names[mi], n->type->members[mi].name) != 0) { differs = 1; break; }
+                            break;
+                        }
+                    if (differs || !exists) {
+                        if (g->n_structs < MAX_STRUCTS) {
+                            char dname[HD_MAX_IDENT_LEN];
+                            snprintf(dname, sizeof dname, "%s#%d", struct_type_name, g->n_structs);
+                            mir_struct_t *ds = &g->structs[g->n_structs++];
+                            strncpy(ds->name, dname, HD_MAX_IDENT_LEN - 1);
+                            ds->name[HD_MAX_IDENT_LEN - 1] = '\0';
+                            ds->n_members = 0;
+                            ds->total_size = (int)n->type->size > 0 ? (int)n->type->size : 1;
+                            for (int mi = 0; mi < (int)n->type->n_members && ds->n_members < MAX_MEMBERS; mi++) {
+                                strncpy(ds->member_names[ds->n_members], n->type->members[mi].name, HD_MAX_IDENT_LEN - 1);
+                                ds->member_names[ds->n_members][HD_MAX_IDENT_LEN - 1] = '\0';
+                                ds->member_offsets[ds->n_members] = (int)n->type->members[mi].offset;
+                                ds->member_type_kinds[ds->n_members] = n->type->members[mi].type ? n->type->members[mi].type->kind : 0;
+                                ds->n_members++;
+                            }
+                            strncpy(struct_type_name, dname, HD_MAX_IDENT_LEN - 1);
+                            struct_type_name[HD_MAX_IDENT_LEN - 1] = '\0';
+                        }
+                    }
+                }
                 for (int si = 0; si < g->n_structs; si++) {
                     if (strcmp(g->structs[si].name, struct_type_name) == 0) {
                         struct_size = g->structs[si].total_size;
