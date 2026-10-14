@@ -4513,7 +4513,7 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         /* For pointer-to-array bases, a[i] yields a sub-array that decays to
          * a pointer (address), NOT a value. Don't load. */
         if (base_node && base_node->kind == HD_AST_IDENT) {
-            for (int vi = 0; vi < g->n_vars; vi++) {
+            for (int vi = g->n_vars - 1; vi >= 0; vi--) {
                 if (strcmp(g->vars[vi].name, base_node->ident) == 0 && g->vars[vi].is_ptr_array) {
                     return addr; /* sub-array decays to pointer */
                 }
@@ -4532,7 +4532,10 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             char_elem = 1;
         if (!char_elem && base_node && base_node->kind == HD_AST_IDENT &&
             base_node->ident[0]) {
-            for (int vi = 0; vi < g->n_vars; vi++)
+            /* Search from the END so a shadowing local wins over a same-named
+             * global (a fn-local char[] must byte-load even if a global of the
+             * same name is an int). */
+            for (int vi = g->n_vars - 1; vi >= 0; vi--)
                 if (strcmp(g->vars[vi].name, base_node->ident) == 0 && g->vars[vi].type) {
                     /* char POINTER: PTR(I8/U8). char ARRAY: ARRAY(I8/U8) --
                      * byte-packed, so element access uses byte-load. */
