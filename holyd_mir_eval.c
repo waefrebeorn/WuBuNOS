@@ -138,6 +138,11 @@ static HDType *mir_find_var_type(HDMirGen *g, const char *name) {
  * plain IDENT this is the variable's declared type; for an INDEX a[i] it is
  * the base variable's ARRAY element type (or a POINTER's pointee); for a
  * DEREF *p it is the pointer's pointee. Returns NULL when unresolvable. */
+/* forward decls: struct helpers used by mir_lvalue_elem_type below */
+static mir_struct_t *mir_find_struct(HDMirGen *g, const char *name);
+static const char *mir_dot_struct_type(HDMirGen *g, const HDASTNode *n);
+static const char *mir_find_var_struct_name(HDMirGen *g, const char *name);
+
 static HDType *mir_lvalue_elem_type(HDMirGen *g, const HDASTNode *n) {
     if (!n) return NULL;
     if (n->kind == HD_AST_IDENT && n->ident[0])
@@ -162,6 +167,30 @@ static HDType *mir_lvalue_elem_type(HDMirGen *g, const HDASTNode *n) {
                 return vt->base;
         }
     }
+    /* s.m / ps->m: resolve the member's declared type from the struct
+     * definition. Without this, mir_is_float_node(s.double_member) returns
+     * false, so `(int)s.d` truncates the double bits instead of converting
+     * (DTOI) — the direct cast reads garbage while `d=s.d; (int)d` works
+     * (the assignment detects float via the var, the cast does not). */
+    if ((n->kind == HD_AST_DOT || n->kind == HD_AST_MEMBER ||
+         n->kind == HD_AST_ARROW) && n->ident[0]) {
+        /* mir_dot_struct_type resolves the struct type of the LEFT operand
+         * (the struct expression s in s.m), so pass n->left, not n. */
+        const char *stype = mir_dot_struct_type(g, n->left);
+        if (stype && stype[0]) {
+            mir_struct_t *st = mir_find_struct(g, stype);
+            if (st)
+                for (int mi = 0; mi < st->n_members; mi++)
+                    if (strcmp(st->member_names[mi], n->ident) == 0) {
+                        /* member_type_kinds holds the HD_TYPE_* kind; build a
+                         * minimal HDType so callers see the right kind. */
+                        static HDType mt;
+                        mt.kind = (HDTypeKind)st->member_type_kinds[mi];
+                        mt.size = 8;
+                        return &mt;
+                    }
+        }
+    }
     if (n->type) return n->type;
     return NULL;
 }
@@ -184,10 +213,8 @@ static int mir_lvalue_is_float(HDMirGen *g, const HDASTNode *n) {
     return (et && et->kind == HD_TYPE_F64) ? 1 : 0;
 }
 
-/* forward decls for the bit-field lvalue helper */
-static mir_struct_t *mir_find_struct(HDMirGen *g, const char *name);
-static const char *mir_dot_struct_type(HDMirGen *g, const HDASTNode *n);
-static const char *mir_find_var_struct_name(HDMirGen *g, const char *name);
+/* forward decls for the bit-field lvalue helper (mir_find_struct /
+ * mir_dot_struct_type / mir_find_var_struct_name are declared above) */
 
 /* If an lvalue node names a struct bit-field member, return its width (>0)
  * and write the bit-offset to *bo. Returns 0 if not a bit-field. Handles
