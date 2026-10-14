@@ -1943,6 +1943,32 @@ extern_done:
                         }
                         continue;
                     }
+                    /* Byte-packed char/u8 ARRAY struct member from a nested brace
+                     * list (signed char arr[3] = {8,7,6}): store each leaf at
+                     * BYTE stride 1 from the member offset. The generic BRACE_INIT
+                     * handler below uses 8-byte cell stride (mir_store_brace_leaves),
+                     * which is wrong for a byte-packed member — s.arr[1] would read
+                     * offset+1 (still 0) instead of the stored element. Must come
+                     * BEFORE the generic BRACE_INIT case. */
+                    int member_byte_array = (is_struct_var && e < (uint32_t)n->type->n_members &&
+                        n->type->members[e].type &&
+                        n->type->members[e].type->kind == HD_TYPE_ARRAY &&
+                        n->type->members[e].type->base &&
+                        (n->type->members[e].type->base->kind == HD_TYPE_I8 ||
+                         n->type->members[e].type->base->kind == HD_TYPE_U8));
+                    if (member_byte_array && elem->kind == HD_AST_BRACE_INIT) {
+                        HDType *at = n->type->members[e].type;
+                        int cursor = offset;
+                        for (uint32_t se = 0; se < elem->n_args; se++) {
+                            wubu_vr_t lv = mir_gen_expr(g, elem->args[se]);
+                            lv = mir_truncate_to_type(g, lv, at->base);
+                            wubu_vr_t la = wubu_mir_binop(g->prog, MIR_ADD, addr,
+                                              wubu_mir_const(g->prog, (int64_t)cursor));
+                            wubu_mir_store8(g->prog, la, lv);
+                            cursor += 1;
+                        }
+                        continue;
+                    }
                     if (elem->kind == HD_AST_BRACE_INIT) {
                         /* Nested brace-init (multi-dimensional array): flatten
                          * to arbitrary depth. `offset` is a BYTE offset; each
@@ -2106,6 +2132,24 @@ extern_done:
                             wubu_mir_store(g->prog, addr, val);
                         }
                     } else {
+                        /* RHS is not a bare IDENT. If it's a struct lvalue
+                         * (s = big.sub, s = arr[i], s = *p), copy from its
+                         * ADDRESS; mir_gen_expr would load the member value and
+                         * use it as a base pointer (garbage). */
+                        wubu_vr_t src = 0;
+                        if (n->init->kind == HD_AST_DOT || n->init->kind == HD_AST_MEMBER ||
+                            n->init->kind == HD_AST_ARROW || n->init->kind == HD_AST_INDEX ||
+                            n->init->kind == HD_AST_DEREF)
+                            src = mir_address_of(g, n->init);
+                        if (src > 0 && arr_size > 0) {
+                            for (int m = 0; m < arr_size; m++) {
+                                int byte_off = m * 8;
+                                wubu_vr_t src_elem = wubu_mir_binop(g->prog, MIR_ADD, src, wubu_mir_const(g->prog, (int64_t)byte_off));
+                                wubu_vr_t dst_elem = wubu_mir_binop(g->prog, MIR_ADD, addr, wubu_mir_const(g->prog, (int64_t)byte_off));
+                                wubu_mir_store(g->prog, dst_elem, wubu_mir_load(g->prog, src_elem));
+                            }
+                            goto struct_init_done;
+                        }
                         wubu_vr_t val = mir_gen_expr(g, n->init);
                         if (arr_size > 0 && val != 0) {
                             for (int m = 0; m < arr_size; m++) {
@@ -2123,6 +2167,7 @@ extern_done:
                             wubu_mir_store(g->prog, addr, val);
                         }
                     }
+                struct_init_done: ;
                 } else {
                     /* Scalar/array init from expr */
                     /* Special case: char array initialized from string literal */
@@ -2838,6 +2883,13 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 wubu_vr_t src_addr;
                 if (n->right->kind == HD_AST_IDENT) {
                     src_addr = mir_find_var_addr(g, n->right->ident);
+                } else if (n->right->kind == HD_AST_DOT || n->right->kind == HD_AST_MEMBER ||
+                           n->right->kind == HD_AST_ARROW || n->right->kind == HD_AST_INDEX ||
+                           n->right->kind == HD_AST_DEREF) {
+                    /* RHS is a struct lvalue (s = big.sub, s = arr[i], s = *p):
+                     * mir_address_of yields the struct's base address. Using the
+                     * loaded value (val) copied from the wrong address. */
+                    src_addr = mir_address_of(g, n->right);
                 } else {
                     /* val IS the source address (from call return or struct expr) */
                     src_addr = val;
