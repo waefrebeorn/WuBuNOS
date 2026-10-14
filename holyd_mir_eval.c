@@ -363,7 +363,7 @@ static wubu_vr_t mir_find_var_addr(HDMirGen *g, const char *name) {
 /* struct helpers */
 static mir_struct_t *mir_find_struct(HDMirGen *g, const char *name) {
     for (int i = 0; i < g->n_structs; i++)
-        if (strcmp(g->structs[i].name, name) == 0) { fprintf(stderr,"[DBG_FS] name=%s idx=%d m0=%s n_structs=%d\n",name,i,g->structs[i].member_names[0],g->n_structs); return &g->structs[i]; }
+        if (strcmp(g->structs[i].name, name) == 0) return &g->structs[i];
     return NULL;
 }
 static int mir_struct_member_offset(HDMirGen *g, const char *struct_name, const char *member) {
@@ -473,6 +473,21 @@ static const char *mir_dot_struct_type(HDMirGen *g, const HDASTNode *left) {
             }
         }
     }
+    /* TERNARY: (cond ? p : q)->m — resolve the struct type from either branch
+     * (both must be the same struct-pointer type). */
+    if (left->kind == HD_AST_TERNARY) {
+        const char *st = mir_dot_struct_type(g, left->then_branch);
+        return st ? st : mir_dot_struct_type(g, left->else_branch);
+    }
+    /* ASSIGN: (p = expr)->m — the assignment expression evaluates to the
+     * assigned pointer; resolve the struct type from the RHS. */
+    if (left->kind == HD_AST_ASSIGN) {
+        return mir_dot_struct_type(g, left->right);
+    }
+    /* CAST: ((struct T*)p)->m — the cast node's type is PTR(STRUCT). */
+    if (left->kind == HD_AST_CAST && left->type && left->type->kind == HD_TYPE_PTR &&
+        left->type->base && left->type->base->name[0])
+        return left->type->base->name;
     return NULL;
 }
 
@@ -1434,6 +1449,12 @@ static wubu_vr_t mir_lvalue_addr(HDMirGen *g, const HDASTNode *n) {
         }
         if (!struct_type && n->left->type && n->left->type->kind == HD_TYPE_PTR && n->left->type->base)
             struct_type = n->left->type->base->name;
+        /* Complex pointer base (ternary, assignment, cast, call): resolve the
+         * pointee struct type via mir_dot_struct_type, which walks the left
+         * expression. Without this, (cond?p:q)->m and (p=x)->m resolved no
+         * struct type and the member offset was -1, so the store was skipped. */
+        if (!struct_type)
+            struct_type = mir_dot_struct_type(g, n->left);
         int offset = mir_struct_member_offset(g, struct_type ? struct_type : "", n->ident);
         if (offset < 0) return 0;
         return wubu_mir_binop(g->prog, MIR_ADD, ptr_val, wubu_mir_const(g->prog, (int64_t)offset));
@@ -3036,6 +3057,14 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                     }
                 }
             }
+            /* For DOT/MEMBER/ARROW (struct member assignment s.l = 58.207),
+             * resolve the member's declared type so a double RHS assigned to a
+             * long/int member is converted (DTOI), not stored as raw IEEE-754
+             * bits. mir_lvalue_elem_type covers DOT/MEMBER/ARROW (R181). */
+            if (!lhs_type && (n->left->kind == HD_AST_DOT || n->left->kind == HD_AST_MEMBER ||
+                              n->left->kind == HD_AST_ARROW)) {
+                lhs_type = mir_lvalue_elem_type(g, n->left);
+            }
             if (lhs_type) {
             HDTypeKind k = lhs_type->kind;
             if (k == HD_TYPE_I8 || k == HD_TYPE_U8) lhs_is_byte = 1;
@@ -3062,6 +3091,12 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 if (rhs->kind == HD_AST_NEG) rhs = rhs->child;
                 if (rhs && rhs->kind == HD_AST_FLOAT_LIT) rhs_is_float = 1;
             }
+            /* RHS is a float-yielding expression with no type annotation (a DIV
+             * of doubles, a call returning double, etc.): mir_is_float_node
+             * resolves it. Without this, s.l = g()/l stored the raw double bits
+             * into a long member instead of converting (DTOI). */
+            if (!rhs_is_float && n->right)
+                rhs_is_float = mir_is_float_node(g, n->right);
             if (k == HD_TYPE_I8 || k == HD_TYPE_U8 || k == HD_TYPE_I16 ||
                 k == HD_TYPE_U16 || k == HD_TYPE_I32 || k == HD_TYPE_U32 ||
                 k == HD_TYPE_I64 || k == HD_TYPE_U64) {
