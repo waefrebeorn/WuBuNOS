@@ -4525,6 +4525,24 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 }
             }
         }
+        /* Sub-array decay for a plain multi-dim array: int a[M][N] -> a[i] is
+         * itself an ARRAY, so as a value it decays to &a[i][0] (the address),
+         * NOT a loaded element. Resolve the indexed element type from the base
+         * variable; when it is ARRAY, return the address. Without this, a[0]
+         * loaded cell 0's contents and used them as the base pointer, so
+         * char*w=a[0]; strcmp(w,...) crashed reading a garbage address. */
+        if (base_node && base_node->kind == HD_AST_IDENT && base_node->ident[0]) {
+            for (int vi = g->n_vars - 1; vi >= 0; vi--) {
+                if (strcmp(g->vars[vi].name, base_node->ident) == 0 && g->vars[vi].type) {
+                    HDType *bt = g->vars[vi].type;
+                    if (bt->kind == HD_TYPE_ARRAY && bt->base &&
+                        bt->base->kind == HD_TYPE_ARRAY) {
+                        return addr; /* a[i] sub-array decays to &a[i][0] */
+                    }
+                    break;
+                }
+            }
+        }
         /* Byte-addressable memory: a char/uint8 element loads ONE byte, not
          * the whole 8-byte cell. Resolve the element type from: the INDEX
          * node's own type; a char/uint8 POINTER base variable's pointee; or
@@ -4805,6 +4823,20 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 /* Also check if the identifier is an array variable */
                 if (n->args[a]->kind == HD_AST_IDENT && mir_var_is_array(g, n->args[a]->ident))
                     arg_is_addr = 1;
+                /* A pointer VARIABLE (char *w) passed to an external call holds a
+                 * byte offset that must be converted to a real pointer via
+                 * MIR_TO_PTR. IDENT nodes carry no type, so the PTR check above
+                 * misses them; without this, strcmp(w, ...) received the raw
+                 * offset (e.g. 8) as rdi and dereferenced address 8 -> segfault.
+                 * Resolve the pointee from the var table (search from end). */
+                if (!arg_is_addr && n->args[a]->kind == HD_AST_IDENT && n->args[a]->ident[0]) {
+                    for (int vi = g->n_vars - 1; vi >= 0; vi--)
+                        if (strcmp(g->vars[vi].name, n->args[a]->ident) == 0 && g->vars[vi].type) {
+                            if (g->vars[vi].type->kind == HD_TYPE_PTR)
+                                arg_is_addr = 1;
+                            break;
+                        }
+                }
             }
             wubu_vr_t av;
             if (arg_is_struct) {
