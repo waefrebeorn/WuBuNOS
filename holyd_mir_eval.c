@@ -692,6 +692,23 @@ static bool mir_is_float_node(HDMirGen *g, const HDASTNode *n) {
         if (n->right && mir_is_float_node(g, n->right)) return true;
         if (n->child && mir_is_float_node(g, n->child)) return true;
     }
+    /* Array element / deref / struct member: a double[] element, a double*
+     * deref, or a double struct member holds a float bit pattern. Resolve the
+     * lvalue element type so (int)a[i] on a double array emits DTOI, and
+     * double-array comparisons use float ops. Without this, (int)a[1] treated
+     * the double's bits as an integer (returned 0). */
+    if (n->kind == HD_AST_INDEX || n->kind == HD_AST_DEREF ||
+        n->kind == HD_AST_MEMBER || n->kind == HD_AST_ARROW) {
+        HDType *et = mir_lvalue_elem_type(g, n);
+        if (et && et->kind == HD_TYPE_F64) return true;
+        /* double* deref / double[] base: elem type via pointee */
+        if (n->kind == HD_AST_DEREF && n->child &&
+            n->child->kind == HD_AST_IDENT && n->child->ident[0]) {
+            HDType *vt = mir_find_var_type(g, n->child->ident);
+            if (vt && vt->kind == HD_TYPE_PTR && vt->base &&
+                vt->base->kind == HD_TYPE_F64) return true;
+        }
+    }
     if (n->kind == HD_AST_TERNARY) {
         /* Ternary is float if either branch is float */
         if (n->then_branch && mir_is_float_node(g, n->then_branch)) return true;
