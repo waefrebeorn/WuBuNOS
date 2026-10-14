@@ -98,7 +98,8 @@ int64_t wubu_mir_interp(const wubu_mir_prog_t *p)
     /* call stack: each frame saves the return pc plus a snapshot of the
      * register file and memory so calls (incl. recursion) are reentrant —
      * the canonical MIR uses absolute vrs shared across all invocations. */
-    typedef struct { size_t ret_pc; int64_t *vr_save; uint8_t *mem_save; } call_frame_t;
+    typedef struct { size_t ret_pc; int64_t *vr_save; uint8_t *mem_save;
+                     int64_t frame_off; size_t frame_cells; } call_frame_t;
     call_frame_t call_stack[MIR_MAX_CALL_DEPTH];
     int call_sp = 0;
 
@@ -554,18 +555,12 @@ if (call_sp > 0) {
     int64_t retval = vr[in->a];
     memcpy(vr, f->vr_save, ((size_t)max_vr + 1) * sizeof(int64_t));
     vr[0] = retval;
-    if (f->mem_save) {
-        /* mem/cmem/csave are indexed by CELL (8 bytes each). globals_end is
-         * a BYTE address; convert to a cell index. Restore only frame cells
-         * (>= globals boundary); globals below it persist across calls. */
-        int64_t gend_cell = p->globals_end / 8;
-        if (gend_cell < 0) gend_cell = 0;
-        if (gend_cell < mem_size) {
-            size_t frame_cells = (size_t)(mem_size - gend_cell);
-            int64_t *cmem = (int64_t *)mem;
-            int64_t *csave = (int64_t *)f->mem_save;
-            memcpy(cmem + gend_cell, csave + gend_cell, frame_cells * sizeof(int64_t));
-        }
+    if (f->mem_save && f->frame_cells) {
+        /* Restore only the frame cells saved at call time (>= globals
+         * boundary); globals below it persist across calls. */
+        int64_t *cmem = (int64_t *)mem;
+        int64_t *csave = (int64_t *)f->mem_save;
+        memcpy(cmem + f->frame_off, csave, f->frame_cells * sizeof(int64_t));
     }
     free(f->vr_save);
     free(f->mem_save);
@@ -581,13 +576,22 @@ op_call:
     {
         if (in->func_id < (uint32_t)p->n_funcs && call_sp < MIR_MAX_CALL_DEPTH) {
             /* snapshot caller state so the callee (which reuses
-             * the same absolute vrs / memory) cannot clobber it. */
+             * the same absolute vrs / memory) cannot clobber it. Only the
+             * frame region (>= globals boundary) needs saving: globals below
+             * it persist across calls, and frame cells are all the callee can
+             * clobber. Restore mirrors this in op_ret. */
             call_frame_t *f = &call_stack[call_sp++];
             f->ret_pc = pc + 1;
             f->vr_save = (int64_t *)malloc(((size_t)max_vr + 1) * sizeof(int64_t));
-            f->mem_save = (uint8_t *)malloc((size_t)mem_size * sizeof(int64_t));
+            int64_t gcell0 = p->globals_end / 8;
+            if (gcell0 < 0) gcell0 = 0;
+            size_t frame_cells = (gcell0 < mem_size) ? (size_t)(mem_size - gcell0) : 0;
+            f->frame_off = gcell0;
+            f->frame_cells = frame_cells;
+            f->mem_save = (uint8_t *)malloc((frame_cells ? frame_cells : 1) * sizeof(int64_t));
             if (f->vr_save) memcpy(f->vr_save, vr, ((size_t)max_vr + 1) * sizeof(int64_t));
-            if (f->mem_save) memcpy(f->mem_save, mem, (size_t)mem_size * sizeof(int64_t));
+            if (f->mem_save && frame_cells)
+                memcpy(f->mem_save, (int64_t *)mem + gcell0, frame_cells * sizeof(int64_t));
             pc = p->funcs[in->func_id].start;
             in = &p->ins[pc];
             goto *labels[in->op];
