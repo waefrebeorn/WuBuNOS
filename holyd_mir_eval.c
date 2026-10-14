@@ -2442,6 +2442,25 @@ static int mir_store_brace_leaves(HDMirGen *g, wubu_vr_t addr, int off,
             off = mir_store_brace_leaves(g, addr, off, elem->args[i]);
         return off;
     }
+    /* String-literal leaf inside nested braces (3-D+ char array, e.g.
+     * signed char a[2][2][4] = {{\"foo\"},{\"x\",\"yz\"}}): byte-copy the
+     * string's chars into consecutive cells at this offset, zero-filling the
+     * remainder of the innermost row. Without this the string stored as one
+     * whole cell (garbage). */
+    if (elem->kind == HD_AST_STRING_LIT && elem->str_val && elem->str_val[0]) {
+        const char *sv = elem->str_val;
+        for (int m = 0; sv[m]; m++) {
+            wubu_vr_t ea = wubu_mir_binop(g->prog, MIR_ADD, addr,
+                              wubu_mir_const(g->prog, (int64_t)(off + m * 8)));
+            wubu_mir_store(g->prog, ea,
+                           wubu_mir_const(g->prog, (int64_t)(signed char)sv[m]));
+        }
+        /* NUL terminator + zero-fill up to the row width is handled by the
+         * surrounding per-row logic; here just advance past the written chars
+         * plus the NUL cell. */
+        int slen = (int)strlen(sv);
+        return off + (slen + 1) * 8;
+    }
     wubu_vr_t ev = mir_gen_expr(g, elem);
     wubu_vr_t ea = wubu_mir_binop(g->prog, MIR_ADD, addr,
                                   wubu_mir_const(g->prog, (int64_t)off));
