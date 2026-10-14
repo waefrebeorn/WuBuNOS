@@ -6002,6 +6002,20 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
     for (int i = 0; i < prog->n_funcs; i++)
         if (strcmp(prog->funcs[i].name, "main") == 0) { main_id = i; break; }
     if (main_id >= 0) {
+        /* Hosted main() with no command-line args: argc=0, argv=NULL. The
+         * entry calls main with no arguments set, so v1..vN (which main's
+         * body copies into its param slots at line ~6063) hold whatever the
+         * JIT register file had — garbage. The interpreter zeroes its register
+         * file (calloc), so it read argc=0 correctly; the JIT did not, so
+         * `int main(int c){return c;}` returned a garbage value on the native
+         * path. Zero v1..vN up to main's parameter count before the call so
+         * both backends agree. */
+        {
+            const HDASTNode *mfn = g.func_ast[main_id];
+            int mnparams = mfn ? mfn->n_params : 0;
+            for (int pi = 0; pi < mnparams && pi < MIR_MAX_CALL_ARGS; pi++)
+                wubu_mir_mov_to(prog, (wubu_vr_t)(pi + 1), wubu_mir_const(prog, 0));
+        }
         wubu_mir_call(prog, (uint32_t)main_id);
         wubu_mir_ret(prog, 0);   /* vr0 holds main()'s return */
     } else {
