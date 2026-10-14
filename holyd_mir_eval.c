@@ -3064,8 +3064,19 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                     return tmp;
                 }
                 int is_float_lv = mir_lvalue_is_float(g, n->child);
+                /* Byte-addressable: a char/uint8 element loads/stores ONE byte.
+                 * A full-cell load returns the value plus 7 garbage high bytes
+                 * (c[0]++ returned 8223867 instead of 123); a full-cell store
+                 * clobbers the following elements. */
+                int lv_is_byte = 0;
+                {
+                    HDType *et = mir_lvalue_elem_type(g, n->child);
+                    if (et && (et->kind == HD_TYPE_I8 || et->kind == HD_TYPE_U8))
+                        lv_is_byte = 1;
+                }
                 wubu_vr_t tmp = mir_new_vr(g);
-                wubu_vr_t v = wubu_mir_load(g->prog, laddr);
+                wubu_vr_t v = lv_is_byte ? wubu_mir_load8(g->prog, laddr)
+                                         : wubu_mir_load(g->prog, laddr);
                 wubu_mir_mov_to(g->prog, tmp, v);
                 wubu_vr_t upd;
                 if (is_float_lv) {
@@ -3079,8 +3090,14 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                     upd = (n->kind == HD_AST_POST_INC)
                         ? wubu_mir_binop(g->prog, MIR_ADD, tmp, one)
                         : wubu_mir_binop(g->prog, MIR_SUB, tmp, one);
+                    /* Truncate back to char width so the store is in range. */
+                    if (lv_is_byte) {
+                        HDType *et = mir_lvalue_elem_type(g, n->child);
+                        upd = mir_truncate_to_type(g, upd, et);
+                    }
                 }
-                wubu_mir_store(g->prog, laddr, upd);
+                if (lv_is_byte) wubu_mir_store8(g->prog, laddr, upd);
+                else wubu_mir_store(g->prog, laddr, upd);
                 return tmp;
             }
         }
@@ -3172,7 +3189,15 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                         wubu_mir_binop(g->prog, MIR_SHR, res, wubu_mir_const(g->prog, (int64_t)bf_bo)),
                         wubu_mir_const(g->prog, bmask));
                 }
-                wubu_vr_t v = wubu_mir_load(g->prog, laddr);
+                /* Byte-addressable: char/uint8 element loads/stores ONE byte. */
+                int lv_is_byte2 = 0;
+                {
+                    HDType *et2t = mir_lvalue_elem_type(g, n->child);
+                    if (et2t && (et2t->kind == HD_TYPE_I8 || et2t->kind == HD_TYPE_U8))
+                        lv_is_byte2 = 1;
+                }
+                wubu_vr_t v = lv_is_byte2 ? wubu_mir_load8(g->prog, laddr)
+                                          : wubu_mir_load(g->prog, laddr);
                 wubu_vr_t upd;
                 if (mir_lvalue_is_float(g, n->child)) {
                     union { double d; int64_t i; } u; u.d = 1.0;
@@ -3185,8 +3210,13 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                     upd = (n->kind == HD_AST_PRE_INC)
                         ? wubu_mir_binop(g->prog, MIR_ADD, v, one)
                         : wubu_mir_binop(g->prog, MIR_SUB, v, one);
+                    if (lv_is_byte2) {
+                        HDType *et2 = mir_lvalue_elem_type(g, n->child);
+                        upd = mir_truncate_to_type(g, upd, et2);
+                    }
                 }
-                wubu_mir_store(g->prog, laddr, upd);
+                if (lv_is_byte2) wubu_mir_store8(g->prog, laddr, upd);
+                else wubu_mir_store(g->prog, laddr, upd);
                 return upd;
             }
         }
