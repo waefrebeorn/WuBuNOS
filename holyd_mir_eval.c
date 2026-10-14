@@ -5713,6 +5713,27 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
          *   break_label: ...
          */
         wubu_vr_t cond = mir_gen_expr(g, n->cond);
+        /* Integer promotion (C 6.8.4.2p3): the controlling expression is
+         * promoted to int, and each case label is converted to the promoted
+         * type of the controlling expression. So `char c=-56` compares as
+         * -56 (int) and must NOT match `case 200` — the char is sign-extended
+         * to int, the case value 200 stays 200. A full-cell load of a char
+         * that was store8'd may carry high-byte garbage, so sign/zero-extend
+         * the cond to int width here. The case values are NOT truncated to
+         * char (that made both sides -56 and falsely matched). */
+        {
+            HDType *ct = n->cond ? n->cond->type : NULL;
+            if (!ct && n->cond && n->cond->kind == HD_AST_IDENT && n->cond->ident[0])
+                for (int i = g->n_vars - 1; i >= 0; i--)
+                    if (strcmp(g->vars[i].name, n->cond->ident) == 0) { ct = g->vars[i].type; break; }
+            /* Only char/short need explicit extension to int; int/long are
+             * already full-width. mir_truncate_to_type on I8 does AND+SEXT8
+             * (sign-extend to 64), on U8 does AND 0xFF (zero-extend) — both
+             * yield the correct int-promoted value. */
+            if (ct && (ct->kind == HD_TYPE_I8 || ct->kind == HD_TYPE_U8 ||
+                       ct->kind == HD_TYPE_I16 || ct->kind == HD_TYPE_U16))
+                cond = mir_truncate_to_type(g, cond, ct);
+        }
         uint32_t break_label = wubu_mir_new_label(g->prog);
         uint32_t default_label = wubu_mir_new_label(g->prog);
         /* We need to collect case labels first, then emit them */
@@ -5737,22 +5758,12 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             for (uint32_t i = 0; i < body->n_stmts; i++) {
                 HDASTNode *stmt = body->stmts[i];
                 if (stmt->kind == HD_AST_CASE && stmt->cond != NULL && ncases < 64) {
-                    /* Evaluate case value, truncate to switch expr type */
+                    /* Evaluate case value. Per C the case label is converted to
+                     * the PROMOTED type of the controlling expression (int for
+                     * a char switch), NOT truncated to the char type — do not
+                     * truncate here, or `case 200` becomes -56 and falsely
+                     * matches `char c = -56`. */
                     wubu_vr_t cval = mir_gen_expr(g, stmt->cond);
-                    /* Truncate case value to match switch expression type */
-                    {
-                        HDType *sw_type = NULL;
-                        if (n->cond && n->cond->type) sw_type = n->cond->type;
-                        if (!sw_type && n->cond && n->cond->kind == HD_AST_IDENT && n->cond->ident[0]) {
-                            for (int i = 0; i < g->n_vars; i++)
-                                if (strcmp(g->vars[i].name, n->cond->ident) == 0) { sw_type = g->vars[i].type; break; }
-                        }
-                        if (sw_type && (sw_type->kind == HD_TYPE_I8 || sw_type->kind == HD_TYPE_U8 ||
-                            sw_type->kind == HD_TYPE_I16 || sw_type->kind == HD_TYPE_U16 ||
-                            sw_type->kind == HD_TYPE_I32 || sw_type->kind == HD_TYPE_U32)) {
-                            cval = mir_truncate_to_type(g, cval, sw_type);
-                        }
-                    }
                     uint32_t case_label = wubu_mir_new_label(g->prog);
                     /* Emit: if (cond == cval) goto case_label */
                     wubu_vr_t cmp = wubu_mir_binop(g->prog, MIR_EQ, cond, cval);
