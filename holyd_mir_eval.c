@@ -277,10 +277,23 @@ static int mir_node_ptr_scale(HDMirGen *g, const HDASTNode *n) {
         t = mir_find_func_return_type(g, n->callee->ident);
     }
     if (t && t->kind == HD_TYPE_PTR && t->base) {
-        return (t->base->kind == HD_TYPE_I8 || t->base->kind == HD_TYPE_U8) ? 1 : 8;
+        if (t->base->kind == HD_TYPE_I8 || t->base->kind == HD_TYPE_U8) return 1;
+        /* Pointer to array (double (*p)[5]): the pointee is the whole
+         * sub-array, so pointer arithmetic scales by its total byte size. */
+        if (t->base->kind == HD_TYPE_ARRAY) {
+            int asz = t->base->array_size;
+            HDType *inner = t->base->base;
+            while (inner && inner->kind == HD_TYPE_ARRAY) {
+                asz *= (inner->array_size > 0 ? inner->array_size : 1);
+                inner = inner->base;
+            }
+            return (asz > 0 ? asz : 1) * 8;
+        }
+        return 8;
     }
     if (t && t->kind == HD_TYPE_ARRAY && t->base) {
-        return (t->base->kind == HD_TYPE_I8 || t->base->kind == HD_TYPE_U8) ? 1 : 8;
+        if (t->base->kind == HD_TYPE_I8 || t->base->kind == HD_TYPE_U8) return 1;
+        return 8;
     }
     return 0;
 }
@@ -3505,7 +3518,23 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             }
         } else if (n->left && n->left->type && n->left->type->kind == HD_TYPE_PTR
             && n->left->type->base && n->left->type->base->kind != HD_TYPE_STRUCT) {
-            ptr_scale = 8;
+            /* Pointer to array (double (*p)[5]): the pointee is the whole
+             * sub-array, so ptr subtraction divides by its total byte size
+             * (array_size * 8), NOT 8. Using 8 made (m+3)-(m+1) on a
+             * double[10][5] return 40/8=5x too large. Matches the ADD
+             * handler's ltype->base->array_size * 8 case. */
+            if (n->left->type->base->kind == HD_TYPE_ARRAY) {
+                int asz = n->left->type->base->array_size;
+                /* pointer to a multi-dim array: product of inner dims */
+                HDType *inner = n->left->type->base->base;
+                while (inner && inner->kind == HD_TYPE_ARRAY) {
+                    asz *= (inner->array_size > 0 ? inner->array_size : 1);
+                    inner = inner->base;
+                }
+                ptr_scale = (asz > 0 ? asz : 1) * 8;
+            } else {
+                ptr_scale = 8;
+            }
         }
         /* Also check var table for pointer/array types */
         if (ptr_scale == 0 && n->left && n->left->kind == HD_AST_IDENT && n->left->ident[0]) {
@@ -3524,7 +3553,19 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
          ptr_scale = 8;
      }
  } else if (g->vars[i].type && g->vars[i].type->kind == HD_TYPE_PTR) {
-     ptr_scale = 8;
+     /* Pointer-to-array param (double (*p)[5]): divide by the sub-array's
+      * total byte size, matching the AST-type branch above. */
+     if (g->vars[i].type->base && g->vars[i].type->base->kind == HD_TYPE_ARRAY) {
+         int asz = g->vars[i].type->base->array_size;
+         HDType *inner = g->vars[i].type->base->base;
+         while (inner && inner->kind == HD_TYPE_ARRAY) {
+             asz *= (inner->array_size > 0 ? inner->array_size : 1);
+             inner = inner->base;
+         }
+         ptr_scale = (asz > 0 ? asz : 1) * 8;
+     } else {
+         ptr_scale = 8;
+     }
  } else if (g->vars[i].is_array) {
      ptr_scale = 8;
  }
@@ -3565,6 +3606,18 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                     break;
                 }
             }
+        }
+        /* Chained pointer arithmetic on the right: (p+i), (arr+i), a ternary
+         * yielding a pointer, or a call returning a pointer. These have no
+         * IDENT to look up, so resolve their pointer scale recursively.
+         * Without this, (p+3)-(p+1) on an int* treated (p+1) as an int and
+         * multiplied it by the scale instead of dividing the difference. */
+        else if (n->right &&
+                 (n->right->kind == HD_AST_ADD || n->right->kind == HD_AST_SUB ||
+                  n->right->kind == HD_AST_TERNARY || n->right->kind == HD_AST_CALL ||
+                  n->right->kind == HD_AST_FUNC_CALL)) {
+            if (mir_node_ptr_scale(g, n->right) > 0)
+                b_is_pointer = true;
         }
         if (ptr_scale > 1 && !b_is_pointer) {
             /* ptr - int: scale the integer operand */
