@@ -542,22 +542,37 @@ op_fret:
     result = vr[0];
     goto done;
 op_ret:
-    if (call_sp > 0) {
-        /* returning from a called function: restore the caller's
-         * register file (the MIR shares absolute vrs across invocations).
-         * Memory is NOT restored — globals and locals use disjoint addresses
-         * (allocated by wubu_mir_alloc), so changes to globals persist
-         * across calls. Recursion is not supported (locals would overlap). */
-        call_frame_t *f = &call_stack[--call_sp];
-        int64_t retval = vr[in->a];
-        memcpy(vr, f->vr_save, ((size_t)max_vr + 1) * sizeof(int64_t));
-        vr[0] = retval;
-        free(f->vr_save);
-        free(f->mem_save);
-        pc = f->ret_pc;
-        in = &p->ins[pc];
-        goto *labels[in->op];
+if (call_sp > 0) {
+    /* returning from a called function: restore the caller's register file
+     * (the MIR shares absolute vrs across invocations) AND the call-frame
+     * memory. Frame memory (byte addr >= globals_end) holds params/locals
+     * whose addresses are allocated once at compile time, so a recursive
+     * call reuses the same cells — restoring them makes recursion reentrant.
+     * Memory below globals_end is file-scope/global and persists across
+     * calls (never restored). */
+    call_frame_t *f = &call_stack[--call_sp];
+    int64_t retval = vr[in->a];
+    memcpy(vr, f->vr_save, ((size_t)max_vr + 1) * sizeof(int64_t));
+    vr[0] = retval;
+    if (f->mem_save) {
+        /* mem/cmem/csave are indexed by CELL (8 bytes each). globals_end is
+         * a BYTE address; convert to a cell index. Restore only frame cells
+         * (>= globals boundary); globals below it persist across calls. */
+        int64_t gend_cell = p->globals_end / 8;
+        if (gend_cell < 0) gend_cell = 0;
+        if (gend_cell < mem_size) {
+            size_t frame_cells = (size_t)(mem_size - gend_cell);
+            int64_t *cmem = (int64_t *)mem;
+            int64_t *csave = (int64_t *)f->mem_save;
+            memcpy(cmem + gend_cell, csave + gend_cell, frame_cells * sizeof(int64_t));
+        }
     }
+    free(f->vr_save);
+    free(f->mem_save);
+    pc = f->ret_pc;
+    in = &p->ins[pc];
+    goto *labels[in->op];
+}
     result = vr[in->a];
     goto done;
 

@@ -5779,6 +5779,12 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
 
     for (int fi = 0; fi < g.n_funcs; fi++) {
         const HDASTNode *fn = g.func_ast[fi];
+        /* Everything allocated so far is GLOBAL (file-scope vars, generated in
+         * the top-level block above). Everything a function body allocates is
+         * call-frame memory. Mark the boundary once, before the first body, so
+         * the interpreter restores frame memory on ret (reentrant recursion)
+         * while globals persist across calls. */
+        if (fi == 0) prog->globals_end = prog->total_mem;
         prog->funcs[fi].start = prog->n;
         /* Push scope BEFORE binding params so pop removes them too */
         if (g.n_scopes < MIRGEN_MAX_VARS)

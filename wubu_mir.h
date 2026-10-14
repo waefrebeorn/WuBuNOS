@@ -252,6 +252,9 @@ typedef struct {
     uint32_t n_labels;           /* next label id */
     uint32_t n_args;             /* number of function arguments (v1..n_args) */
     int64_t total_mem;           /* number of BYTES reserved via MIR_ALLOC */
+    int64_t globals_end;         /* byte addr below which memory is GLOBAL (persists
+                                  * across calls); at/above is call-frame (restored
+                                  * on ret). 0 => unset (treat all as frame). */
     uint8_t *mem;                /* byte-addressable memory (for tests/external init) */
     wubu_vr_t next_vr_hi;        /* high-water mark of high-vr address slots (call convention) */
     wubu_mir_func_t funcs[MIR_MAX_FUNCTIONS];
