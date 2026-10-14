@@ -3771,8 +3771,11 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             a = mir_promote_to_float(g, a, n->left);
             b = mir_promote_to_float(g, b, n->right);
         }
-        /* Use unsigned division if both operands are unsigned */
-        int is_unsigned = !is_float && mir_is_unsigned_node(g, n->left) && mir_is_unsigned_node(g, n->right);
+        /* Use unsigned division if EITHER operand is unsigned (C usual
+         * arithmetic conversions: unsigned long % int converts the int to
+         * unsigned long, so the op is unsigned). Requiring BOTH made
+         * `unsigned_long % 2000` use signed idiv and return -11/-1. */
+        int is_unsigned = !is_float && (mir_is_unsigned_node(g, n->left) || mir_is_unsigned_node(g, n->right));
         wubu_vr_t r = wubu_mir_binop(g->prog, is_float ? MIR_DDIV : (is_unsigned ? MIR_UDIV : MIR_DIV), a, b);
         if (!is_float) { HDType *rt = mir_binop_result_type(g, n->left, n->right);
             if (rt && (rt->kind == HD_TYPE_I32 || rt->kind == HD_TYPE_U32)) r = mir_truncate_to_type(g, r, rt); }
@@ -3781,8 +3784,10 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
     case HD_AST_MOD: {
         wubu_vr_t a = mir_gen_expr(g, n->left);
         wubu_vr_t b = mir_gen_expr(g, n->right);
-        /* Use unsigned modulo if both operands are unsigned */
-        int is_unsigned = mir_is_unsigned_node(g, n->left) && mir_is_unsigned_node(g, n->right);
+        /* Use unsigned modulo if EITHER operand is unsigned (C usual
+         * arithmetic conversions). Requiring BOTH made `unsigned % int`
+         * use signed idiv. */
+        int is_unsigned = mir_is_unsigned_node(g, n->left) || mir_is_unsigned_node(g, n->right);
         wubu_vr_t r = wubu_mir_binop(g->prog, is_unsigned ? MIR_UMOD : MIR_MOD, a, b);
         HDType *rt = mir_binop_result_type(g, n->left, n->right);
         if (rt && (rt->kind == HD_TYPE_I32 || rt->kind == HD_TYPE_U32)) r = mir_truncate_to_type(g, r, rt);
