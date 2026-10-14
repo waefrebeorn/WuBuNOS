@@ -230,6 +230,60 @@ static HDType *mir_find_func_return_type(HDMirGen *g, const char *name) {
     return NULL;
 }
 
+/* Resolve the pointer-element byte-scale for an expression node, or 0 if the
+ * node does not evaluate to a pointer/array. Handles IDENT (var table),
+ * CALL (function return type), and descends through ADD/SUB (chained ptr
+ * arithmetic) and TERNARY (either branch may be the pointer) and DEREF.
+ * char/u8 pointee -> 1 byte; everything else -> 8 bytes/cell. */
+static int mir_node_ptr_scale(HDMirGen *g, const HDASTNode *n) {
+    if (!n) return 0;
+    /* Descend through pointer-yielding arithmetic: (arr + i) + j keeps the
+     * pointee of the leftmost pointer. */
+    if (n->kind == HD_AST_ADD || n->kind == HD_AST_SUB) {
+        int s = mir_node_ptr_scale(g, n->left);
+        return s ? s : mir_node_ptr_scale(g, n->right);
+    }
+    if (n->kind == HD_AST_TERNARY) {
+        int s = mir_node_ptr_scale(g, n->then_branch);
+        return s ? s : mir_node_ptr_scale(g, n->else_branch);
+    }
+    if (n->kind == HD_AST_DEREF) {
+        /* *p dereferences: the result is a VALUE (the pointee), not a pointer
+         * — UNLESS p is a pointer-to-pointer or pointer-to-array, where *p is
+         * itself a pointer/sub-array. Only then does *p yield a pointer. */
+        if (n->child && n->child->kind == HD_AST_IDENT && n->child->ident[0]) {
+            HDType *vt = mir_find_var_type(g, n->child->ident);
+            if (vt && vt->kind == HD_TYPE_PTR && vt->base &&
+                (vt->base->kind == HD_TYPE_PTR || vt->base->kind == HD_TYPE_ARRAY)) {
+                HDType *bt = vt->base->base;
+                return (bt && (bt->kind == HD_TYPE_I8 || bt->kind == HD_TYPE_U8)) ? 1 : 8;
+            }
+        }
+        return 0;  /* *p on a scalar pointer: a value, not a pointer */
+    }
+    HDType *t = n->type;
+    if ((!t || (t->kind != HD_TYPE_PTR && t->kind != HD_TYPE_ARRAY)) &&
+        n->kind == HD_AST_IDENT && n->ident[0]) {
+        for (int vi = 0; vi < g->n_vars; vi++)
+            if (strcmp(g->vars[vi].name, n->ident) == 0 && g->vars[vi].type &&
+                (g->vars[vi].type->kind == HD_TYPE_PTR || g->vars[vi].type->kind == HD_TYPE_ARRAY)) {
+                t = g->vars[vi].type; break;
+            }
+    }
+    if ((!t || (t->kind != HD_TYPE_PTR && t->kind != HD_TYPE_ARRAY)) &&
+        (n->kind == HD_AST_CALL || n->kind == HD_AST_FUNC_CALL) &&
+        n->callee && n->callee->kind == HD_AST_IDENT) {
+        t = mir_find_func_return_type(g, n->callee->ident);
+    }
+    if (t && t->kind == HD_TYPE_PTR && t->base) {
+        return (t->base->kind == HD_TYPE_I8 || t->base->kind == HD_TYPE_U8) ? 1 : 8;
+    }
+    if (t && t->kind == HD_TYPE_ARRAY && t->base) {
+        return (t->base->kind == HD_TYPE_I8 || t->base->kind == HD_TYPE_U8) ? 1 : 8;
+    }
+    return 0;
+}
+
 /* Check if an AST node evaluates to an unsigned type */
 static int mir_is_unsigned_node(HDMirGen *g, const HDASTNode *n) {
     if (!n) return 0;
@@ -3203,6 +3257,13 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 }
             }
         }
+        /* Chained pointer arithmetic: (arr + i) + j, (p + i) - j, a ternary
+         * yielding a pointer, or a call returning a pointer. The left operand
+         * has no AST type and no IDENT to look up, so resolve its pointer
+         * scale recursively (mir_node_ptr_scale) and scale the outer op. */
+        if (ptr_scale == 0 && n->left) {
+            ptr_scale = mir_node_ptr_scale(g, n->left);
+        }
         /* Resolve the left operand's type: use the AST type, or look up an
          * IDENT's declared type from the var table (IDENTs often have no
          * AST type), so char* pointer arithmetic scales by 1 byte. */
@@ -3259,6 +3320,12 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                     left_is_ptr = false;
                 }
             }
+        }
+        /* int + (ternary/ADD/CALL yielding a pointer): the right operand has
+         * no AST type, so resolve its pointer scale recursively. */
+        if (ptr_scale == 0 && n->right) {
+            int rs = mir_node_ptr_scale(g, n->right);
+            if (rs) { ptr_scale = rs; left_is_ptr = false; }
         }
         /* String literal + integer: scale by 8 (cell-based chars) */
         if (ptr_scale == 0 && n->left && n->left->kind == HD_AST_STRING_LIT) {
@@ -3378,7 +3445,15 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
  }
  /* String literal - integer */
  if (ptr_scale == 0 && n->left && n->left->kind == HD_AST_STRING_LIT) {
- ptr_scale = 8;
+     ptr_scale = 8;
+ }
+ /* Chained/ternary/call pointer on the left: (arr+i)-n, (p+i)-n,
+  * (cond?a:b)-n, f()-n. Resolve the pointer scale recursively. */
+ if (ptr_scale == 0 && n->left &&
+     (n->left->kind == HD_AST_ADD || n->left->kind == HD_AST_SUB ||
+      n->left->kind == HD_AST_TERNARY || n->left->kind == HD_AST_CALL ||
+      n->left->kind == HD_AST_FUNC_CALL)) {
+     ptr_scale = mir_node_ptr_scale(g, n->left);
  }
         /* For pointer subtraction (ptr - ptr): compute (a - b) / ptr_scale */
         /* For pointer-subtract-int (ptr - n): compute a - (b * ptr_scale) */
