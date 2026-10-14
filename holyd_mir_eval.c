@@ -465,7 +465,13 @@ static const char *mir_find_var_struct_name(HDMirGen *g, const char *name) {
 
 /* symbol table: is the named variable an array? */
 static int mir_var_is_array(HDMirGen *g, const char *name) {
-    for (int i = 0; i < g->n_vars; i++)
+    /* Search from the END so the most recent declaration (a function-local
+     * shadowing a same-named global) wins — matching mir_find_var_addr. A
+     * forward search found the global scalar `x` when the fn-local `x` was an
+     * array, so mir_address_of loaded the global's VALUE (5) and used it as
+     * the base pointer: `x[2]` then read memory at byte offset 5+16 (garbage)
+     * instead of the local array's element. */
+    for (int i = g->n_vars - 1; i >= 0; i--)
         if (strcmp(g->vars[i].name, name) == 0) return g->vars[i].is_array;
     return 0;
 }
