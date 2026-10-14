@@ -1134,7 +1134,7 @@ static int mir_index_stride(HDMirGen *g, const HDASTNode *n) {
 }
 static wubu_vr_t mir_lvalue_addr(HDMirGen *g, const HDASTNode *n); /* forward decl */
 static int mir_store_brace_leaves(HDMirGen *g, wubu_vr_t addr, int off,
-                                  const HDASTNode *elem); /* forward decl */
+                                  const HDASTNode *elem, int row_cells); /* fwd */
 
 /* True if the DOT/MEMBER/ARROW node names a member whose type is a pointer
  * (so the member's cell holds a pointer VALUE that must be loaded before
@@ -1883,9 +1883,17 @@ extern_done:
                          * leaf element occupies one 8-byte cell. Recurse into
                          * nested braces so 3D+ arrays store every leaf. */
                         int cursor = offset;
+                        /* Innermost row width (last ARRAY dim) for string
+                         * zero-fill/advance in nested char arrays. */
+                        int inner_row_cells = 1;
+                        { HDType *t = n->type;
+                          while (t && t->kind == HD_TYPE_ARRAY) {
+                              if (t->array_size > 0) inner_row_cells = t->array_size;
+                              t = t->base;
+                          } }
                         for (uint32_t se = 0; se < elem->n_args; se++)
                             cursor = mir_store_brace_leaves(g, addr, cursor,
-                                                            elem->args[se]);
+                                                            elem->args[se], inner_row_cells);
                         offset = cursor;
                         continue;
                     } else if (elem->kind == HD_AST_DESIG_INIT) {
@@ -1906,9 +1914,15 @@ extern_done:
                          * scalar). */
                         if (elem->child && elem->child->kind == HD_AST_BRACE_INIT) {
                             int cursor = offset;
+                            int inner_row_cells = 1;
+                            { HDType *t = n->type;
+                              while (t && t->kind == HD_TYPE_ARRAY) {
+                                  if (t->array_size > 0) inner_row_cells = t->array_size;
+                                  t = t->base;
+                              } }
                             for (uint32_t se = 0; se < elem->child->n_args; se++)
                                 cursor = mir_store_brace_leaves(g, addr, cursor,
-                                                                elem->child->args[se]);
+                                                                elem->child->args[se], inner_row_cells);
                             offset = cursor;
                             continue;
                         }
@@ -2435,31 +2449,28 @@ static void mir_promote_cmp_operands(HDMirGen *g, wubu_vr_t *a, wubu_vr_t *b,
  * offset just past the last leaf stored. Each leaf occupies one 8-byte
  * cell. Handles arbitrary nesting depth (3D+ arrays). */
 static int mir_store_brace_leaves(HDMirGen *g, wubu_vr_t addr, int off,
-                                  const HDASTNode *elem) {
+                                  const HDASTNode *elem, int row_cells) {
     if (!elem) return off;
     if (elem->kind == HD_AST_BRACE_INIT) {
         for (uint32_t i = 0; i < elem->n_args; i++)
-            off = mir_store_brace_leaves(g, addr, off, elem->args[i]);
+            off = mir_store_brace_leaves(g, addr, off, elem->args[i], row_cells);
         return off;
     }
     /* String-literal leaf inside nested braces (3-D+ char array, e.g.
      * signed char a[2][2][4] = {{\"foo\"},{\"x\",\"yz\"}}): byte-copy the
-     * string's chars into consecutive cells at this offset, zero-filling the
-     * remainder of the innermost row. Without this the string stored as one
-     * whole cell (garbage). */
-    if (elem->kind == HD_AST_STRING_LIT && elem->str_val && elem->str_val[0]) {
+     * string's chars into consecutive cells (stride 8), zero-fill the rest of
+     * the innermost row (row_cells wide), and advance by the FULL row width so
+     * the next sub-array starts at the correct offset. */
+    if (elem->kind == HD_AST_STRING_LIT && elem->str_val) {
         const char *sv = elem->str_val;
-        for (int m = 0; sv[m]; m++) {
+        int width = row_cells > 0 ? row_cells : 1;
+        for (int m = 0; m < width; m++) {
             wubu_vr_t ea = wubu_mir_binop(g->prog, MIR_ADD, addr,
                               wubu_mir_const(g->prog, (int64_t)(off + m * 8)));
-            wubu_mir_store(g->prog, ea,
-                           wubu_mir_const(g->prog, (int64_t)(signed char)sv[m]));
+            int ch = (sv[m]) ? (signed char)sv[m] : 0;
+            wubu_mir_store(g->prog, ea, wubu_mir_const(g->prog, (int64_t)ch));
         }
-        /* NUL terminator + zero-fill up to the row width is handled by the
-         * surrounding per-row logic; here just advance past the written chars
-         * plus the NUL cell. */
-        int slen = (int)strlen(sv);
-        return off + (slen + 1) * 8;
+        return off + width * 8;
     }
     wubu_vr_t ev = mir_gen_expr(g, elem);
     wubu_vr_t ea = wubu_mir_binop(g->prog, MIR_ADD, addr,
