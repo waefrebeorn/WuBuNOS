@@ -4961,8 +4961,14 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             if (av != (wubu_vr_t)(a + 1)) {
                 wubu_mir_mov_to(g->prog, a + 1, av);
             }
-            /* Implicit type conversion: convert argument to parameter type */
-            if (fid >= 0 && (int)a < g->prog->n_funcs) {
+            /* Implicit type conversion: convert argument to parameter type.
+             * NOTE: do NOT gate on `a < g->prog->n_funcs` — that compares the
+             * argument index against the FUNCTION count, not the parameter
+             * count. For f(a,b,c) with 2 functions (f, main), n_funcs=2, so
+             * the 3rd argument (a=2) failed `2 < 2` and its double->int
+             * conversion was skipped, returning garbage. The inner loop
+             * already bounds-checks against the callee's n_params. */
+            if (fid >= 0) {
                 /* Find the function's parameter types */
                 for (int fi = 0; fi < g->prog->n_funcs; fi++) {
                     if (fi == fid && g->func_ast[fi] && (int)a < g->func_ast[fi]->n_params) {
