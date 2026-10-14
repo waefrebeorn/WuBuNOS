@@ -39,6 +39,7 @@ typedef struct {
     int fn_ptr_func_id;    /* func_id this pointer var points to, or -1 */
     HDType *type;          /* variable's declared type */
     int is_static;         /* 1 if this is a static local (global memory) */
+    int is_func_static;    /* 1 if static local INSIDE a function body (vs file-scope) */
     wubu_vr_t guard_addr;  /* guard variable address for static init-once */
 } mir_var_t;
 
@@ -1083,7 +1084,12 @@ static int mir_index_stride(HDMirGen *g, const HDASTNode *n) {
         }
     }
     /* Look up the variable in the symbol table */
-    for (int i = 0; i < g->n_vars; i++) {
+    /* Search from the END so the most recent declaration (a function-local
+     * shadowing a same-named global) wins — matching mir_find_var_addr. A
+     * forward search found the global and used its (different) array_stride,
+     * so a fn-local `static char nested[2][4]` read row 1 at the global
+     * `nested[3][3]`'s stride (3 cells) instead of its own (4). */
+    for (int i = g->n_vars - 1; i >= 0; i--) {
         if (strcmp(g->vars[i].name, root->ident) == 0 &&
             (g->vars[i].is_array || g->vars[i].is_ptr_array)) {
             /* Multi-dimensional stride: walk the ARRAY type spine. For
@@ -1585,9 +1591,16 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
          * with an initializer, also reuse (the init will be handled below). */
         if (n->is_static) {
             /* Search from beginning to find the original static variable,
-             * not an extern copy that might have been added later */
+             * not an extern copy that might have been added later. A
+             * function-scope static must NOT reuse a file-scope (global)
+             * static of the same name — that made a fn-local `static char
+             * nested[2][4]` skip allocation and alias a global
+             * `char nested[3][3]`, so its init wrote the wrong rows. Only
+             * reuse when scopes match (both file-scope, or both fn-body). */
             for (int i = 0; i < g->n_vars; i++) {
                 if (strcmp(g->vars[i].name, n->ident) == 0 && g->vars[i].addr != 0 && g->vars[i].is_static) {
+                    if (g->in_function_body != g->vars[i].is_func_static)
+                        continue;  /* different scope — do not alias */
                     /* Static variable already exists — skip allocation */
                     if (n->init && !g->in_function_body) {
                         wubu_vr_t init_val = mir_gen_expr(g, n->init);
@@ -1625,6 +1638,7 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
                 g->vars[i].type = n->type;
                 if (n->is_static) {
                     g->vars[i].is_static = 1;
+                    g->vars[i].is_func_static = g->in_function_body;
                 }
                 break;
             }
@@ -1711,6 +1725,7 @@ extern_done:
                 for (int i = g->n_vars - 1; i >= 0; i--)
                     if (strcmp(g->vars[i].name, n->ident) == 0) {
                         g->vars[i].is_static = 1;
+                        g->vars[i].is_func_static = 1;
                         g->vars[i].guard_addr = guard_addr;
                         break;
                     }
