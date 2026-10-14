@@ -786,6 +786,9 @@ static wubu_vr_t mir_truncate_to_type(HDMirGen *g, wubu_vr_t val, const HDType *
         return wubu_mir_unop(g->prog, MIR_DITOF, val);
     case HD_TYPE_I64:
     case HD_TYPE_U64:
+        /* 64-bit integers are full-width: no truncation, NO bool
+         * normalization (that would collapse any nonzero long to 1). */
+        return val;
     case HD_TYPE_BOOL:
         /* _Bool/bool normalizes any nonzero value to 1, zero to 0. */
         {
