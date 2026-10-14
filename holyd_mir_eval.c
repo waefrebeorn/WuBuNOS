@@ -2892,6 +2892,7 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         }
         /* Implicit type conversion: truncate value to LHS type width.
          * Only for scalar integer types — not for pointers, structs, or arrays. */
+        int lhs_is_byte = 0;
         if (addr && n->left) {
             /* Determine LHS type — check AST node type first, then var table */
             HDType *lhs_type = n->left->type;
@@ -2915,6 +2916,7 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             }
             if (lhs_type) {
             HDTypeKind k = lhs_type->kind;
+            if (k == HD_TYPE_I8 || k == HD_TYPE_U8) lhs_is_byte = 1;
             /* Determine RHS type — check AST node type first, then var table, then function call */
             HDType *rhs_type = n->right ? n->right->type : NULL;
             if (!rhs_type && n->right && n->right->kind == HD_AST_IDENT) {
@@ -2961,7 +2963,16 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             }
             }
         }
-        if (addr) { wubu_mir_store(g->prog, addr, val); return val; }
+        if (addr) {
+            /* Byte-addressable memory: a char/uint8 array element occupies ONE
+             * byte, so the store must be store8 (1 byte), not a full 8-byte
+             * cell store. A full-cell store to arr[1] writes bytes 1-8 and
+             * clobbers arr[2] (and every following element). The element type
+             * is resolved above into lhs_is_byte. */
+            if (lhs_is_byte) wubu_mir_store8(g->prog, addr, val);
+            else wubu_mir_store(g->prog, addr, val);
+            return val;
+        }
         return val;
     }
     case HD_AST_POST_INC:
@@ -3318,8 +3329,13 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                                 lhs_type->kind == HD_TYPE_I32 || lhs_type->kind == HD_TYPE_U32)) {
                     upd = mir_truncate_to_type(g, upd, lhs_type);
                 }
+                /* Byte-addressable: a char/uint8 element store must be store8
+                 * (1 byte), else it clobbers the following array elements. */
+                if (lhs_type && (lhs_type->kind == HD_TYPE_I8 || lhs_type->kind == HD_TYPE_U8))
+                    wubu_mir_store8(g->prog, addr, upd);
+                else
+                    wubu_mir_store(g->prog, addr, upd);
             }
-            wubu_mir_store(g->prog, addr, upd);
             return upd;
         }
         return mir_gen_expr(g, n->right);
@@ -3429,9 +3445,13 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             int rs = mir_node_ptr_scale(g, n->right);
             if (rs) { ptr_scale = rs; left_is_ptr = false; }
         }
-        /* String literal + integer: scale by 8 (cell-based chars) */
+        /* String literal + integer: string literals are byte-packed (one
+         * char per byte, stride 1 — matching the INDEX read path and the
+         * store8 init), so pointer arithmetic scales by 1, NOT 8. Using 8
+         * made "abcdefg" + 3 advance 24 bytes instead of 3, so *ptr and
+         * ptr[i] read the wrong characters. */
         if (ptr_scale == 0 && n->left && n->left->kind == HD_AST_STRING_LIT) {
-            ptr_scale = 8;
+            ptr_scale = 1;
         }
         /* Also check var table for pointer/array types */
         if (ptr_scale == 0 && n->left && n->left->kind == HD_AST_IDENT && n->left->ident[0]) {
@@ -3573,9 +3593,9 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
  }
  }
  }
- /* String literal - integer */
+ /* String literal - integer: byte-packed, scale by 1 (matches ADD handler) */
  if (ptr_scale == 0 && n->left && n->left->kind == HD_AST_STRING_LIT) {
-     ptr_scale = 8;
+     ptr_scale = 1;
  }
  /* Chained/ternary/call pointer on the left: (arr+i)-n, (p+i)-n,
   * (cond?a:b)-n, f()-n. Resolve the pointer scale recursively. */
