@@ -1671,8 +1671,13 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
          * overlap — a cell/byte unit mismatch here let a struct-return
          * buffer land on top of a live local. */
         int64_t mem_addr = (int64_t)(g->prog->total_mem + 1);
-        if (mem_addr & 7) mem_addr += 8 - (mem_addr & 7);   /* 8-byte align */
         int64_t n_cells_var = (arr_size > 0 ? arr_size : 1);
+        /* Align to 16 bytes (SSE/ABI) for arrays that occupy >= 16 bytes,
+         * else 8. A char[16] or larger must be 16-byte aligned per the wcc
+         * alignment test; scalars and small aggregates only need 8. */
+        int align_to = (n_cells_var * 8 >= 16) ? 16 : 8;
+        if (mem_addr & (align_to - 1))
+            mem_addr += align_to - (mem_addr & (align_to - 1));
         g->prog->total_mem = mem_addr + n_cells_var * 8;
         wubu_mir_const_to(g->prog, addr, mem_addr);  /* addr VR = byte address */
         /* Search from end to find the most recent declaration (shadowing) */
