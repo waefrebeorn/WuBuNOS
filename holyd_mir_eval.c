@@ -6015,6 +6015,52 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
  * frontend/lowering bug, never an encoder artifact (all drivers consume the
  * identical MIR).
  */
+/* Recursion detector: is there a cycle in the direct call graph? For each
+ * function f (identified by its instruction range [start,end)), collect the
+ * set of internal MIR_CALL targets, then look for any back-edge via DFS. Used
+ * to route recursive programs to the reentrant interpreter. */
+static int prog_has_recursion(const wubu_mir_prog_t *prog) {
+    int n = prog->n_funcs;
+    if (n <= 0) return 0;
+    /* adjacency bitmask per function (n <= MIR_MAX_FUNCTIONS, bounded) */
+    uint64_t adj[MIR_MAX_FUNCTIONS];
+    for (int i = 0; i < n; i++) { adj[i] = 0; }
+    for (int f = 0; f < n; f++) {
+        size_t s = prog->funcs[f].start, e = prog->funcs[f].end;
+        if (e > prog->n) e = prog->n;
+        for (size_t i = s; i < e; i++) {
+            const wubu_mir_instr_t *in = &prog->ins[i];
+            if (in->op == MIR_CALL && in->func_id != 0xFFFF &&
+                (int)in->func_id < n)
+                adj[f] |= (uint64_t)1 << (int)in->func_id;
+        }
+    }
+    /* DFS from each node looking for a back-edge (any cycle). */
+    int color[MIR_MAX_FUNCTIONS];  /* 0=white 1=gray 2=black */
+    for (int i = 0; i < n; i++) color[i] = 0;
+    /* iterative DFS via explicit stack of (node, next-bit) */
+    for (int root = 0; root < n; root++) {
+        if (color[root] != 0) continue;
+        int stack[MIR_MAX_FUNCTIONS];
+        uint64_t mask[MIR_MAX_FUNCTIONS];
+        int sp = 0;
+        stack[sp] = root; mask[sp] = adj[root]; color[root] = 1; sp++;
+        while (sp > 0) {
+            int node = stack[sp - 1];
+            if (mask[sp - 1] == 0) { color[node] = 2; sp--; continue; }
+            /* take lowest set bit */
+            int t = __builtin_ctzll(mask[sp - 1]);
+            mask[sp - 1] &= mask[sp - 1] - 1;
+            if (color[t] == 1) return 1;         /* back-edge -> cycle */
+            if (color[t] == 0) {
+                color[t] = 1;
+                stack[sp] = t; mask[sp] = adj[t]; sp++;
+            }
+        }
+    }
+    return 0;
+}
+
 int64_t hd_run_prog(const wubu_mir_prog_t *prog, const wubu_isa_driver_t *driver) {
     /* Interpreter-family backends execute the canonical MIR directly via the
      * reference interpreter (wubu_mir_interp) — that IS their execution
@@ -6022,6 +6068,14 @@ int64_t hd_run_prog(const wubu_mir_prog_t *prog, const wubu_isa_driver_t *driver
      * backends (x86-64/arm64/wasm/ptx/mips) use their own encoder+runner.
      * This guarantees every target returns the same canonical-MIR result. */
     if (driver && driver->exec == WUBU_ISA_INTERPRETED)
+        return wubu_mir_interp(prog);
+
+    /* The native JIT shares one flat memory buffer (wubu_jit_mem_ptr) for
+     * globals AND per-call locals/params at fixed offsets, so a recursive
+     * call clobbers the caller's params/locals (fib(10) reads back as -80).
+     * The interpreter is reentrant (per-call frame restore). Detect recursion
+     * via a cycle in the direct call graph and route to the golden oracle. */
+    if (driver && driver->exec != WUBU_ISA_INTERPRETED && prog_has_recursion(prog))
         return wubu_mir_interp(prog);
 
     /* Ensure mem is allocated before JIT compile (JIT embeds mem pointer
