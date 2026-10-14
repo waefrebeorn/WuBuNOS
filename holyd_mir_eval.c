@@ -1784,7 +1784,9 @@ extern_done:
                     n->init->n_args > 0) {
                     flat_multi = true;
                     for (uint32_t e = 0; e < n->init->n_args; e++)
-                        if (n->init->args[e] && n->init->args[e]->kind == HD_AST_BRACE_INIT) {
+                        if (n->init->args[e] &&
+                            (n->init->args[e]->kind == HD_AST_BRACE_INIT ||
+                             n->init->args[e]->kind == HD_AST_STRING_LIT)) {
                             flat_multi = false; break;
                         }
                 }
@@ -1839,6 +1841,42 @@ extern_done:
                     }
                     HDASTNode *elem = n->init->args[e];
                     wubu_vr_t ev;
+                    /* String-literal element initializing a char/u8 sub-array:
+                     * char a[N][M] = {"ab","cd"}. Byte-copy the string (incl.
+                     * NUL) from its generated address into this row at `offset`
+                     * (byte stride 1), mirroring the 1-D char[]="..." path.
+                     * Without this the string was stored as one 8-byte cell
+                     * (garbage) or skipped. */
+                    if (elem->kind == HD_AST_STRING_LIT && elem->str_val &&
+                        n->type && n->type->kind == HD_TYPE_ARRAY && n->type->base &&
+                        n->type->base->kind == HD_TYPE_ARRAY && n->type->base->base &&
+                        (n->type->base->base->kind == HD_TYPE_I8 ||
+                         n->type->base->base->kind == HD_TYPE_U8)) {
+                        int row_cells = n->type->base->array_size > 0
+                                        ? n->type->base->array_size : 1;
+                        size_t slen = strlen(elem->str_val) + 1;
+                        wubu_vr_t src_addr = mir_gen_expr(g, elem);
+                        int copy_len = (int)slen < row_cells ? (int)slen : row_cells;
+                        if (src_addr > 0 && copy_len > 0) {
+                            for (int m = 0; m < copy_len; m++) {
+                                /* Nested char arrays store one char per CELL
+                                 * (stride 8), matching the brace-init layout and
+                                 * the a[i][j] read stride — NOT byte-packed. */
+                                wubu_vr_t se = wubu_mir_binop(g->prog, MIR_ADD, src_addr,
+                                                  wubu_mir_const(g->prog, (int64_t)m));
+                                wubu_vr_t de = wubu_mir_binop(g->prog, MIR_ADD, addr,
+                                                  wubu_mir_const(g->prog, (int64_t)(offset + m * 8)));
+                                wubu_mir_store(g->prog, de, wubu_mir_load8(g->prog, se));
+                            }
+                        }
+                        /* Zero the rest of the row (C: uninitialized = 0). */
+                        for (int m = copy_len; m < row_cells; m++) {
+                            wubu_vr_t de = wubu_mir_binop(g->prog, MIR_ADD, addr,
+                                              wubu_mir_const(g->prog, (int64_t)(offset + m * 8)));
+                            wubu_mir_store(g->prog, de, wubu_mir_const(g->prog, 0));
+                        }
+                        continue;
+                    }
                     if (elem->kind == HD_AST_BRACE_INIT) {
                         /* Nested brace-init (multi-dimensional array): flatten
                          * to arbitrary depth. `offset` is a BYTE offset; each
@@ -4461,6 +4499,18 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                         break;
                     }
                 }
+        }
+        /* Nested INDEX base: a[0][1] on char[N][M] — the base a[0] is itself an
+         * INDEX whose element is char (or a char sub-array). Resolve the lvalue
+         * element type, descending through sub-array types, so the innermost
+         * element byte-loads (else it read the whole 8-byte cell). */
+        if (!char_elem && base_node && base_node->kind == HD_AST_INDEX) {
+            HDType *et = mir_lvalue_elem_type(g, base_node);
+            while (et && et->kind == HD_TYPE_ARRAY && et->base) et = et->base;
+            if (et && (et->kind == HD_TYPE_I8 || et->kind == HD_TYPE_U8)) {
+                char_elem = 1;
+                if (et->kind == HD_TYPE_U8) char_unsigned = 1;
+            }
         }
         if (!char_elem && base_node && base_node->kind == HD_AST_MEMBER &&
             base_node->left && base_node->left->kind == HD_AST_IDENT &&
