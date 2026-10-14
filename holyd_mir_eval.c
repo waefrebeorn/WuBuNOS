@@ -3278,6 +3278,14 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                            (n->right && n->right->kind == HD_AST_IDENT && mir_find_var_is_float(g, n->right->ident)) ||
                            (n->left && n->left->kind == HD_AST_FLOAT_LIT) ||
                            (n->right && n->right->kind == HD_AST_FLOAT_LIT);
+            /* s.d OP= rhs where d is a double struct member (DOT/MEMBER/ARROW):
+             * mir_is_float_node resolves the member type via mir_lvalue_elem_type
+             * (now covers DOT/MEMBER/ARROW). Without this, si.a += 10 used integer
+             * ADD on the double bits and was a no-op. */
+            if (!is_float && n->left &&
+                (n->left->kind == HD_AST_DOT || n->left->kind == HD_AST_MEMBER ||
+                 n->left->kind == HD_AST_ARROW || n->left->kind == HD_AST_INDEX))
+                is_float = mir_is_float_node(g, n->left);
             /* *p OP= rhs where p is a double* : the DEREF left is a double. */
             if (!is_float && n->left && n->left->kind == HD_AST_DEREF && n->left->child
                 && n->left->child->kind == HD_AST_IDENT && n->left->child->ident[0]) {
