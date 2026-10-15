@@ -362,6 +362,28 @@ static int mir_node_ptr_scale(HDMirGen *g, const HDASTNode *n) {
         }
         return 0;
     }
+    /* ps->arr / ps->ptr (arrow to an array or pointer member): the member
+     * decays to / is a pointer to its element struct, so pointer arithmetic
+     * scales by that struct's total byte size. Without this, (sp->in_array+3)
+     * on a struct inner[4] member advanced 3 bytes, clobbering in_array[0].a. */
+    if (n->kind == HD_AST_ARROW && n->ident[0]) {
+        const char *stype = mir_dot_struct_type(g, n->left);
+        if (stype && stype[0]) {
+            mir_struct_t *st = mir_find_struct(g, stype);
+            if (st)
+                for (int mi = 0; mi < st->n_members; mi++)
+                    if (strcmp(st->member_names[mi], n->ident) == 0) {
+                        /* array-of-struct or ptr-to-struct member: the element/
+                         * pointee struct name is in member_type_names. */
+                        if (st->member_type_names[mi][0]) {
+                            mir_struct_t *ps = mir_find_struct(g, st->member_type_names[mi]);
+                            if (ps && ps->total_size > 0) return ps->total_size * 8;
+                        }
+                        break;
+                    }
+        }
+        return 0;
+    }
     return 0;
 }
 
@@ -477,6 +499,32 @@ static const char *mir_dot_struct_type(HDMirGen *g, const HDASTNode *left) {
                     }
                 }
             }
+        }
+    }
+    /* ARROW: ps->m — resolve the pointee struct type of ps, then m's type.
+     * Without this, sp->in_ptr->a (arrow through a pointer member) resolved
+     * no struct type (mir_dot_struct_type had no ARROW case) -> offset -1
+     * -> read 0. */
+        if (left->kind == HD_AST_ARROW && left->ident[0]) {
+        const char *base_type = NULL;
+        if (left->left && left->left->kind == HD_AST_IDENT && left->left->ident[0]) {
+            for (int i = 0; i < g->n_vars; i++)
+                if (strcmp(g->vars[i].name, left->left->ident) == 0 && g->vars[i].is_ptr_struct) {
+                    base_type = g->vars[i].struct_name; break;
+                }
+        }
+        if (!base_type && left->left)
+            base_type = mir_dot_struct_type(g, left->left);   /* complex base: its pointee struct */
+        if (base_type && base_type[0]) {
+            mir_struct_t *st = mir_find_struct(g, base_type);
+            if (st)
+                for (int mi = 0; mi < st->n_members; mi++)
+                    if (strcmp(st->member_names[mi], left->ident) == 0) {
+                        if (st->member_type_names[mi][0]) return st->member_type_names[mi];
+                        if (left->type && left->type->kind == HD_TYPE_STRUCT && left->type->name[0])
+                            return left->type->name;
+                        break;
+                    }
         }
     }
     /* INDEX: arr[i] or p[i] — look up the element type from var table */
@@ -1564,16 +1612,21 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
                     s->member_is_ptr[s->n_members] = (n->type->members[i].type && n->type->members[i].type->kind == HD_TYPE_PTR) ? 1 : 0;
                     s->member_type_kinds[s->n_members] = n->type->members[i].type ? n->type->members[i].type->kind : 0;
                     s->member_elem_kinds[s->n_members] = (n->type->members[i].type && n->type->members[i].type->kind == HD_TYPE_ARRAY && n->type->members[i].type->base) ? n->type->members[i].type->base->kind : 0;
-                    if (n->type->members[i].type && n->type->members[i].type->name[0] &&
-                        (n->type->members[i].type->kind == HD_TYPE_STRUCT ||
-                         (n->type->members[i].type->kind == HD_TYPE_PTR &&
-                          n->type->members[i].type->base &&
-                          n->type->members[i].type->base->kind == HD_TYPE_STRUCT)))
-                        strncpy(s->member_type_names[s->n_members],
-                                n->type->members[i].type->kind == HD_TYPE_PTR
-                                    ? n->type->members[i].type->base->name
-                                    : n->type->members[i].type->name,
-                                HD_MAX_IDENT_LEN - 1);
+                    HDType *mt = n->type->members[i].type;
+                    if (mt && mt->kind == HD_TYPE_STRUCT && mt->name[0]) {
+                        strncpy(s->member_type_names[s->n_members], mt->name, HD_MAX_IDENT_LEN - 1);
+                    } else if (mt && mt->kind == HD_TYPE_PTR && mt->base &&
+                               mt->base->kind == HD_TYPE_STRUCT && mt->base->name[0]) {
+                        /* PTR-to-struct member (struct inner *in_ptr): the struct
+                         * name is on the BASE, not the PTR type (whose name is
+                         * empty). Recording it lets mir_dot_struct_type resolve
+                         * sp->in_ptr->a (arrow through a pointer member). */
+                        strncpy(s->member_type_names[s->n_members], mt->base->name, HD_MAX_IDENT_LEN - 1);
+                    } else if (mt && mt->kind == HD_TYPE_ARRAY && mt->base &&
+                               mt->base->kind == HD_TYPE_STRUCT && mt->base->name[0]) {
+                        /* Array-of-struct member: element struct name. */
+                        strncpy(s->member_type_names[s->n_members], mt->base->name, HD_MAX_IDENT_LEN - 1);
+                    }
                     s->n_members++;
                 }
             }
@@ -3135,6 +3188,13 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             HDType *rhs_type = n->right ? n->right->type : NULL;
             if (!rhs_type && n->right && n->right->kind == HD_AST_IDENT) {
                 rhs_type = mir_find_var_type(g, n->right->ident);
+            }
+            /* RHS is a struct member (s.b / ps->b): resolve its declared type so
+             * s.a = s.b converts int/char -> double (DITOF) instead of storing
+             * raw bits. mir_lvalue_elem_type covers DOT/MEMBER/ARROW. */
+            if (!rhs_type && n->right && (n->right->kind == HD_AST_DOT ||
+                n->right->kind == HD_AST_MEMBER || n->right->kind == HD_AST_ARROW)) {
+                rhs_type = mir_lvalue_elem_type(g, n->right);
             }
             if (!rhs_type && n->right && (n->right->kind == HD_AST_FUNC_CALL || n->right->kind == HD_AST_CALL)
                 && n->right->callee && n->right->callee->kind == HD_AST_IDENT) {
@@ -6288,15 +6348,23 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
                 s->member_is_ptr[s->n_members] = (t->members[j].type && t->members[j].type->kind == HD_TYPE_PTR) ? 1 : 0;
                 s->member_type_kinds[s->n_members] = t->members[j].type ? t->members[j].type->kind : 0;
                 s->member_elem_kinds[s->n_members] = (t->members[j].type && t->members[j].type->kind == HD_TYPE_ARRAY && t->members[j].type->base) ? t->members[j].type->base->kind : 0;
-                if (t->members[j].type && t->members[j].type->name[0] &&
-                    (t->members[j].type->kind == HD_TYPE_STRUCT ||
-                     (t->members[j].type->kind == HD_TYPE_PTR &&
-                      t->members[j].type->base &&
-                      t->members[j].type->base->kind == HD_TYPE_STRUCT)))
-                    strncpy(s->member_type_names[s->n_members],
-                            t->members[j].type->kind == HD_TYPE_PTR
-                                ? t->members[j].type->base->name
-                                : t->members[j].type->name, HD_MAX_IDENT_LEN - 1);
+                HDType *mt2 = t->members[j].type;
+                if (mt2 && mt2->kind == HD_TYPE_STRUCT && mt2->name[0]) {
+                    strncpy(s->member_type_names[s->n_members], mt2->name, HD_MAX_IDENT_LEN - 1);
+                } else if (mt2 && mt2->kind == HD_TYPE_PTR && mt2->base &&
+                           mt2->base->kind == HD_TYPE_STRUCT && mt2->base->name[0]) {
+                    /* PTR-to-struct member (struct inner *in_ptr): the struct
+                     * name is on the BASE, not the PTR type (whose name is
+                     * empty). Recording it lets mir_dot_struct_type resolve
+                     * sp->in_ptr->a (arrow through a pointer member). */
+                    strncpy(s->member_type_names[s->n_members], mt2->base->name, HD_MAX_IDENT_LEN - 1);
+                } else if (mt2 && mt2->kind == HD_TYPE_ARRAY && mt2->base &&
+                           mt2->base->kind == HD_TYPE_STRUCT && mt2->base->name[0]) {
+                    /* Array-of-struct member (struct inner in_array[4]): the
+                     * element struct name lets sp->in_array->a resolve (the
+                     * array decays to a pointer to its element). */
+                    strncpy(s->member_type_names[s->n_members], mt2->base->name, HD_MAX_IDENT_LEN - 1);
+                }
                 /* Named member of an ANONYMOUS struct type: `struct{int i1;int i2;} t;`
                  * The inner struct has no name, so it was never registered and
                  * member_type_names stays empty -> `o.t.i1` cannot resolve the
