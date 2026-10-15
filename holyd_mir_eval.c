@@ -175,6 +175,19 @@ static HDType *mir_lvalue_elem_type(HDMirGen *g, const HDASTNode *n) {
             if (vt && vt->kind == HD_TYPE_PTR && vt->base)
                 return vt->base;
         }
+        /* *(p + i) / *(p - i) / *(p += i): pointer arithmetic or compound
+         * pointer assign — resolve the pointee from the pointer operand (the
+         * left). Without this, *(ptr+5) / *(ptr+=5) on a double* resolved to
+         * NULL, so mir_is_float_node missed it and `*(ptr+5) == 1.0` ditof'd
+         * the loaded double bits (compared a denormal). Handles both double*
+         * (PTR) and double[] decay (ARRAY). */
+        if (base && (base->kind == HD_AST_ADD || base->kind == HD_AST_SUB ||
+                     base->kind == HD_AST_ADD_ASSIGN || base->kind == HD_AST_SUB_ASSIGN) &&
+            base->left && base->left->kind == HD_AST_IDENT && base->left->ident[0]) {
+            HDType *vt = mir_find_var_type(g, base->left->ident);
+            if (vt && (vt->kind == HD_TYPE_PTR || vt->kind == HD_TYPE_ARRAY) && vt->base)
+                return vt->base;
+        }
     }
     /* s.m / ps->m: resolve the member's declared type from the struct
      * definition. Without this, mir_is_float_node(s.double_member) returns
@@ -2128,6 +2141,15 @@ extern_done:
                                     ev = wubu_mir_unop(g->prog, MIR_DTOI, ev);
                                 }
                                 ev = mir_truncate_to_type(g, ev, base);
+                            } else if (base->kind == HD_TYPE_F64) {
+                                /* double array element initialized from an integer
+                                 * literal/expr ({1,2,3} on a double[]): convert
+                                 * int->double (DITOF). Without this the raw int bits
+                                 * were stored, so d[1] read back a denormal, not 2.0
+                                 * (MIR showed 'store mem[..] = 2'). Float elements
+                                 * are left as-is. */
+                                if (elem && !mir_is_float_node(g, elem))
+                                    ev = wubu_mir_unop(g->prog, MIR_DITOF, ev);
                             }
                         }
                         /* Convert initializer value to member type.
