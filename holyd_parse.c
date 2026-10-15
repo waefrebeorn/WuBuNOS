@@ -2047,6 +2047,37 @@ done_extern_params:
                         advance(p);
                     }
                     expect(p, HD_TOK_RPAREN);
+                    if (peek(p) == HD_TOK_LBRACKET) {
+                        /* (*name)[N][M]... — pointer to (multi-dim) array, NOT a
+                         * function pointer. Build PTR(ARRAY(...)); consuming the
+                         * dims here prevents them being mis-parsed (which left
+                         * the param typed as a bare double* and broke
+                         * double(*)[N] param subtraction / sizeof). */
+                        int pdims[16], pnd = 0;
+                        while (peek(p) == HD_TOK_LBRACKET && pnd < 16) {
+                            advance(p);
+                            int asz = 0;
+                            if (peek(p) == HD_TOK_INT) { asz = (int)p->lex->tok.int_val; advance(p); }
+                            expect(p, HD_TOK_RBRACKET);
+                            pdims[pnd++] = asz;
+                        }
+                        HDType *pinner = pt;
+                        for (int di = pnd - 1; di >= 0; di--) {
+                            HDType *arr = (HDType *)calloc(1, sizeof(HDType));
+                            arr->kind = HD_TYPE_ARRAY;
+                            arr->base = pinner;
+                            arr->array_size = pdims[di];
+                            arr->size = (pdims[di] > 0) ? hd_type_size(pinner) * pdims[di]
+                                                        : hd_type_size(pinner);
+                            pinner = arr;
+                        }
+                        HDType *pta = (HDType *)calloc(1, sizeof(HDType));
+                        pta->kind = HD_TYPE_PTR;
+                        pta->base = pinner;
+                        pta->size = 8;
+                        pt = pta;
+                        goto param_type_done;
+                    }
                     /* Skip parameter list (params) */
                     if (peek(p) == HD_TOK_LPAREN) {
                         advance(p);
@@ -2110,6 +2141,7 @@ done_extern_params:
                     ptr->size = 8;
                     pt = ptr;
                 }
+                param_type_done:
                 fn->param_types[fn->n_params] = pt;
                 strncpy(fn->param_names[fn->n_params], pname, HD_MAX_IDENT_LEN - 1);
                 fn->n_params++;
@@ -2127,31 +2159,66 @@ done_extern_params:
                     }
                     pt = parse_type(p);
                     pname[0] = '\0';
-                    /* Check for function pointer in subsequent params */
+                    /* Check for function pointer / pointer-to-array in subsequent
+                     * params. `(*name)(...)` is a function pointer; `(*name)[N]...`
+                     * is a pointer to (multi-dim) array. Distinguish by the token
+                     * after `(*name)`. */
                     if (peek(p) == HD_TOK_LPAREN && p->lex->pos < (int)strlen(p->lex->src) && p->lex->src[p->lex->pos] == '*') {
-                        advance(p);
-                        advance(p);
-                        if (peek(p) == HD_TOK_IDENT) advance(p);
-                        expect(p, HD_TOK_RPAREN);
-                        if (peek(p) == HD_TOK_LPAREN) {
+                        advance(p); /* ( */
+                        advance(p); /* * */
+                        if (peek(p) == HD_TOK_IDENT) {
+                            strncpy(pname, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
+                            pname[HD_MAX_IDENT_LEN - 1] = '\0';
                             advance(p);
-                            int depth2 = 1;
-                            while (depth2 > 0 && peek(p) != HD_TOK_EOF) {
-                                if (peek(p) == HD_TOK_LPAREN) depth2++;
-                                else if (peek(p) == HD_TOK_RPAREN) depth2--;
-                                if (depth2 > 0) advance(p);
-                            }
-                            if (peek(p) == HD_TOK_RPAREN) advance(p);
                         }
-                        HDType *fn2 = (HDType *)calloc(1, sizeof(HDType));
-                        fn2->kind = HD_TYPE_FUNC;
-                        fn2->param_types = (HDType **)calloc(HD_MAX_PARAMS, sizeof(HDType *));
-                        fn2->n_params = 0;
-                        HDType *fpt2 = (HDType *)calloc(1, sizeof(HDType));
-                        fpt2->kind = HD_TYPE_PTR;
-                        fpt2->base = fn2;
-                        fpt2->size = 8;
-                        pt = fpt2;
+                        expect(p, HD_TOK_RPAREN);
+                        if (peek(p) == HD_TOK_LBRACKET) {
+                            /* (*name)[N][M]... — pointer to (multi-dim) array. */
+                            int pdims[16], pnd = 0;
+                            while (peek(p) == HD_TOK_LBRACKET && pnd < 16) {
+                                advance(p);
+                                int asz = 0;
+                                if (peek(p) == HD_TOK_INT) { asz = (int)p->lex->tok.int_val; advance(p); }
+                                expect(p, HD_TOK_RBRACKET);
+                                pdims[pnd++] = asz;
+                            }
+                            HDType *pinner = pt;
+                            for (int di = pnd - 1; di >= 0; di--) {
+                                HDType *arr = (HDType *)calloc(1, sizeof(HDType));
+                                arr->kind = HD_TYPE_ARRAY;
+                                arr->base = pinner;
+                                arr->array_size = pdims[di];
+                                arr->size = (pdims[di] > 0) ? hd_type_size(pinner) * pdims[di]
+                                                            : hd_type_size(pinner);
+                                pinner = arr;
+                            }
+                            HDType *pta = (HDType *)calloc(1, sizeof(HDType));
+                            pta->kind = HD_TYPE_PTR;
+                            pta->base = pinner;
+                            pta->size = 8;
+                            pt = pta;
+                        } else {
+                            /* function pointer: skip the param list */
+                            if (peek(p) == HD_TOK_LPAREN) {
+                                advance(p);
+                                int depth2 = 1;
+                                while (depth2 > 0 && peek(p) != HD_TOK_EOF) {
+                                    if (peek(p) == HD_TOK_LPAREN) depth2++;
+                                    else if (peek(p) == HD_TOK_RPAREN) depth2--;
+                                    if (depth2 > 0) advance(p);
+                                }
+                                if (peek(p) == HD_TOK_RPAREN) advance(p);
+                            }
+                            HDType *fn2 = (HDType *)calloc(1, sizeof(HDType));
+                            fn2->kind = HD_TYPE_FUNC;
+                            fn2->param_types = (HDType **)calloc(HD_MAX_PARAMS, sizeof(HDType *));
+                            fn2->n_params = 0;
+                            HDType *fpt2 = (HDType *)calloc(1, sizeof(HDType));
+                            fpt2->kind = HD_TYPE_PTR;
+                            fpt2->base = fn2;
+                            fpt2->size = 8;
+                            pt = fpt2;
+                        }
                     } else if (peek(p) == HD_TOK_IDENT) {
                         strncpy(pname, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
                         advance(p);
