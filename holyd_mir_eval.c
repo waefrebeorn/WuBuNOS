@@ -149,9 +149,18 @@ static HDType *mir_lvalue_elem_type(HDMirGen *g, const HDASTNode *n) {
         return mir_find_var_type(g, n->ident);
     if (n->kind == HD_AST_INDEX) {
         const HDASTNode *base = n->left;
-        /* nested index a[i][j]: recurse into the base */
-        if (base && base->kind == HD_AST_INDEX)
-            return mir_lvalue_elem_type(g, base);
+        /* nested index a[i][j]: the element type is the base's type with the
+         * indexed dimension peeled (base a[i] has type T[row], so a[i][j] is T).
+         * Recursing and returning the base type AS-IS left one ARRAY level too
+         * many — a[i][j] on a double[M][N] resolved to ARRAY(double) instead of
+         * double, so mir_is_float_node missed it and `d[i][j] == 1.0` /
+         * `d[i][j] += x` took the integer path (ditof on the raw double bits). */
+        if (base && base->kind == HD_AST_INDEX) {
+            HDType *bt = mir_lvalue_elem_type(g, base);
+            if (bt && (bt->kind == HD_TYPE_ARRAY || bt->kind == HD_TYPE_PTR) && bt->base)
+                return bt->base;
+            return bt;
+        }
         if (base && base->kind == HD_AST_IDENT && base->ident[0]) {
             HDType *vt = mir_find_var_type(g, base->ident);
             if (vt && (vt->kind == HD_TYPE_ARRAY || vt->kind == HD_TYPE_PTR) && vt->base)
