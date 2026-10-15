@@ -344,6 +344,21 @@ void wubu_mir_call(wubu_mir_prog_t *p, uint32_t func_id);
 /* Emit MIR_TO_PTR: dst = mem_base + a (convert offset to pointer for external calls) */
 void wubu_mir_to_ptr(wubu_mir_prog_t *p, wubu_vr_t a, wubu_vr_t dst);
 
+/* ---- JIT managed heap (bump allocator over prog.mem) ----
+ * The JIT's address model is offset-based: every pointer VR is a byte offset
+ * into prog.mem, and MIR_LOAD/STORE + MIR_TO_PTR add the mem base. Real libc
+ * malloc/calloc return REAL heap addresses that break this invariant (the base
+ * gets added a second time -> wild write). These functions instead return byte
+ * OFFSETS into prog.mem, so heap pointers are first-class offsets: dereferencing
+ * them via MIR_LOAD/STORE works, and MIR_TO_PTR (applied to external-call
+ * pointer args) hands libc the correct real address into the same buffer.
+ * The JIT routes malloc/calloc/realloc/free here (wubu_isa_x86_64.c). */
+void wubu_jit_heap_init(int64_t base_off, int64_t size);
+int64_t wubu_jit_malloc(int64_t n);
+int64_t wubu_jit_calloc(int64_t cnt, int64_t sz);
+int64_t wubu_jit_realloc(int64_t p, int64_t n);
+void wubu_jit_free(int64_t p);
+
 /* Set the number of function arguments (v1..n_args get pre-assigned to arg regs) */
 void wubu_mir_set_n_args(wubu_mir_prog_t *p, uint32_t n_args);
 

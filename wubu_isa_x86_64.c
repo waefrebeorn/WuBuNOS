@@ -52,6 +52,12 @@ extern size_t x86_peephole_optimize(uint8_t *code, size_t n);
  * Set by x86_run before calling JIT'd code. Used by wubu_tgemm_parallel.
  * NOT thread-local: OpenMP worker threads must see the same pointer. */
 extern int64_t *wubu_jit_mem_ptr;
+/* JIT managed heap: malloc/calloc/realloc/free resolve here (return prog.mem
+ * byte offsets), not to real libc, so heap pointers fit the offset model. */
+extern int64_t wubu_jit_malloc(int64_t n);
+extern int64_t wubu_jit_calloc(int64_t cnt, int64_t sz);
+extern int64_t wubu_jit_realloc(int64_t p, int64_t n);
+extern void wubu_jit_free(int64_t p);
 
 /* ---- the emitter ---- */
 
@@ -1438,7 +1444,17 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
                         dlopen("libm.so.6", RTLD_LAZY | RTLD_GLOBAL);
                         libm_loaded = 1;
                     }
-                    fprintf(stderr, "[JIT] dlsym for %s\n", in->func_name); fflush(stderr); void *sym = dlsym(RTLD_DEFAULT, in->func_name);
+                    void *sym = NULL;
+                    /* Route the allocator family to the JIT managed heap
+                     * (wubu_mir.c): these return byte offsets into prog.mem, not
+                     * real libc addresses, so heap pointers are first-class
+                     * offsets and dereferencing them doesn't double-add the mem
+                     * base (which segfaulted on real malloc). */
+                    if (strcmp(in->func_name, "malloc") == 0) sym = (void *)wubu_jit_malloc;
+                    else if (strcmp(in->func_name, "calloc") == 0) sym = (void *)wubu_jit_calloc;
+                    else if (strcmp(in->func_name, "realloc") == 0) sym = (void *)wubu_jit_realloc;
+                    else if (strcmp(in->func_name, "free") == 0) sym = (void *)wubu_jit_free;
+                    if (!sym) sym = dlsym(RTLD_DEFAULT, in->func_name);
                     if (!sym) sym = dlsym(RTLD_NEXT, in->func_name);
                     if (sym) {
                         /* Read argument register encodings BEFORE saving registers */
@@ -1909,9 +1925,10 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
     return 0;
 }
 
-/* Global thread-local pointer for JIT working memory (heap-allocated).
- * Set by x86_run before calling JIT'd code. Used by wubu_tgemm_parallel. */
-int64_t *wubu_jit_mem_ptr = NULL;
+/* Global pointer for JIT working memory (heap-allocated). Set by x86_run
+ * before calling JIT'd code. Used by wubu_tgemm_parallel and the JIT managed
+ * heap's realloc. Defined in wubu_mir.c (linked in more targets than this
+ * backend); declared extern above. */
 
 static int64_t x86_run(const uint8_t *code, size_t size, int64_t arg) {
     void *exec = jit_alloc_exec(size);

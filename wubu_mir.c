@@ -24,6 +24,58 @@ void wubu_mir_free(wubu_mir_prog_t *p)
     memset(p, 0, sizeof(*p));
 }
 
+/* ---- JIT managed heap (bump allocator over prog.mem) ----
+ * See wubu_mir.h. Returns byte offsets into prog.mem, not real addresses. */
+int64_t *wubu_jit_mem_ptr = NULL;   /* prog.mem base; set by the JIT run path */
+static int64_t g_heap_base_off = 0;
+static int64_t g_heap_bump = 0;
+static int64_t g_heap_end_off = 0;
+
+void wubu_jit_heap_init(int64_t base_off, int64_t size)
+{
+    g_heap_base_off = base_off;
+    g_heap_bump = base_off;
+    g_heap_end_off = base_off + size;
+}
+
+static int64_t heap_alloc(int64_t n)
+{
+    if (n <= 0) n = 1;
+    n = (n + 15) & ~(int64_t)15;          /* 16-byte align */
+    if (g_heap_bump + n > g_heap_end_off) return 0;   /* OOM -> null (offset 0) */
+    int64_t p = g_heap_bump;
+    g_heap_bump += n;
+    return p;
+}
+
+int64_t wubu_jit_malloc(int64_t n) { return heap_alloc(n); }
+
+int64_t wubu_jit_calloc(int64_t cnt, int64_t sz)
+{
+    /* Fresh heap memory is already zero (prog.mem is calloc'd at run start and
+     * the bump allocator never reuses a freed block), so no explicit memset. */
+    return heap_alloc(cnt * sz);
+}
+
+void wubu_jit_free(int64_t p) { (void)p; }   /* bump allocator: leak (chibicc-style) */
+
+int64_t wubu_jit_realloc(int64_t p, int64_t n)
+{
+    if (p == 0) return heap_alloc(n);
+    int64_t q = heap_alloc(n);
+    if (q == 0) return 0;
+    /* Copy old contents. wubu_jit_mem_ptr (set at run time) is the prog.mem
+     * base; p and q are byte offsets into it. Bound the copy to the heap end
+     * so we never read past the reserved region. */
+    if (wubu_jit_mem_ptr) {
+        int64_t copy = n;
+        if (p + copy > g_heap_end_off) copy = g_heap_end_off - p;
+        if (copy > 0)
+            memcpy((char *)wubu_jit_mem_ptr + q, (char *)wubu_jit_mem_ptr + p, (size_t)copy);
+    }
+    return q;
+}
+
 static wubu_mir_instr_t *emit(wubu_mir_prog_t *p)
 {
     if (p->n == p->cap) {

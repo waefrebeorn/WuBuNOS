@@ -6617,13 +6617,24 @@ int64_t hd_run_prog(const wubu_mir_prog_t *prog, const wubu_isa_driver_t *driver
      * as immediate in movabs instructions). The interpreter allocates it
      * lazily, but the JIT needs it at compile time. */
     uint8_t *mem_ptr = prog->mem;
+    int64_t mem_hi = prog->total_mem;
+    if ((int64_t)(prog->next_vr_hi) - 1 > mem_hi) mem_hi = (int64_t)(prog->next_vr_hi) - 1;
+    /* Reserve a managed-heap region past all static data. malloc/calloc/etc.
+     * return byte offsets into this region (wubu_jit_heap_*), so they fit the
+     * JIT's offset address model instead of returning real libc addresses. */
+    int64_t heap_off = (mem_hi + 15) & ~(int64_t)15;
+    if (heap_off < 32) heap_off = 32;
+    int64_t heap_size = (int64_t)1 << 22;   /* 4 MB managed heap */
     if (mem_ptr == NULL) {
-        int64_t mem_hi = prog->total_mem;
-        if ((int64_t)(prog->next_vr_hi) - 1 > mem_hi) mem_hi = (int64_t)(prog->next_vr_hi) - 1;
         int64_t mem_size = (mem_hi < 1) ? 1 : (mem_hi + 1);
         /* Extra padding: memset/memcpy may write up to 7 bytes past the last cell */
-        mem_ptr = (uint8_t *)calloc((size_t)(mem_size + 16), sizeof(int64_t));
+        size_t static_bytes = (size_t)(mem_size + 16) * sizeof(int64_t);
+        size_t total_bytes = static_bytes;
+        if ((size_t)heap_off + (size_t)heap_size + 64 > total_bytes)
+            total_bytes = (size_t)heap_off + (size_t)heap_size + 64;
+        mem_ptr = (uint8_t *)calloc(total_bytes, 1);
     }
+    wubu_jit_heap_init(heap_off, heap_size);
 
     /* Build a mutable copy of prog with mem set for the JIT compiler */
     wubu_mir_prog_t prog_copy = *prog;
