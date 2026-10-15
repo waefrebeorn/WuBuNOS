@@ -1414,6 +1414,14 @@ static wubu_vr_t mir_address_of(HDMirGen *g, const HDASTNode *n) {
         if (offset < 0) return 0;
         return wubu_mir_binop(g->prog, MIR_ADD, ptr_val, wubu_mir_const(g->prog, (int64_t)offset));
     }
+    /* (ptr++)[i] / (ptr--)[i] / (++ptr)[i]: a postfix/prefix inc/dec on a
+     * pointer yields a pointer VALUE; subscripting it indexes from that value,
+     * not from the address of the pointer variable. Without this,
+     * (ptr--)[3] got base 0 and read garbage (postfix_precedence test). */
+    if (n->kind == HD_AST_POST_INC || n->kind == HD_AST_POST_DEC ||
+        n->kind == HD_AST_PRE_INC || n->kind == HD_AST_PRE_DEC) {
+        return mir_gen_expr(g, n);
+    }
     return 0;
 }
 
