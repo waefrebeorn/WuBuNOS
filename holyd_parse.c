@@ -1918,23 +1918,35 @@ done_extern_params:
             if (peek(p) == HD_TOK_LPAREN) {
                 is_func_ptr = 1;
             } else if (peek(p) == HD_TOK_LBRACKET) {
-                /* `(*p)[N]` — pointer to array. Build PTR(ARRAY(base, N))
-                 * directly; the generic array-declarator path would wrongly
-                 * produce ARRAY(PTR(base), N). */
+                /* `(*p)[N]` or `(*p)[N][M]...` — pointer to (multi-dim) array.
+                 * Build PTR(ARRAY(...)) directly; the generic array-declarator
+                 * path would wrongly produce ARRAY(PTR(base), N). Consume ALL
+                 * bracket dims so `double (*p)[3][5]` parses (was: one [N]
+                 * only, leaving the second [5] unconsumed -> parse failure). */
                 is_ptr_to_array = 1;
-                advance(p); /* [ */
-                int asz = 0;
-                if (peek(p) == HD_TOK_INT) { asz = (int)p->lex->tok.int_val; advance(p); }
-                else if (peek(p) == HD_TOK_CHAR) { asz = (int)p->lex->tok.int_val; advance(p); }
-                expect(p, HD_TOK_RBRACKET);
-                HDType *arr = (HDType *)calloc(1, sizeof(HDType));
-                arr->kind = HD_TYPE_ARRAY;
-                arr->base = type;
-                arr->array_size = asz;
-                arr->size = (asz > 0) ? hd_type_size(type) * asz : hd_type_size(type);
+                HDType *inner = type;
+                int dims[16], nd = 0;
+                while (peek(p) == HD_TOK_LBRACKET && nd < 16) {
+                    advance(p); /* [ */
+                    int asz = 0;
+                    if (peek(p) == HD_TOK_INT) { asz = (int)p->lex->tok.int_val; advance(p); }
+                    else if (peek(p) == HD_TOK_CHAR) { asz = (int)p->lex->tok.int_val; advance(p); }
+                    expect(p, HD_TOK_RBRACKET);
+                    dims[nd++] = asz;
+                }
+                /* Build nested arrays from the innermost dim outward. */
+                for (int di = nd - 1; di >= 0; di--) {
+                    HDType *arr = (HDType *)calloc(1, sizeof(HDType));
+                    arr->kind = HD_TYPE_ARRAY;
+                    arr->base = inner;
+                    arr->array_size = dims[di];
+                    arr->size = (dims[di] > 0) ? hd_type_size(inner) * dims[di]
+                                               : hd_type_size(inner);
+                    inner = arr;
+                }
                 HDType *pt = (HDType *)calloc(1, sizeof(HDType));
                 pt->kind = HD_TYPE_PTR;
-                pt->base = arr;
+                pt->base = inner;
                 pt->size = 8;
                 type = pt;
             } else {

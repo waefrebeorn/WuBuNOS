@@ -344,6 +344,24 @@ static int mir_node_ptr_scale(HDMirGen *g, const HDASTNode *n) {
         if (t->base->kind == HD_TYPE_I8 || t->base->kind == HD_TYPE_U8) return 1;
         return 8;
     }
+    /* arr[i] on a multi-dim array decays to a pointer to the element
+     * sub-array (e.g. m[2] on double[..][3][5] -> double(*)[3][5]); the
+     * pointer scale is that sub-array's total byte size (product of inner
+     * dims * 8). Without this, m[2]+4 advanced 4 bytes, so (m[2]+4)-(m[2]+1)
+     * on a double(*)[3][5] divided a 24-scaled delta by 120 -> 0. */
+    if (n->kind == HD_AST_INDEX) {
+        HDType *et = mir_lvalue_elem_type(g, n);   /* type of arr[i] */
+        if (et && et->kind == HD_TYPE_ARRAY && et->base) {
+            HDType *elem = et->base;               /* what arr[i] decays to point at */
+            int asz = 1;
+            while (elem && elem->kind == HD_TYPE_ARRAY) {
+                asz *= (elem->array_size > 0 ? elem->array_size : 1);
+                elem = elem->base;
+            }
+            return asz * 8;
+        }
+        return 0;
+    }
     return 0;
 }
 
@@ -3635,7 +3653,17 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
         /* Check array types first (arrays decay to pointers) */
         if (ltype && ltype->kind == HD_TYPE_ARRAY) {
             if (ltype->base && ltype->base->kind == HD_TYPE_ARRAY) {
-                ptr_scale = ltype->base->array_size * 8;
+                /* multi-dim array: scale by the FULL element byte size (product
+                 * of all inner dims * 8), matching the SUB handler. Using only
+                 * one inner dim made (m[2]+4)-(m[2]+1) on double[..][3][5]
+                 * divide a 24-scaled delta by a 120-scale -> 0. */
+                int asz = ltype->base->array_size;
+                HDType *inner = ltype->base->base;
+                while (inner && inner->kind == HD_TYPE_ARRAY) {
+                    asz *= (inner->array_size > 0 ? inner->array_size : 1);
+                    inner = inner->base;
+                }
+                ptr_scale = (asz > 0 ? asz : 1) * 8;
             } else if (ltype->base &&
                        (ltype->base->kind == HD_TYPE_I8 || ltype->base->kind == HD_TYPE_U8)) {
                 ptr_scale = 1;  /* char[] byte-packed */
@@ -3647,7 +3675,15 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 mir_struct_t *st = mir_find_struct(g, ltype->base->name);
                 if (st && st->total_size > 0) ptr_scale = st->total_size * 8;
             } else if (ltype->base && ltype->base->kind == HD_TYPE_ARRAY) {
-                ptr_scale = ltype->base->array_size * 8;
+                /* pointer to a multi-dim array: scale by the FULL sub-array
+                 * byte size (product of all inner dims * 8), matching SUB. */
+                int asz = ltype->base->array_size;
+                HDType *inner = ltype->base->base;
+                while (inner && inner->kind == HD_TYPE_ARRAY) {
+                    asz *= (inner->array_size > 0 ? inner->array_size : 1);
+                    inner = inner->base;
+                }
+                ptr_scale = (asz > 0 ? asz : 1) * 8;
             } else if (ltype->base &&
                        (ltype->base->kind == HD_TYPE_I8 || ltype->base->kind == HD_TYPE_U8)) {
                 ptr_scale = 1;  /* char* / unsigned char*: byte-addressable */
@@ -3660,7 +3696,13 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             HDTypeKind right_kind = n->right->type->kind;
             if (right_kind == HD_TYPE_ARRAY) {
                 if (n->right->type->base && n->right->type->base->kind == HD_TYPE_ARRAY) {
-                    ptr_scale = n->right->type->base->array_size * 8;
+                    int asz = n->right->type->base->array_size;
+                    HDType *inner = n->right->type->base->base;
+                    while (inner && inner->kind == HD_TYPE_ARRAY) {
+                        asz *= (inner->array_size > 0 ? inner->array_size : 1);
+                        inner = inner->base;
+                    }
+                    ptr_scale = (asz > 0 ? asz : 1) * 8;
                 } else if (n->right->type->base) {
                     ptr_scale = 8;
                 }
