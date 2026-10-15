@@ -2121,8 +2121,14 @@ extern_done:
                                 ev = mir_truncate_to_type(g, ev, base);
                             }
                         }
-                        /* Convert initializer value to member type */
-                        if (is_struct_var && n->type && n->type->kind == HD_TYPE_STRUCT
+                        /* Convert initializer value to member type.
+                         * For a union, only the first member (e==0) is
+                         * initialized, but it still needs the cast — e.g.
+                         * `union u{double d;} x = {20}` must store 20.0, not
+                         * the raw int 20. Without the union case the int
+                         * literal was stored unconverted and x.d read garbage. */
+                        if (is_struct_var && n->type
+                            && (n->type->kind == HD_TYPE_STRUCT || n->type->kind == HD_TYPE_UNION)
                             && e < (uint32_t)n->type->n_members) {
                             HDType *member_type = n->type->members[e].type;
                             if (member_type) {
