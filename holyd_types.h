@@ -143,6 +143,7 @@ typedef struct {
     char str_val[HD_MAX_STRING_LEN];
     int is_unsigned; /* 1 if constant has u/U suffix */
     int is_long;     /* 1 if constant has l/L suffix */
+    int is_long_long;/* 1 if constant has ll/LL suffix (64-bit) */
     int line;
     int col;
 } HDToken;

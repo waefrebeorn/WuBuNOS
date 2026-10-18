@@ -118,11 +118,15 @@ gauntlet_v3: test_gauntlet_v3.c $(FRONT) $(MIR) wubu_tgemm_avx512.o $(filter-out
 
 # ---- Run targets ----
 
-test: test_isa_driver test_softfloat test_peephole test_elf_cubin test_mir_float test_fuzz_diff test_tgemm test_gap_audit test_selfhost_battery
+test: test_isa_driver test_softfloat test_peephole test_elf_cubin test_mir_float test_fuzz_diff test_tgemm test_gap_audit test_selfhost_battery test_lexer_suffix
 	@echo "=== ISA Driver Test ==="
 	./test_isa_driver
 
 # Soft-float runtime test (pure C11 IEEE-754 software float)
+test_lexer_suffix: holyd_lexer.c holyd_lexer.h holyd_types.h tools/test_lexer_suffix.c
+	$(CC) $(CFLAGS) -I. -o $@ holyd_lexer.c tools/test_lexer_suffix.c -lm
+	./$@
+
 test_softfloat: wubu_softfloat.c wubu_softfloat.h tools/test_softfloat.c
 	$(CC) $(CFLAGS) -I. -o $@ tools/test_softfloat.c wubu_softfloat.c -lm
 	./$@

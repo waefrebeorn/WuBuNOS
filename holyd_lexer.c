@@ -319,16 +319,17 @@ static HDTokenType hd_scan_number(HDLexer *lex) {
     }
 
     if (is_hex) {
-        /* Scan suffix to detect unsigned and long */
-        int is_unsigned = 0, is_long = 0;
+        /* Scan suffix to detect unsigned and long/long-long */
+        int is_unsigned = 0, nl = 0;
         while (!hd_is_at_end(lex)) {
             char c = hd_peek(lex);
-            if (c == 'L' || c == 'l') { is_long = 1; hd_advance(lex); }
+            if (c == 'L' || c == 'l') { nl++; hd_advance(lex); }
             else if (c == 'U' || c == 'u') { is_unsigned = 1; hd_advance(lex); }
             else break;
         }
         lex->tok.is_unsigned = is_unsigned;
-        lex->tok.is_long = is_long;
+        lex->tok.is_long = nl >= 1;
+        lex->tok.is_long_long = nl >= 2;
         /* Use strtoull always: strtoll saturates at LLONG_MAX for hex values
          * with bit 63 set (e.g. 0x8000000000000000LL -> 0x7FFFFFFFFFFFFFFF),
          * corrupting the bit pattern. strtoull parses the full 64 bits; the
@@ -336,15 +337,23 @@ static HDTokenType hd_scan_number(HDLexer *lex) {
          * correct signed value for a bit pattern with the high bit set. */
         lex->tok.int_val = (int64_t)strtoull(buf, NULL, 16);
     } else if (is_bin) {
-        lex->tok.is_unsigned = 0;
-        lex->tok.is_long = 0;
-        lex->tok.int_val = strtoll(buf, NULL, 2);
-    } else {
-        /* Scan suffix to detect unsigned and long */
-        int is_unsigned = 0, is_long = 0;
+        int is_unsigned = 0, nl = 0;
         while (!hd_is_at_end(lex)) {
             char c = hd_peek(lex);
-            if (c == 'L' || c == 'l') { is_long = 1; hd_advance(lex); }
+            if (c == 'L' || c == 'l') { nl++; hd_advance(lex); }
+            else if (c == 'U' || c == 'u') { is_unsigned = 1; hd_advance(lex); }
+            else break;
+        }
+        lex->tok.is_unsigned = is_unsigned;
+        lex->tok.is_long = nl >= 1;
+        lex->tok.is_long_long = nl >= 2;
+        lex->tok.int_val = (int64_t)strtoull(buf, NULL, 2);
+    } else {
+        /* Scan suffix to detect unsigned and long/long-long */
+        int is_unsigned = 0, nl = 0;
+        while (!hd_is_at_end(lex)) {
+            char c = hd_peek(lex);
+            if (c == 'L' || c == 'l') { nl++; hd_advance(lex); }
             else if (c == 'U' || c == 'u') { is_unsigned = 1; hd_advance(lex); }
             else break;
         }
@@ -380,7 +389,8 @@ static HDTokenType hd_scan_number(HDLexer *lex) {
             }
         }
         lex->tok.is_unsigned = is_unsigned;
-        lex->tok.is_long = is_long;
+        lex->tok.is_long = nl >= 1;
+        lex->tok.is_long_long = nl >= 2;
         lex->tok.int_val = is_unsigned ? (int64_t)strtoull(buf, NULL, 10) : strtoll(buf, NULL, 10);
     }
     return hd_make_token(lex, HD_TOK_INT);
@@ -608,4 +618,10 @@ int hd_lex_expect(HDLexer *lex, HDTokenType expected) {
         return -1;
     }
     return 0;
+}
+
+int hd_int_width(const HDToken *t) {
+    if (!t) return 0;
+    /* SysV x86-64: long is 64 bits. LL is always at least 64 in C11. */
+    return (t->is_long_long || t->is_long) ? 64 : 32;
 }

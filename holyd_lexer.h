@@ -13,4 +13,8 @@ HDTokenType hd_lex_next(HDLexer *lex);
 HDTokenType hd_lex_peek(HDLexer *lex);
 int hd_lex_expect(HDLexer *lex, HDTokenType expected);
 
+/* Width classification for integer literals: 64 when a long/long-long suffix
+ * is present, else 32. (HolyD targets SysV x86-64, where long == 64 bits.) */
+int hd_int_width(const HDToken *t);
+
 #endif /* WUBUNOS_HOLYC_LEXER_H */
