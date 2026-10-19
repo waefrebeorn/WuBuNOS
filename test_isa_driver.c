@@ -573,6 +573,53 @@ static void test_rex_selection(void)
     free(code);
 }
 
+
+/* -- goal 170: rbp-relative frames, no red zone ---------------------- */
+static int mem_rsp, mem_rbp_pos, mem_rbp_neg;
+static void frame_check(const x86_insn_t *in, void *user)
+{
+    (void)user;
+    if (!in->has_modrm || in->modrm_mod == 3) return;   /* register operand */
+    if (in->modrm_rm == 4) { mem_rsp++; return; }        /* SIB: rsp/r12 base */
+    if (in->modrm_rm == 5) {                             /* rbp/r13 base */
+        if (in->disp < 0) mem_rbp_neg++; else mem_rbp_pos++;
+    }
+}
+
+static void test_frame_layout(void)
+{
+    printf("\n[Frame layout]\n");
+    wubu_mir_prog_t prog;
+    memset(&prog, 0, sizeof prog);
+    /* More live values than registers, so the allocator must spill and the
+     * locals actually reach the frame. */
+    enum { NL = 16 };
+    wubu_mir_instr_t ins[2 * NL + 2];
+    memset(ins, 0, sizeof ins);
+    int k = 0;
+    for (int i = 0; i < NL; i++) {
+        ins[k].op = MIR_CONST; ins[k].dst = (wubu_vr_t)i; ins[k].imm = 100 + i; k++;
+    }
+    for (int i = 1; i < NL; i++) {
+        ins[k].op = MIR_ADD; ins[k].dst = 0;
+        ins[k].a = 0; ins[k].b = (wubu_vr_t)i; k++;
+    }
+    ins[k].op = MIR_RET; ins[k].a = 0; k++;
+    prog.ins = ins; prog.n = (size_t)k;
+
+    uint8_t *code = NULL; size_t n = 0;
+    int rc = wubu_isa_x86_64_compile(&prog, &code, &n);
+    mem_rsp = mem_rbp_pos = mem_rbp_neg = 0;
+    int walk = (rc == 0 && code) ? x86_decode_all(code, n, frame_check, NULL) : -1;
+
+    total++;
+    int ok = (walk > 0 && mem_rsp == 0 && mem_rbp_pos == 0 && mem_rbp_neg > 0);
+    if (ok) pass++; else { fail++; printf("  FAIL: frame layout\n"); }
+    printf("  %-46s insns=%d rsp=%d rbp+=%d rbp-=%d\n",
+           "locals live at [rbp-N], never in a red zone", walk, mem_rsp, mem_rbp_pos, mem_rbp_neg);
+    free(code);
+}
+
 int main(void)
 {
     printf("=== ISA DRIVER SPACE TEST ===\n\n");
@@ -616,6 +663,7 @@ int main(void)
     printf("\n");
     test_imm_selection();
     test_rex_selection();
+    test_frame_layout();
     printf("\n");
 
     printf("=== %s: %d/%d passed ===\n",

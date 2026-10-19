@@ -3,7 +3,7 @@
 
 #include <string.h>
 
-static int modrm_len(const x86_insn_t *in, const uint8_t *p, size_t avail)
+static int modrm_len(const x86_insn_t *in, const uint8_t *p, size_t avail, int *disp_at, int *disp_n)
 {
     if (!in->has_modrm) return 0;
     int mod = in->modrm_mod, rm = in->modrm_rm;
@@ -14,9 +14,9 @@ static int modrm_len(const x86_insn_t *in, const uint8_t *p, size_t avail)
         int base = p[0] & 7;
         if (mod == 0 && base == 5) len += 4;   /* disp32 */
     }
-    if (mod == 0 && rm == 5) len += 4;    /* RIP-relative disp32 */
-    if (mod == 1) len += 1;
-    if (mod == 2) len += 4;
+    if (mod == 0 && rm == 5) { *disp_at = len; *disp_n = 4; len += 4; }
+    if (mod == 1) { *disp_at = len; *disp_n = 1; len += 1; }
+    if (mod == 2) { *disp_at = len; *disp_n = 4; len += 4; }
     return len;
 }
 
@@ -71,12 +71,24 @@ int x86_decode_one(const uint8_t *code, size_t n, size_t off, x86_insn_t *out)
     }
 
     size_t avail = n - i;
-    int ml = modrm_len(out, code + i, avail);
+    int disp_at = -1, disp_n = 0;
+    int ml = modrm_len(out, code + i, avail, &disp_at, &disp_n);
     if (ml < 0) return -1;
     if ((size_t)ml > avail) return -1;
     if (out->has_modrm && out->modrm_mod != 3 && out->modrm_rm == 4 && ml >= 1) {
         out->has_sib = 1;
         out->sib = code[i];
+    }
+    if (disp_n == 1 && disp_at >= 0) {
+        out->disp = (int8_t)code[i + (size_t)disp_at];
+        out->disp_bytes = 1;
+    } else if (disp_n == 4 && disp_at >= 0) {
+        int32_t d = (int32_t)((uint32_t)code[i + (size_t)disp_at] |
+                    ((uint32_t)code[i + (size_t)disp_at + 1] << 8) |
+                    ((uint32_t)code[i + (size_t)disp_at + 2] << 16) |
+                    ((uint32_t)code[i + (size_t)disp_at + 3] << 24));
+        out->disp = d;
+        out->disp_bytes = 4;
     }
     i += (size_t)ml;
 

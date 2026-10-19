@@ -19,6 +19,8 @@ typedef struct {
     int      has_sib;
     uint8_t  sib;
     int      imm_bytes;
+    int      disp_bytes;   /* 0, 1 or 4 */
+    int64_t  disp;         /* sign-extended displacement */
 } x86_insn_t;
 
 /* Decode one instruction at code+off. Returns bytes consumed, 0 at the end of
