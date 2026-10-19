@@ -444,3 +444,7 @@ struct HDCompiler {
 };
 
 #endif /* WUBUNOS_HOLYC_TYPES_H */
+
+/* F32 and F64 are both floating point; sites that mean "is this a float"
+ * must test both, not F64 alone. */
+#define HD_IS_FLOAT_KIND(k) ((k) == HD_TYPE_F64 || (k) == HD_TYPE_F32)
