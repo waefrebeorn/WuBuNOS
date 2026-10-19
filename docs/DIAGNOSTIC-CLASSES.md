@@ -107,3 +107,46 @@ Two lessons from doing it:
 Note also that several samples from the first classification (including
 extern_gcc_050237_930621_1) now parse with **0 errors**, so fix-then-reclassify
 is the correct loop rather than trusting one snapshot.
+
+## Profile at 74.0% (after the parse fixes)
+
+```
+1975 / 2668 = 74.0%   errors 498
+```
+
+Top remaining pairs:
+
+| count | expected / got | sample |
+|---|---|---|
+| 221 | `;` / `)` | extern_gcc_050286_complex_2 |
+| 171 | `;` / `.` | gcc_torture_000037_pr30185 |
+| 111 | `;` / `+` | extern_gcc_050245_970217_1 |
+| 105 | `;` / `!` | extern_gcc_050286_complex_2 |
+| 85 | `;` / `<` | extern_gcc_050304_pr42614 |
+
+`extern_gcc_050286_complex_2` is `__complex__ double` with `1.0i` literals — the
+lexer has no imaginary suffix and the backend has no complex type, so that is out
+of scope, not a regression.
+
+The real next defect, reproduced minimally:
+
+```c
+typedef struct S { char a; } S;
+S foo (S x) { S z; return x; }     /* 5 errors */
+S foo (S x) { return x; }          /* 0 errors */
+```
+
+A local declaration `S z;` inside the body corrupts the parse of the PARAMETER
+list (first error is `expected ')' got 'x'` at the parameter name, then the K&R
+guard fires). So a body statement is rewinding or polluting parser state used by
+the parameter loop — a backtracking bug, not a type-system gap.
+
+## Tools that made this round possible
+
+- `HD_DIAG=2` writes each failing source to `/tmp/failcases/<name>.c`
+- `./gauntlet_v3 <file>` runs exactly one source through the suite path
+- `HD_DUMP_BUILD=<path>` writes the text `hd_build_mir` actually parses
+- `compile_diag <file> --dump-pp` / `--no-pp` separates preprocessor effects
+
+Without these, three attempts were spent debugging text that looked identical and
+was not.
