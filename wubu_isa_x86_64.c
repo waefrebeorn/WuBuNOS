@@ -597,7 +597,7 @@ static wubu_mir_prog_t *x86_remap_vrs(const wubu_mir_prog_t *p) {
     return rp;
 }
 
-static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size) {
+int wubu_isa_x86_64_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size) {
 #if !defined(__x86_64__)
     (void)p; (void)out; (void)out_size;
     return -1; /* cannot compile x86-64 on this host */
@@ -1991,7 +1991,7 @@ const wubu_isa_driver_t wubu_isa_x86_64 = {
     .name = "x86-64",
     .family = "native",
     .exec = WUBU_ISA_NATIVE,
-    .compile = x86_compile,
+    .compile = wubu_isa_x86_64_compile,
     .run = x86_run,
     .describe = x86_describe,
 };

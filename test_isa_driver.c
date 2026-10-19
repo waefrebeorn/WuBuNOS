@@ -472,6 +472,61 @@ static void test_call(void)
     wubu_mir_free(&prog);
 }
 
+
+/* -- goal 174: immediate selection ---------------------------------- */
+extern int wubu_isa_x86_64_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size);
+
+static int find_movabs(const uint8_t *code, size_t n)
+{
+    /* REX.W (0x48/0x49) then B8+rd => mov r64, imm64 */
+    for (size_t i = 0; i + 1 < n; i++)
+        if ((code[i] == 0x48 || code[i] == 0x49) && code[i+1] >= 0xB8 && code[i+1] <= 0xBF)
+            return 1;
+    return 0;
+}
+
+static int find_bytes(const uint8_t *code, size_t n, const uint8_t *pat, size_t plen)
+{
+    for (size_t i = 0; i + plen <= n; i++)
+        if (memcmp(code + i, pat, plen) == 0) return 1;
+    return 0;
+}
+
+static void test_imm_selection(void)
+{
+    printf("\n[Immediate selection]\n");
+
+    struct { int64_t imm; const uint8_t *pat; size_t len; const char *what; } cases[3];
+    const uint8_t c7[] = {0xC7};      /* REX.W + C7 /0 id */
+    const uint8_t movabs[] = {0xB8};  /* REX.W + B8+rd imm64 */
+
+    cases[0].imm = 0x1234;             cases[0].pat = c7;     cases[0].len = sizeof c7;     cases[0].what = "0x1234 uses C7 /0 id (imm32)";
+    cases[1].imm = 0x123456789ABCDEF0LL; cases[1].pat = movabs; cases[1].len = sizeof movabs; cases[1].what = "0x123456789ABCDEF0 uses movabs";
+    cases[2].imm = 0x80000000LL;       cases[2].pat = movabs; cases[2].len = sizeof movabs; cases[2].what = "0x80000000 stays movabs (C7 would sign-extend)";
+
+    for (int k = 0; k < 3; k++) {
+        wubu_mir_prog_t prog;
+        memset(&prog, 0, sizeof prog);
+        wubu_mir_instr_t ins[2];
+        memset(ins, 0, sizeof ins);
+        ins[0].op = MIR_CONST; ins[0].dst = 0; ins[0].imm = cases[k].imm;
+        ins[1].op = MIR_RET;   ins[1].a = 0;
+        prog.ins = ins; prog.n = 2; prog.n_funcs = 0;
+
+        uint8_t *code = NULL; size_t n = 0;
+        int rc = wubu_isa_x86_64_compile(&prog, &code, &n);
+        int hit = 0;
+        if (rc == 0 && code) {
+            hit = (k == 0) ? find_bytes(code, n, cases[k].pat, cases[k].len)
+                           : find_movabs(code, n);
+        }
+        total++;
+        if (hit) pass++; else { fail++; printf("  FAIL: %s\n", cases[k].what); }
+        printf("  %-46s rc=%d bytes=%zu %s\n", cases[k].what, rc, n, hit ? "match" : "MISS");
+        free(code);
+    }
+}
+
 int main(void)
 {
     printf("=== ISA DRIVER SPACE TEST ===\n\n");
@@ -512,6 +567,8 @@ int main(void)
     test_branch();
     printf("\n");
     test_describe();
+    printf("\n");
+    test_imm_selection();
     printf("\n");
 
     printf("=== %s: %d/%d passed ===\n",
