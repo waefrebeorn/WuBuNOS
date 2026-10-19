@@ -57,7 +57,10 @@ static int run_single_test_nofree(const char *source, int64_t expected) {
     wubu_mir_prog_t prog;
     memset(&prog, 0, sizeof(prog));
     int build_result = hd_build_mir(source, &prog);
-    if (build_result != 0) return 2;
+    if (build_result != 0) {
+        if (getenv("HD_DIAG")) fprintf(stderr, "diag: %s\n", hd_last_diag());
+        return 2;
+    }
     const wubu_isa_driver_t *drv = wubu_isa_find("x86-64");
     int64_t result = drv ? hd_run_prog(&prog, drv) : wubu_mir_interp(&prog);
     /* Linux exit codes are 8-bit (0-255). The expected values from the test
@@ -90,6 +93,7 @@ for (int i = start; i < end; i++) {
         signal(SIGILL, SIG_DFL);
         signal(SIGFPE, SIG_DFL);
         signal(SIGABRT, SIG_DFL);
+        if (getenv("HD_DIAG")) fprintf(stderr, "TEST %s\n", all_tests[i].name);
         int rc = run_single_test_nofree(all_tests[i].source, all_tests[i].expected);
         /* Write result to a per-test file */
         char tmpfile[256];
