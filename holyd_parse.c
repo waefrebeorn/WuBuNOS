@@ -2587,10 +2587,25 @@ void hd_parse_init(HDParser *p, HDLexer *lex) {
 HDASTNode *hd_parse_compilation_unit(HDParser *p) {
     HDASTNode *unit = hd_ast_new(HD_AST_BLOCK);
 
-    while (peek(p) != HD_TOK_EOF && !p->has_error) {
+    /* Error recovery: one bad declaration must not abort the file. Report the
+     * diagnostic, resynchronise at the next `;` (or the enclosing brace) and
+     * keep parsing, so N independent syntax errors yield N diagnostics. */
+    while (peek(p) != HD_TOK_EOF) {
+        int before = p->n_errors;
         HDASTNode *decl = hd_parse_decl(p);
         if (decl) hd_ast_add_stmt(unit, decl);
-        else break;
+        else if (p->n_errors == before && !p->has_error)
+            parse_error(p, "expected declaration");
+        if (p->has_error) {
+            if (p->fatal_error) break;          /* _Static_assert etc: cannot continue */
+            p->has_error = false;               /* keep n_errors, resume parsing */
+            while (peek(p) != HD_TOK_EOF && peek(p) != HD_TOK_SEMI &&
+                   peek(p) != HD_TOK_RBRACE && peek(p) != HD_TOK_LBRACE)
+                advance(p);
+            if (peek(p) == HD_TOK_SEMI) advance(p);
+            continue;
+        }
+        if (!decl) break;
     }
 
     return unit;
