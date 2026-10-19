@@ -131,3 +131,24 @@ Result: the repro parses with **0 diagnostics**, battery stays 142 PASS / 1 WRON
 and the gauntlet reads 1583 / 2668 (59.3%) with errors at 927 — the lowest error
 count seen (previous low 932), consistent with tests that used to time out in this
 loop now running to completion.
+
+## Final measurement: 541 hangs -> 0 across the whole corpus
+
+An earlier sweep of 4921 extracted test sources (timeout 2 s each) found **541
+files that never returned**. After the K&R fix, the struct-member progress guard,
+the `void` case and the fold-progress gate, the same sweep reports:
+
+```
+HANG  0
+CRASH 0
+```
+
+Every one of the 4921 sources now returns. The parser cannot hang on real C.
+
+Verification set after the changes:
+- battery **148 PASS / 0 WRONG / 0 CRASH**
+- `test_sse2_dadd` **10/10**
+- `make test` **200/200**
+- gauntlet **1583 / 2668 (59.3%)**, errors 930 — inside the measured noise band
+  (the gauntlet itself was never dominated by these hangs; they lived in the
+  multi-file torture/execution corpus, which the gauntlet skips)
