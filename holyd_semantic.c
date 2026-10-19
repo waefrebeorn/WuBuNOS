@@ -183,6 +183,15 @@ void hd_semantic_check(HDParser *p, HDASTNode *unit)
     if (!p || !unit) return;
 
     SemNames globals = {0};
+    /* Names a hosted C program is allowed to use without a declaration in the
+     * translation unit: the preprocessor strips #include, so these never appear
+     * as declarations even though the source legitimately uses them. */
+    static const char *const builtins[] = {
+        "stdout", "stderr", "stdin", "EOF", "NULL", "HUGE_VAL", "HUGE_VALF",
+        "EXIT_SUCCESS", "EXIT_FAILURE", "SEEK_SET", "SEEK_CUR", "SEEK_END",
+        "errno", "size_t", "ssize_t", "FILE", "va_list", NULL
+    };
+    for (int bi = 0; builtins[bi]; bi++) sem_add(&globals, builtins[bi]);
     SemFns fns = {0};
     sem_collect_decls(unit, &globals);
     sem_collect_fns(unit, &fns);
