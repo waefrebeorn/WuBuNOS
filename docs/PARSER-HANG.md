@@ -54,3 +54,24 @@ peeks without advancing at the closing brace.
 Next: grep the parse functions for loops whose body does not call `advance()` on
 every path (`while (peek(p) == X)` with a conditional body), starting with the
 function-body and initializer-list loops.
+
+## Frame identified
+
+With `-O0 -g -no-pie`, the probe reports the caller:
+
+```
+[parse-peek] spun at pos=1033 tok=81 '}' line=19 col=1 caller=0x40412c
+addr2line -> parse_type  holyd_parse.c:148
+```
+
+So the repeated `peek()` calls come from `parse_type`'s entry, i.e. a caller keeps
+re-entering `parse_type` without consuming the token. Guards added meanwhile:
+
+- `advance()` forces `HD_TOK_EOF` when the lexer position does not move, so no
+  loop that calls it can spin.
+- `hd_parse_compilation_unit` reports and advances when a declaration returns a
+  node without consuming (hard progress guarantee).
+
+Neither guard alone stops this repro, which is consistent with the spin being
+inside `parse_decl`'s declaration path rather than the unit loop. Battery is
+unchanged at 142 PASS / 1 WRONG (the known `float add` probe).

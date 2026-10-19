@@ -94,9 +94,10 @@ static HDTokenType peek(HDParser *p) {
      * peek() calls at one position. Reports where instead of hanging forever. */
     static unsigned long ticks;
     if (++ticks > 20000000UL) {
-        fprintf(stderr, "[parse-peek] spun at pos=%zu tok=%d '%s' line=%d col=%d\n",
+        fprintf(stderr, "[parse-peek] spun at pos=%zu tok=%d '%s' line=%d col=%d caller=%p\n",
                 (size_t)p->lex->pos, (int)p->lex->tok.type,
-                p->lex->tok.text, p->lex->line, p->lex->col);
+                p->lex->tok.text, p->lex->line, p->lex->col,
+                __builtin_return_address(0));
         fflush(stderr);
         exit(9);
     }
@@ -107,7 +108,13 @@ static HDTokenType peek(HDParser *p);
 
 static HDTokenType advance(HDParser *p) {
     HDTokenType t = p->lex->tok.type;
+    size_t pos_before = p->lex->pos;
     hd_lex_next(p->lex);
+    /* End of input safety: if the lexer stops moving, no parser loop can ever
+     * make progress, and any `while (peek != EOF)` recovery spins forever on the
+     * final token. Force EOF so every such loop terminates. */
+    if (p->lex->pos == pos_before && p->lex->tok.type == t)
+        p->lex->tok.type = HD_TOK_EOF;
     return t;
 }
 
@@ -2668,6 +2675,14 @@ HDASTNode *hd_parse_compilation_unit(HDParser *p) {
             continue;
         }
         if (!decl) break;
+        /* Hard progress guarantee: a declaration that returns a node without
+         * consuming a token would loop here forever (seen with a trailing '}'
+         * at end of input). Report and move on. */
+        if (p->lex->pos == pos_before) {
+            parse_error(p, "unexpected token");
+            p->has_error = false;
+            advance(p);
+        }
     }
 
     return unit;
