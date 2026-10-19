@@ -1643,6 +1643,9 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
         return 0;
     }
     case HD_AST_VAR_DECL: {
+        if (getenv("MIRDBG"))
+            fprintf(stderr, "[decl] %s n_vars=%d scopes=%d\n",
+                    n->ident, g->n_vars, g->n_scopes);
         int is_uns = 0;
         int arr_size = 0;
         int is_struct_var = 0;

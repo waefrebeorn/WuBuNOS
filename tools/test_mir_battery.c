@@ -180,14 +180,16 @@ static int run_isolated(const Probe *probe)
     return (result == expect) ? 0 : 1;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+    const char *filter = argc > 1 ? argv[1] : NULL;
     printf("=== MIR PIPELINE SELF-HOSTING BATTERY ===\n");
     printf("HolyD → MIR → interpreter (oracle)\n\n");
 
     int pass = 0, wrong = 0, crash = 0;
 
     for (int i = 0; i < NPROBES; i++) {
+        if (filter && !strstr(PROBES[i].name, filter)) continue;
         int rc = run_isolated(&PROBES[i]);
         if (rc == 0) {
             pass++;
