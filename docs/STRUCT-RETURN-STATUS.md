@@ -56,3 +56,31 @@ closing individual entries.
 Write a probe that prints actual vs expected for `struct return`, then read the
 `MIR_RET`/`MIR_CALL` paths in `holyd_mir_eval.c`. Do not touch `MIR_FRET` until
 the struct convention is settled — the two interact through v0.
+
+## Actual values (measured, not assumed)
+
+The harness now prints the computed value on failure (`g_last_result`). That turns
+two vague families into two precise defects:
+
+```
+WRONG struct return            expect 7,        got 0
+WRONG struct return 2m         expect 49,       got 0
+WRONG struct return member     expect 42,       got 0
+WRONG struct return member b   expect 7,        got 0
+WRONG struct return chain      expect 99,       got 0
+WRONG struct in struct return  expect 77,       got 0
+WRONG struct return global     expect 55,       got 0
+
+WRONG float add                expect 1082130432, got 4616189618054758400
+```
+
+**Struct returns evaluate to exactly 0** — the returned buffer address never
+reaches the caller (or v0 is overwritten by the epilogue). This is one defect for
+seven cases, as suspected.
+
+**Float arithmetic is integer arithmetic.** `1082130432` is `0x40800000` = `4.0f`;
+`4616189618054758400` is `0x4008000000000000` = `3.0` as a double. So `1.5 + 2.5`
+was computed as `1 + 2`, and the result was then reinterpreted as a double
+bit-pattern. Float literals are being parsed/truncated to integers in this path —
+a lexer/constant-pool issue, not an ABI one, and separate from the `xmm0`
+return gap in `docs/FLOAT-RETURN-124.md`.

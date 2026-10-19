@@ -151,6 +151,8 @@ static const Probe PROBES[] = {
 
 #define NPROBES ((int)(sizeof(PROBES)/sizeof(PROBES[0])) - 1)
 
+static long long g_last_result;
+
 static int run_isolated(const Probe *probe)
 {
     const char *src = probe->src;
@@ -174,6 +176,7 @@ static int run_isolated(const Probe *probe)
     waitpid(pid, &status, 0);
     if (got != (int)sizeof(result)) return 2;
     if (WIFSIGNALED(status)) return 2;
+    g_last_result = result;
     return (result == expect) ? 0 : 1;
 }
 
@@ -191,7 +194,8 @@ int main(void)
             printf("  PASS  %-22s\n", PROBES[i].name);
         } else if (rc == 1) {
             wrong++;
-            printf("  WRONG %-22s (expect %lld)\n", PROBES[i].name, PROBES[i].expect);
+            printf("  WRONG %-22s (expect %lld, got %lld)\n", PROBES[i].name,
+                   PROBES[i].expect, g_last_result);
         } else {
             crash++;
             printf("  CRASH %-22s\n", PROBES[i].name);
