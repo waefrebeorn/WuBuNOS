@@ -6475,6 +6475,16 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
         return -1;
     }
 
+    /* Semantic pass before codegen: unresolved identifiers and call arity.
+     * Conservative by design (scopes flattened per function), so it can miss an
+     * error but should not invent one. */
+    hd_semantic_check(&parse, ast);
+    if (parse.n_errors > 0) {
+        hd_ast_free(ast);
+        free(pp);
+        return -1;
+    }
+
     wubu_mir_init(prog);
     HDMirGen g;
     memset(&g, 0, sizeof(g));

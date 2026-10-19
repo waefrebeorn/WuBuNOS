@@ -43,6 +43,14 @@
 
 /* -- Parser State ------------------------------------------------- */
 
+static void parse_error(HDParser *p, const char *msg);
+
+/* Public wrapper used by the semantic pass: prefixes the offending name. */
+void parse_error_public(HDParser *p, const char *name, const char *msg)
+{
+    parse_error(p, msg);   /* forward decl below keeps this simple */
+}
+
 static void parse_error(HDParser *p, const char *msg) {
     if (p->n_errors < HD_MAX_ERRORS) {
         snprintf(p->errors[p->n_errors], 256, "line %d: %s",

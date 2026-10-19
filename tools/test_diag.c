@@ -23,7 +23,8 @@ static int count_errors(const char *src, char lines_out[][256], int max_out)
     hd_lex_init(&lex, src);
     HDParser p;
     hd_parse_init(&p, &lex);
-    (void)hd_parse_compilation_unit(&p);
+    HDASTNode *unit = hd_parse_compilation_unit(&p);
+    hd_semantic_check(&p, unit);
     int n = p.n_errors;
     for (int i = 0; i < n && i < max_out; i++)
         snprintf(lines_out[i], 256, "%s", p.errors[i]);

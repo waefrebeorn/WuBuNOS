@@ -13,6 +13,8 @@ HDASTNode *hd_parse_expr(HDParser *p);
 HDASTNode *hd_parse_stmt(HDParser *p);
 HDASTNode *hd_parse_decl(HDParser *p);
 HDASTNode *hd_parse_compilation_unit(HDParser *p);
+void parse_error_public(HDParser *p, const char *name, const char *msg);
+void hd_semantic_check(HDParser *p, HDASTNode *unit);
 size_t hd_type_size(const HDType *t);
 /* Bytes to RESERVE for storage (cell-inflated for structs); see impl. */
 size_t hd_type_alloc_size(const HDType *t);
