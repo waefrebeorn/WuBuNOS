@@ -121,7 +121,7 @@ int64_t wubu_mir_interp(const wubu_mir_prog_t *p)
      * gauntlet targets scored an identical 79/247 because they all call
      * wubu_mir_interp. Naming the enum constant turns a dropped or
      * reordered opcode into a compile error instead of a silent miscompile. */
-    enum { MIR_LABEL_SLOTS = 105 };
+    enum { MIR_LABEL_SLOTS = 106 };
     static void *labels[MIR_LABEL_SLOTS] = {
         [MIR_CONST           ] = &&op_const, /* 1 */
         [MIR_ADD             ] = &&op_add, /* 2 */
@@ -136,6 +136,7 @@ int64_t wubu_mir_interp(const wubu_mir_prog_t *p)
         [MIR_XOR             ] = &&op_xor, /* 11 */
         [MIR_SHL             ] = &&op_shl, /* 12 */
         [MIR_SHR             ] = &&op_shr, /* 13 */
+        [MIR_SHR_U           ] = &&op_shr_u,
         [MIR_NEG             ] = &&op_neg, /* 14 */
         [MIR_NOT             ] = &&op_not, /* 15 */
         [MIR_EQ              ] = &&op_eq, /* 16 */
@@ -292,6 +293,9 @@ op_shl:
 op_shr:
     vr[in->dst] = vr[in->a] >> (vr[in->b] & 63);
     DISPATCH();
+op_shr_u:
+    vr[in->dst] = (uint64_t)vr[in->a] >> (vr[in->b] & 63);
+    DISPATCH();
 op_neg:
     vr[in->dst] = -vr[in->a];
     DISPATCH();
@@ -443,6 +447,14 @@ op_fle:
     DISPATCH();
     /* f64: bits fill the full int64 register */
 op_dadd:
+    if (getenv("MIRDBG")) {
+        double da, db;
+        memcpy(&da, &vr[in->a], sizeof da);
+        memcpy(&db, &vr[in->b], sizeof db);
+        fprintf(stderr, "[dadd] a=%llx(%.4f) b=%llx(%.4f)\n",
+                (unsigned long long)vr[in->a], da,
+                (unsigned long long)vr[in->b], db);
+    }
     vr[in->dst] = (int64_t)wubu_sf_f64_add((uint64_t)vr[in->a], (uint64_t)vr[in->b]);
     DISPATCH();
 op_dsub:
