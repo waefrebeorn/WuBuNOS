@@ -727,9 +727,12 @@ static HDType *parse_type(HDParser *p) {
      * The lexer maps `signed` to the same token as `int` and `unsigned` to
      * `unsigned int`, so a second type keyword immediately following means the
      * pair is one specifier and the second keyword carries the width. */
-    if ((t->kind == HD_TYPE_I32 || t->kind == HD_TYPE_U32) &&
+    if ((t->kind == HD_TYPE_I32 || t->kind == HD_TYPE_U32 ||
+         t->kind == HD_TYPE_I16 || t->kind == HD_TYPE_U16 ||
+         t->kind == HD_TYPE_I64 || t->kind == HD_TYPE_U64) &&
         peek(p) >= HD_KW_I0 && peek(p) <= HD_KW_BOOL) {
-        int was_unsigned = (t->kind == HD_TYPE_U32);
+        int was_unsigned = (t->kind == HD_TYPE_U32 || t->kind == HD_TYPE_U16 ||
+                            t->kind == HD_TYPE_U64);
         HDType *inner = parse_type(p);
         if (was_unsigned) {
             switch (inner->kind) {
