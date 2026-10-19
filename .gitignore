@@ -17,6 +17,7 @@ gauntlet_output
 test_single
 test_diag
 test_lexer_suffix
+test_sse2_dadd
 test_gauntlet_output
 
 # Test / bench / debug binaries (untrack; build artifacts)
