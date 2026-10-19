@@ -74,3 +74,22 @@ probe passes. `test_mir_battery` is 126 PASS / 0 WRONG.
 Not yet done: `double`/`float` mixed expressions promote by the f64 path only,
 and f32 storage still occupies a full 8-byte cell with the value narrowed on
 expression evaluation rather than on store.
+
+## Current state (float enabled)
+
+`float` maps to `HD_KW_F32` again, and the blocking reason is gone: 38 sites in
+`holyd_mir_eval.c` that tested `kind == HD_TYPE_F64` now call
+`HD_IS_FLOAT_KIND(kind)`, which accepts F64 or F32. Nothing in the file still
+compares against F64 alone.
+
+Measured:
+- `sizeof(float)` = 4, `sizeof(double)` = 8
+- `float a=1.5; float b=2.5; a+b;` = `0x40800000` (4.0f)
+- `test_mir_battery` **148 PASS / 0 WRONG** — fully green
+- `make test` **200/200**
+- gauntlet **1583 / 2668 (59.3%)**, errors 927 — identical to the run before the
+  sweep, so single precision costs nothing
+
+Still open (unchanged): f32 storage occupies a full 8-byte cell narrowed on
+evaluation rather than on store, and mixed float/double expressions take the f64
+path only.
