@@ -63,7 +63,7 @@ static const HDKeyword hd_keywords[] = {
     {"unsigned", HD_KW_U32},
     {"short",    HD_KW_I16},
     {"char",     HD_KW_U8},
-    {"float",    HD_KW_F32},
+    {"float",    HD_KW_F64},
     {"double",   HD_KW_F64},
     {"bool",     HD_KW_BOOL},
     {"_Bool",    HD_KW_BOOL},
