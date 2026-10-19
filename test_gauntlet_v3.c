@@ -58,7 +58,18 @@ static int run_single_test_nofree(const char *name, const char *source, int64_t 
     memset(&prog, 0, sizeof(prog));
     int build_result = hd_build_mir(source, &prog);
     if (build_result != 0) {
-        if (getenv("HD_DIAG")) fprintf(stderr, "diag %s: %s\n", name ? name : "?", hd_last_diag());
+        if (getenv("HD_DIAG")) {
+            fprintf(stderr, "diag %s: %s\n", name ? name : "?", hd_last_diag());
+            /* HD_DIAG=2 also saves the exact source the harness ran. Extracting a
+             * test by name from the suite files has produced text that does not
+             * match what is executed, which wastes a debugging cycle every time. */
+            if (getenv("HD_DIAG")[0] == '2' && name) {
+                char path[256];
+                snprintf(path, sizeof path, "/tmp/failcases/%s.c", name);
+                FILE *fp = fopen(path, "wb");
+                if (fp) { fwrite(source, 1, strlen(source), fp); fclose(fp); }
+            }
+        }
         return 2;
     }
     const wubu_isa_driver_t *drv = wubu_isa_find("x86-64");

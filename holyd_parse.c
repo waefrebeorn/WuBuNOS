@@ -1291,7 +1291,11 @@ static HDASTNode *parse_cast(HDParser *p) {
         /* Check if next token is a type keyword or identifier (typedef name) */
         bool is_type = false;
         HDTokenType tok = peek(p);
-        if (tok == HD_KW_I8 || tok == HD_KW_I16 || tok == HD_KW_I32 ||
+        /* Qualifiers start a type too: `(volatile unsigned short*)0x7f14` and
+         * `(const char*)0`. Omitting them here made the cast look like a
+         * parenthesized expression and the parse died at the base type. */
+        if (tok == HD_KW_CONST || tok == HD_KW_VOLATILE || tok == HD_KW_I0 ||
+            tok == HD_KW_I8 || tok == HD_KW_I16 || tok == HD_KW_I32 ||
             tok == HD_KW_I64 || tok == HD_KW_U0 || tok == HD_KW_U8 || tok == HD_KW_U16 ||
             tok == HD_KW_U32 || tok == HD_KW_U64 || tok == HD_KW_F64 ||
             tok == HD_KW_BOOL || tok == HD_KW_STRUCT || tok == HD_KW_CLASS || tok == HD_KW_UNION ||
