@@ -2605,9 +2605,15 @@ HDASTNode *hd_parse_compilation_unit(HDParser *p) {
         if (p->has_error) {
             if (p->fatal_error) break;          /* _Static_assert etc: cannot continue */
             p->has_error = false;               /* keep n_errors, resume parsing */
-            while (peek(p) != HD_TOK_EOF && peek(p) != HD_TOK_SEMI &&
-                   peek(p) != HD_TOK_RBRACE && peek(p) != HD_TOK_LBRACE)
-                advance(p);
+            /* Only resynchronise when the failing declaration did NOT stop on a
+             * boundary. Skipping unconditionally ate the next declaration, so a
+             * file with three bad initialisers reported two. */
+            if (peek(p) != HD_TOK_SEMI && peek(p) != HD_TOK_RBRACE &&
+                peek(p) != HD_TOK_LBRACE && peek(p) != HD_TOK_EOF) {
+                while (peek(p) != HD_TOK_EOF && peek(p) != HD_TOK_SEMI &&
+                       peek(p) != HD_TOK_RBRACE && peek(p) != HD_TOK_LBRACE)
+                    advance(p);
+            }
             if (peek(p) == HD_TOK_SEMI) advance(p);
             continue;
         }
