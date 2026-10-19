@@ -89,7 +89,7 @@ GAUN    = test_gauntlet/wubu_test_gauntlet.c test_gauntlet_runner.c \
 all: test_isa_driver test_mir_opt
 
 # ISA driver differential test (10 interpreter-based drivers)
-test_isa_driver: $(MIR) wubu_tgemm_avx512.o $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) test_isa_driver.c jit_stub.c jit_stubs_arm64.c
+test_isa_driver: $(MIR) wubu_tgemm_avx512.o $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) test_isa_driver.c x86_decode.c jit_stub.c jit_stubs_arm64.c
 	$(CC) $(CFLAGS) -I. $^ $(LDFLAGS) -o $@
 
 # MIR optimizer test

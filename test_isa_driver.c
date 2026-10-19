@@ -15,6 +15,7 @@
 #include "wubu_mir.h"
 #include "wubu_isa_driver.h"
 #include <stdio.h>
+#include "x86_decode.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -527,6 +528,51 @@ static void test_imm_selection(void)
     }
 }
 
+
+/* -- goal 173: REX selection ----------------------------------------- */
+static int rex_bad;
+static int rex_seen;
+static void rex_check(const x86_insn_t *in, void *user)
+{
+    (void)user;
+    if (in->has_modrm) {
+        if (in->modrm_rm >= 8 && !in->rex_b) rex_bad++;
+        if (in->modrm_reg >= 8 && !in->rex_r) rex_bad++;
+    }
+    if (in->rex && (in->rex_r || in->rex_b || in->rex_w)) rex_seen++;
+}
+
+static void test_rex_selection(void)
+{
+    printf("\n[REX selection]\n");
+    enum { N = 12 };
+    wubu_mir_prog_t prog;
+    memset(&prog, 0, sizeof prog);
+    wubu_mir_instr_t ins[2 * N + 2];
+    memset(ins, 0, sizeof ins);
+    int k = 0;
+    for (int i = 0; i < N; i++) {
+        ins[k].op = MIR_CONST; ins[k].dst = (wubu_vr_t)i; ins[k].imm = 0x1000 + i; k++;
+    }
+    for (int i = 1; i < N; i++) {
+        ins[k].op = MIR_ADD; ins[k].dst = (wubu_vr_t)i;
+        ins[k].a = (wubu_vr_t)(i - 1); ins[k].b = (wubu_vr_t)i; k++;
+    }
+    ins[k].op = MIR_RET; ins[k].a = (wubu_vr_t)(N - 1); k++;
+    prog.ins = ins; prog.n = (size_t)k;
+
+    uint8_t *code = NULL; size_t n = 0;
+    int rc = wubu_isa_x86_64_compile(&prog, &code, &n);
+    rex_bad = 0; rex_seen = 0;
+    int walk = (rc == 0 && code) ? x86_decode_all(code, n, rex_check, NULL) : -1;
+
+    total++;
+    int ok = (walk > 0 && rex_bad == 0 && rex_seen > 0);
+    if (ok) pass++; else { fail++; printf("  FAIL: REX selection\n"); }
+    printf("  %-46s insns=%d rex=%d bad=%d\n", "extended regs carry their REX bit", walk, rex_seen, rex_bad);
+    free(code);
+}
+
 int main(void)
 {
     printf("=== ISA DRIVER SPACE TEST ===\n\n");
@@ -569,6 +615,7 @@ int main(void)
     test_describe();
     printf("\n");
     test_imm_selection();
+    test_rex_selection();
     printf("\n");
 
     printf("=== %s: %d/%d passed ===\n",
