@@ -1569,6 +1569,9 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
     if (!n) return 0;
     switch (n->kind) {
     case HD_AST_BLOCK: {
+        if (getenv("MIRDBG"))
+            fprintf(stderr, "[block] stmts=%u no_scope_pop=%d n_vars=%d\n",
+                    n->n_stmts, n->no_scope_pop, g->n_vars);
         /* Push scope for block-level variable shadowing.
          * All blocks (including function body) get a scope so that
          * inner blocks can shadow outer variables correctly. */
