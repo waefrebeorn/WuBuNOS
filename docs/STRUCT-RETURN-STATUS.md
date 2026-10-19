@@ -122,3 +122,27 @@ destroys its result.
 
 Option 2 is the smallest change and the one the comment in `HD_AST_RETURN`
 already implies.
+
+## Why `sizeof(s)` is 16 for two ints (design limit, not a maths bug)
+
+Struct layout here is **cell-granular**: `mir_struct_t.total_size` counts int64
+cells, and every member is rounded up to a whole cell (`hd_parse.c` sets
+`type->size` per member). So `struct S{int a;int b;}` occupies 2 cells = 16
+bytes, and `sizeof(s)` correctly reports the storage it actually has.
+
+Measured: reverting only the `sizeof(typedef-name)` change leaves both
+`sizeof expr struct` and `sizeof in expr` failing identically, so they are
+pre-existing and unrelated to that fix (PASS 114 vs 115 with it).
+
+Consequences:
+- `sizeof(struct{char;int;double}) == 16` passes because 3 cells is also the
+  padded C size — the two models agree by coincidence there.
+- `sizeof(int[10]) == 40` passes because arrays scale cells to bytes explicitly.
+- Two `int`s disagree because C packs them into 8 bytes while this model gives
+  each member a full 8-byte cell.
+
+Making these byte-exact is a **struct-layout change** (member offsets in bytes,
+alignment/padding, then cells = ceil(bytes/8)), not a `sizeof` tweak. It also
+determines whether `struct in struct return` can copy nested members correctly,
+since the arena copy loop is driven by `total_size`. Until then both probes stay
+OPEN with this note as the reason.
