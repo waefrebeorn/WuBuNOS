@@ -86,6 +86,13 @@ static void sem_collect_decls(HDASTNode *n, SemNames *out)
         for (int i = 0; i < count; i++) sem_collect_decls(list[i], out);
         if (n->kind == HD_AST_FUNC_DECL && n->body) sem_collect_decls(n->body, out);
     }
+    if (n->kind == HD_AST_FOR) {
+        /* `for (int i = 0; ...)` introduces i for the loop body. */
+        sem_collect_decls(n->init_expr, out);
+        sem_collect_decls(n->cond, out);
+        sem_collect_decls(n->update, out);
+        sem_collect_decls(n->body, out);
+    }
     sem_collect_decls(n->child, out);
     sem_collect_decls(n->left, out);
     sem_collect_decls(n->right, out);
@@ -141,6 +148,10 @@ static void sem_check_expr(HDParser *p, HDASTNode *n, const SemNames *scope,
                            const SemNames *globals, SemFns *fns)
 {
     if (!n) return;
+    if (n->kind == HD_AST_VAR_DECL) {   /* declaration, not a use */
+        sem_check_expr(p, n->init, scope, globals, fns);
+        return;
+    }
     if (n->kind == HD_AST_IDENT) {
         if (n->ident[0] && !sem_has(scope, n->ident) && !sem_has(globals, n->ident))
             parse_error_public(p, n->ident, "use of undeclared identifier");
@@ -153,7 +164,9 @@ static void sem_check_expr(HDParser *p, HDASTNode *n, const SemNames *scope,
         if (f && !f->variadic && n->n_args != f->n_params)
             parse_error_public(p, callee, "wrong number of arguments");
     }
-    sem_check_expr(p, n->callee, scope, globals, fns);
+    /* A callee name is deliberately NOT checked here: calling a function that
+     * was never declared is a different diagnostic, and K&R-era tests rely on
+     * it (implicit library functions). */
     sem_check_expr(p, n->left, scope, globals, fns);
     sem_check_expr(p, n->right, scope, globals, fns);
     sem_check_expr(p, n->child, scope, globals, fns);
