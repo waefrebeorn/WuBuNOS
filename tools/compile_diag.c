@@ -35,6 +35,14 @@ int main(int argc, char **argv)
     char *pp = wubu_preprocess(src);
     const char *text = pp ? pp : src;
 
+    /* --dump-pp: print the preprocessed translation unit and stop. This lives
+     * here (not in a standalone harness) because this binary links the whole
+     * front end the way the compiler does. */
+    if (argc > 2 && !strcmp(argv[2], "--dump-pp")) {
+        fputs(text, stdout);
+        return 0;
+    }
+
     HDLexer lex;
     hd_lex_init(&lex, text);
     HDParser p;
