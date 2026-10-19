@@ -20,6 +20,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* struct-return arena (reserved before globals_end so the call-frame
+ * restore does not wipe it) */
+static wubu_vr_t g_sret_arena_vr;
+static int       g_sret_slot;
+#define SRET_SLOTS 64
+#define SRET_CELLS 32
+
 /* MIR generation state */
 #define MIRGEN_MAX_VARS 256
 typedef struct {
@@ -2496,7 +2503,10 @@ extern_done:
                 }
                 /* Allocate a persistent buffer in the MIR's global memory space.
                  * Unlike stack-allocated locals, this survives the callee's return. */
-                wubu_vr_t buf_addr = wubu_mir_alloc(g->prog, (int64_t)ret_struct_size * 8);
+                if (ret_struct_size > SRET_CELLS) ret_struct_size = SRET_CELLS;
+                int slot = g_sret_slot++ % SRET_SLOTS;
+                wubu_vr_t buf_addr = wubu_mir_binop(g->prog, MIR_ADD, g_sret_arena_vr,
+                        wubu_mir_const(g->prog, (int64_t)slot * SRET_CELLS * 8));
                 /* Copy ret_struct_size cells from src_addr to buf_addr. */
                 wubu_vr_t src_base = mir_new_vr(g);
                 wubu_mir_mov_to(g->prog, src_base, src_addr);
@@ -4166,7 +4176,13 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
     case HD_AST_SHR: {
         wubu_vr_t a = mir_gen_expr(g, n->left);
         wubu_vr_t b = mir_gen_expr(g, n->right);
-        wubu_vr_t r = wubu_mir_binop(g->prog, MIR_SHR, a, b);
+        /* C shift semantics: result type = left operand type (after promotion).
+         * For an UNSIGNED left operand, >> must be LOGICAL (zero-fill), so use
+         * MIR_SHR_U; MIR_SHR is arithmetic (sign-extending sar). Without this,
+         * unsigned values with the top bit set shift wrongly (e.g. a struct
+         * member `unsigned long` near 2^63). */
+        int is_unsigned = mir_operand_is_unsigned(g, n->left);
+        wubu_vr_t r = wubu_mir_binop(g->prog, is_unsigned ? MIR_SHR_U : MIR_SHR, a, b);
         /* C shift semantics: result type = left operand type (after promotion) */
         HDType *rt = mir_binop_result_type(g, n->left, n->left);
         if (rt && (rt->kind == HD_TYPE_I32 || rt->kind == HD_TYPE_U32))
@@ -6474,7 +6490,11 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
          * call-frame memory. Mark the boundary once, before the first body, so
          * the interpreter restores frame memory on ret (reentrant recursion)
          * while globals persist across calls. */
-        if (fi == 0) prog->globals_end = prog->total_mem;
+        if (fi == 0) {
+            /* Reserve the struct-return arena while everything is still global. */
+            g_sret_arena_vr = wubu_mir_alloc(prog, (int64_t)SRET_SLOTS * SRET_CELLS * 8);
+            prog->globals_end = prog->total_mem;
+        }
         prog->funcs[fi].start = prog->n;
         /* Push scope BEFORE binding params so pop removes them too */
         if (g.n_scopes < MIRGEN_MAX_VARS)
