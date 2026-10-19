@@ -2598,23 +2598,25 @@ HDASTNode *hd_parse_compilation_unit(HDParser *p) {
      * keep parsing, so N independent syntax errors yield N diagnostics. */
     while (peek(p) != HD_TOK_EOF) {
         int before = p->n_errors;
+        int pos_before = p->lex->pos;
         HDASTNode *decl = hd_parse_decl(p);
         if (decl) hd_ast_add_stmt(unit, decl);
         else if (p->n_errors == before && !p->has_error)
             parse_error(p, "expected declaration");
         if (p->has_error) {
+            /* Some failure paths set has_error without recording a message
+             * (e.g. a NULL initializer). Count it, or the file silently loses a
+             * diagnostic -- three bad initialisers reported two. */
+            if (p->n_errors == before)
+                parse_error(p, "syntax error");
             if (p->fatal_error) break;          /* _Static_assert etc: cannot continue */
             p->has_error = false;               /* keep n_errors, resume parsing */
-            /* Only resynchronise when the failing declaration did NOT stop on a
-             * boundary. Skipping unconditionally ate the next declaration, so a
-             * file with three bad initialisers reported two. */
-            if (peek(p) != HD_TOK_SEMI && peek(p) != HD_TOK_RBRACE &&
-                peek(p) != HD_TOK_LBRACE && peek(p) != HD_TOK_EOF) {
-                while (peek(p) != HD_TOK_EOF && peek(p) != HD_TOK_SEMI &&
-                       peek(p) != HD_TOK_RBRACE && peek(p) != HD_TOK_LBRACE)
-                    advance(p);
-            }
-            if (peek(p) == HD_TOK_SEMI) advance(p);
+            /* Progress-only recovery: the failing declaration has usually
+             * already consumed to its ';', and bulk-skipping to the next one ate
+             * the FOLLOWING declaration (three bad initialisers reported two).
+             * Only force progress when the parser did not move at all. */
+            if (p->lex->pos == pos_before && peek(p) != HD_TOK_EOF)
+                advance(p);
             continue;
         }
         if (!decl) break;
