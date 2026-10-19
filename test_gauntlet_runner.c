@@ -52,7 +52,10 @@ static int run_test_safe_all(const char *source, int64_t expected,
     for (uint32_t k = 0; k < N_TARGETS; k++) { out->result[k] = (uint8_t)TEST_ERROR; out->actual[k] = 0; }
 
     wubu_mir_prog_t prog;
-    if (hd_build_mir(source, &prog) != 0) return 0;  /* parse/lower error */
+    if (hd_build_mir(source, &prog) != 0) {  /* parse/lower error */
+        if (getenv("HD_DIAG")) printf("  diag: %s\n", hd_last_diag());
+        return 0;
+    }
 
     int pipefd[2];
     if (pipe(pipefd) != 0) { wubu_mir_free(&prog); return 0; }
@@ -329,6 +332,8 @@ int main(int argc, char **argv) {
                         int64_t val = 0;
                         wubu_mir_prog_t prog;
                         int build_result = hd_build_mir(test->source, &prog);
+                        if (build_result != 0 && getenv("HD_DIAG"))
+                            fprintf(stderr, "diag: %s\n", hd_last_diag());
                         if (build_result == 0) {
                             val = drv ? hd_run_prog(&prog, drv)
                                       : wubu_mir_interp(&prog);

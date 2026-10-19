@@ -6371,7 +6371,12 @@ static void mir_collect_param_fnptr(HDMirGen *g, const HDASTNode *n)
     for (uint32_t i = 0; i < n->n_stmts; i++) mir_collect_param_fnptr(g, n->stmts[i]);
 }
 
+/* Last compile diagnostics, for harnesses that cannot see stderr. */
+static char g_last_diag[2048];
+const char *hd_last_diag(void) { return g_last_diag; }
+
 int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
+    g_last_diag[0] = '\0';
     /* Preprocess #define / strip directives — must match hd_eval exactly so
      * the MIR path parses the same sources the x86-64 JIT (golden) does. */
     char *pp = wubu_preprocess(source);
@@ -6470,6 +6475,9 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
     }
 
     if (parse.has_error || !ast) {
+        int off = 0;
+        for (int i = 0; i < parse.n_errors && off < (int)sizeof(g_last_diag) - 1; i++)
+            off += snprintf(g_last_diag + off, sizeof(g_last_diag) - off, "%s; ", parse.errors[i]);
         hd_ast_free(ast);
         free(pp);
         return -1;
@@ -6482,6 +6490,9 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
     if (getenv("HD_SEMANTIC")) {
         hd_semantic_check(&parse, ast);
         if (parse.n_errors > 0) {
+            int off = 0;
+            for (int i = 0; i < parse.n_errors && off < (int)sizeof(g_last_diag) - 1; i++)
+                off += snprintf(g_last_diag + off, sizeof(g_last_diag) - off, "%s; ", parse.errors[i]);
             hd_ast_free(ast);
             free(pp);
             return -1;

@@ -53,6 +53,9 @@ typedef enum {
                          * No logical-shift opcode exists; use a mask if you
                          * need one. */
     MIR_NEG,           /* dst = -a */
+    MIR_SHR_U,         /* dst = a >> b, LOGICAL (zero-filling), 64-bit wide.
+                         * For unsigned >> (e.g. unsigned long with the top bit
+                         * set). MIR_SHR is arithmetic (sar); this emits shr. */
     MIR_NOT,           /* dst = ~a */
     MIR_EQ,            /* dst = (a == b) ? 1 : 0 */
     MIR_NE,            /* dst = (a != b) ? 1 : 0 */
@@ -301,6 +304,7 @@ void wubu_mir_jnz(wubu_mir_prog_t *p, wubu_vr_t cond, uint32_t label);
 void wubu_mir_place_label(wubu_mir_prog_t *p, uint32_t label);
 /* reserve n_elements int64 cells in the program's memory; returns base addr */
 wubu_vr_t wubu_mir_alloc(wubu_mir_prog_t *p, int64_t n_elements);
+const char *hd_last_diag(void);
 /* load/store through an address held in a vr */
 wubu_vr_t wubu_mir_load(wubu_mir_prog_t *p, wubu_vr_t addr);
 void wubu_mir_store(wubu_mir_prog_t *p, wubu_vr_t addr, wubu_vr_t val);
