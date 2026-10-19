@@ -122,6 +122,11 @@ static const Probe PROBES[] = {
     {"fn ptr member", "struct S{int (*fn)(int,int); int n;}; int add(int x,int y){return x+y;} struct S s; s.fn=add; s.n=5; s.fn(3,4);", 7},
     {"array member", "struct S{int a[3]; int n;}; struct S s; s.a[0]=1; s.a[1]=2; s.a[2]=3; s.n=3; s.a[0]+s.a[1]+s.a[2];", 6},
     /* ---- more edge cases ---- */
+    {"goal126 multidim", "int a[4][4]; a[1][2]=7; a[1][2];", 7},
+    {"goal127 array decay", "int f(int a[]){return a[3];} int x[4]; x[3]=9; f(x);", 9},
+    {"goal129 int promotion", "unsigned char a=200; int b=100; a+b;", 300},
+    {"goal130 typedef chain", "typedef long long ll; typedef ll Big; Big x=5000000000; x;", 5000000000LL},
+    {"goal158 nested init", "struct P{int a;int b;}; struct P arr[2]={{1,2},{3,4}}; arr[1].b;", 4},
     {"union sizeof", "union U{char a; int b;}; sizeof(union U);", 4},
     {"union member overlap", "union U{int a; int b;}; union U u; u.a=7; u.b;", 7},
     {"union memset", "union U{char c; int i;}; union U u; u.i=0; u.c=5; u.i;", 5},
