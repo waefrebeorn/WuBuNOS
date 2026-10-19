@@ -56,3 +56,21 @@ single-precision — but neither is the arithmetic path. The gap is upstream:
 
 Until then the probe stays WRONG with this note as the reason, and no change to
 the ADD path is warranted — the ADD path is correct.
+
+## RESOLVED (same day)
+
+The four steps above were implemented:
+
+1. `HD_TYPE_F32` added to the type-kind enum (size 4); `HD_KW_F32` added to the
+   keyword enum.
+2. The lexer maps `"float"` to `HD_KW_F32`; the parser sets `kind = F32, size = 4`.
+3. Variables carry `is_f32`; declarations of F32 bind as floats; an ADD whose
+   operand is an f32 variable narrows its f64 result with `MIR_F64_TO_F32`.
+4. `sizeof(float)` reports 4 through the type-size path.
+
+Measured: `float a=1.5; float b=2.5; a+b;` now yields `0x40800000` (4.0f) and the
+probe passes. `test_mir_battery` is 126 PASS / 0 WRONG.
+
+Not yet done: `double`/`float` mixed expressions promote by the f64 path only,
+and f32 storage still occupies a full 8-byte cell with the value narrowed on
+expression evaluation rather than on store.
