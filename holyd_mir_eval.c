@@ -424,6 +424,9 @@ static wubu_vr_t mir_find_var_addr(HDMirGen *g, const char *name) {
     /* Search from end to find the most recent declaration (shadowing) */
     for (int i = g->n_vars - 1; i >= 0; i--)
         if (strcmp(g->vars[i].name, name) == 0) {
+            if (getenv("MIRDBG"))
+                fprintf(stderr, "[addr] %s -> binding %d of %d (addrvr %llu)\n",
+                        name, i, g->n_vars, (unsigned long long)g->vars[i].addr);
             return g->vars[i].addr;
         }
     return 0;
@@ -1791,7 +1794,11 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
         /* Handle file-scope redeclarations: at file scope, all variables
          * have static storage duration. If a variable with this name already
          * exists at file scope, reuse it instead of allocating a new one. */
-        if (!g->in_function_body && !n->is_extern) {
+        if (!g->in_function_body && !n->is_extern && g->n_scopes == 0) {
+            /* Only a true file-scope redeclaration may reuse the earlier
+             * binding. Inside a nested block (n_scopes > 0) the name SHADOWS,
+             * so it must get its own binding and its own storage -- otherwise
+             * `int x=1; {int x=2;}` writes 2 through the outer x. */
             for (int i = 0; i < g->n_vars; i++) {
                 if (strcmp(g->vars[i].name, n->ident) == 0 && g->vars[i].addr != 0) {
                     /* File-scope variable already exists — reuse it */
