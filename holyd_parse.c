@@ -2626,7 +2626,13 @@ HDASTNode *hd_parse_compilation_unit(HDParser *p) {
     /* Error recovery: one bad declaration must not abort the file. Report the
      * diagnostic, resynchronise at the next `;` (or the enclosing brace) and
      * keep parsing, so N independent syntax errors yield N diagnostics. */
+    long guard = 0;
     while (peek(p) != HD_TOK_EOF) {
+        if (++guard > 20000) {
+            fprintf(stderr, "[parse-loop] stalled at pos=%zu tok=%d line=%d\n",
+                    (size_t)p->lex->pos, (int)peek(p), p->lex->line);
+            break;
+        }
         int before = p->n_errors;
         int pos_before = p->lex->pos;
         HDASTNode *decl = hd_parse_decl(p);
