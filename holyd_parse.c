@@ -142,6 +142,7 @@ static HDASTNode *parse_block(HDParser *p);  /* forward-declared for ({ ... }) s
 /* -- Parse Type --------------------------------------------------- */
 
 static HDType *parse_type(HDParser *p) {
+    size_t entry_pos = p->lex->pos;
     HDType *t = (HDType *)calloc(1, sizeof(HDType));
     t->kind = HD_TYPE_I64; /* HolyD default */
 
@@ -166,7 +167,8 @@ static HDType *parse_type(HDParser *p) {
             }
             break;
         }
-        case HD_KW_U0:   t->kind = HD_TYPE_VOID; advance(p); break;
+        case HD_KW_I0:   /* `void` lexes to I0 (HolyC has no void literal) */
+        case HD_KW_U0:   t->kind = HD_TYPE_VOID; t->size = 0; advance(p); break;
         case HD_KW_COMPLEX: {
             /* _Complex type (C99) */
             advance(p);
@@ -356,7 +358,16 @@ static HDType *parse_type(HDParser *p) {
                 int max_align = 1;
                 t->bit_pos = 0;  /* initialize bit field tracking */
                 while (peek(p) != HD_TOK_RBRACE && peek(p) != HD_TOK_EOF) {
+                    size_t member_pos = p->lex->pos;
                     HDType *member_type = parse_type(p);
+                    /* Progress guarantee: parse_type consumes nothing on a token it
+                     * does not recognise (e.g. a member name after a comma), and the
+                     * member loop would then spin forever. */
+                    if (p->lex->pos == member_pos) {
+                        parse_error(p, "expected member declaration");
+                        advance(p);
+                        continue;
+                    }
                     /* Function-pointer member: `int (*fn)(int,int);` — the
                      * member name is inside `(*...)`, so after parse_type
                      * (which read `int`) the next token is `(` not IDENT.
@@ -727,13 +738,25 @@ static HDType *parse_type(HDParser *p) {
      * The lexer maps `signed` to the same token as `int` and `unsigned` to
      * `unsigned int`, so a second type keyword immediately following means the
      * pair is one specifier and the second keyword carries the width. */
-    if ((t->kind == HD_TYPE_I32 || t->kind == HD_TYPE_U32 ||
+    if (p->lex->pos != entry_pos &&
+        (t->kind == HD_TYPE_I32 || t->kind == HD_TYPE_U32 ||
          t->kind == HD_TYPE_I16 || t->kind == HD_TYPE_U16 ||
          t->kind == HD_TYPE_I64 || t->kind == HD_TYPE_U64) &&
         peek(p) >= HD_KW_I0 && peek(p) <= HD_KW_BOOL) {
         int was_unsigned = (t->kind == HD_TYPE_U32 || t->kind == HD_TYPE_U16 ||
                             t->kind == HD_TYPE_U64);
+        size_t fold_pos = p->lex->pos;
         HDType *inner = parse_type(p);
+        /* A keyword the switch does not consume would make this recurse forever
+         * (observed as SIGSEGV via stack exhaustion). Keep the outer type if the
+         * inner parse made no progress. */
+        if (p->lex->pos == fold_pos) {
+            free(inner);
+            inner = NULL;
+        }
+        if (!inner) {
+            return t;
+        }
         if (was_unsigned) {
             switch (inner->kind) {
                 case HD_TYPE_I8:  inner->kind = HD_TYPE_U8;  break;
