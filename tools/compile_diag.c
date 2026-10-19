@@ -12,6 +12,7 @@
 #include <string.h>
 #include "holyd_types.h"
 #include "holyd_lexer.h"
+#include "wubu_preproc.h"
 #include "holyd_parser.h"
 
 int main(int argc, char **argv)
@@ -29,8 +30,13 @@ int main(int argc, char **argv)
     src[rd] = '\0';
     fclose(f);
 
+    /* Run the real preprocessor first: the compiler does, so measuring the raw
+     * text produced phantom diagnostics for anything beginning with '#'. */
+    char *pp = wubu_preprocess(src);
+    const char *text = pp ? pp : src;
+
     HDLexer lex;
-    hd_lex_init(&lex, src);
+    hd_lex_init(&lex, text);
     HDParser p;
     hd_parse_init(&p, &lex);
     HDASTNode *unit = hd_parse_compilation_unit(&p);
