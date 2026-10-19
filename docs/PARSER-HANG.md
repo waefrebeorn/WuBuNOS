@@ -31,3 +31,26 @@ same-named locals and making one 8-argument call.
 Instrument `parse_decl`, `parse_type` and `parse_expr` with an iteration guard
 that prints `__func__` and `p->lex->pos`, then bisect by section (the `if` chain
 versus the call). The compilation-unit guard stays as a safety net.
+## Localised (2026-10-19)
+
+Two liveness probes were added:
+
+- `hd_parse_compilation_unit` breaks after 20 000 iterations — **never fires**.
+- `peek()` counts calls and reports after 20 M — this one fires:
+
+```
+[parse-peek] spun at pos=1033 tok=81 '}' line=19 col=1
+```
+
+`pos=1033` is exactly `strlen(source)` — the lexer has reached the end — while the
+token is still the file's final `}`. A lexer-only probe over the same file reaches
+`EOF at pos=1033 after 240 tokens`, so the lexer is fine on its own.
+
+That means a parser loop keeps calling `peek()` while the lookahead token remains
+`}` and never advances it. The compilation-unit loop is exonerated (it breaks on
+NULL and its guard never fired), so the spin is in a nested construct loop that
+peeks without advancing at the closing brace.
+
+Next: grep the parse functions for loops whose body does not call `advance()` on
+every path (`while (peek(p) == X)` with a conditional body), starting with the
+function-body and initializer-list loops.

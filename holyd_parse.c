@@ -90,8 +90,20 @@ static void parse_fatal(HDParser *p, const char *msg) {
 }
 
 static HDTokenType peek(HDParser *p) {
+    /* Liveness probe: a non-advancing parse loop shows up as an explosion of
+     * peek() calls at one position. Reports where instead of hanging forever. */
+    static unsigned long ticks;
+    if (++ticks > 20000000UL) {
+        fprintf(stderr, "[parse-peek] spun at pos=%zu tok=%d '%s' line=%d col=%d\n",
+                (size_t)p->lex->pos, (int)p->lex->tok.type,
+                p->lex->tok.text, p->lex->line, p->lex->col);
+        fflush(stderr);
+        exit(9);
+    }
     return p->lex->tok.type;
 }
+
+static HDTokenType peek(HDParser *p);
 
 static HDTokenType advance(HDParser *p) {
     HDTokenType t = p->lex->tok.type;
