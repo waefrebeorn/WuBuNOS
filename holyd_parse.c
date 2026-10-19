@@ -2169,7 +2169,13 @@ done_extern_params:
                  * first parameter means an old-style definition
                  * `int f(a, b) int a; int b; { }`. Collect the names, then the
                  * caller parses the declaration list after ')'. */
+                int first_is_typedef = 0;
                 if (peek(p) == HD_TOK_IDENT) {
+                    const char *pid = p->lex->tok.text;
+                    for (int ti = 0; ti < p->n_typedefs; ti++)
+                        if (strcmp(p->typedef_names[ti], pid) == 0) { first_is_typedef = 1; break; }
+                }
+                if (peek(p) == HD_TOK_IDENT && !first_is_typedef) {
                     fn->is_knr = 1;
                     while (fn->n_params < HD_MAX_PARAMS) {
                         if (peek(p) != HD_TOK_IDENT) break;
