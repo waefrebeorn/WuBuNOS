@@ -48,3 +48,28 @@ measurement — labels counted as declarations, and `__`-prefixed names
 (`__VA_ARGS__`) ignored — but they were motivated by the invalid pairing above,
 so they must be re-validated with a correctly attributed run before being
 claimed as improvements.
+
+## The gauntlet is noisy — quantify before claiming parity
+
+Two runs of the SAME binary (semantic pass wired, only the diagnostic format
+changed between them) produced:
+
+```
+run A:  pass 1581  fail 155  error 932   (59.3%)
+run B:  pass 1561  fail 151  error 956   (58.5%)
+```
+
+A 20-pass spread with identical accept/reject logic. The harness runs 6 workers,
+and under load some tests trip the watchdog or exceed their time budget, moving
+between PASS/ERROR. So a ±20-pass band (~±0.75%) exists and **single-run
+comparisons cannot resolve a difference smaller than that**.
+
+Consequences:
+- The "semantic pass at parity" claim (1581 with it on vs 1581 off) is *within
+  the noise band* and should be restated as "no regression larger than the
+  measurement noise".
+- Goal 125's criterion ("make test_gauntlet_v3 error count stable") cannot be
+  attested from these runs: 932 vs 956 is exactly the instability it names.
+
+To make any future claim here, run the same binary at least three times on an
+otherwise idle machine and compare medians, not single runs.
