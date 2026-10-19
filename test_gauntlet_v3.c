@@ -53,12 +53,12 @@ static int is_invalid_test(const char *source) {
     return 0;
 }
 
-static int run_single_test_nofree(const char *source, int64_t expected) {
+static int run_single_test_nofree(const char *name, const char *source, int64_t expected) {
     wubu_mir_prog_t prog;
     memset(&prog, 0, sizeof(prog));
     int build_result = hd_build_mir(source, &prog);
     if (build_result != 0) {
-        if (getenv("HD_DIAG")) fprintf(stderr, "diag: %s\n", hd_last_diag());
+        if (getenv("HD_DIAG")) fprintf(stderr, "diag %s: %s\n", name ? name : "?", hd_last_diag());
         return 2;
     }
     const wubu_isa_driver_t *drv = wubu_isa_find("x86-64");
@@ -93,8 +93,8 @@ for (int i = start; i < end; i++) {
         signal(SIGILL, SIG_DFL);
         signal(SIGFPE, SIG_DFL);
         signal(SIGABRT, SIG_DFL);
-        if (getenv("HD_DIAG")) fprintf(stderr, "TEST %s\n", all_tests[i].name);
-        int rc = run_single_test_nofree(all_tests[i].source, all_tests[i].expected);
+        int rc = run_single_test_nofree(all_tests[i].name, all_tests[i].source,
+                                        all_tests[i].expected);
         /* Write result to a per-test file */
         char tmpfile[256];
         snprintf(tmpfile, sizeof(tmpfile), "/tmp/gv3_%d_%d.out", getpid(), i);
