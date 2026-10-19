@@ -122,6 +122,10 @@ static const Probe PROBES[] = {
     {"fn ptr member", "struct S{int (*fn)(int,int); int n;}; int add(int x,int y){return x+y;} struct S s; s.fn=add; s.n=5; s.fn(3,4);", 7},
     {"array member", "struct S{int a[3]; int n;}; struct S s; s.a[0]=1; s.a[1]=2; s.a[2]=3; s.n=3; s.a[0]+s.a[1]+s.a[2];", 6},
     /* ---- more edge cases ---- */
+    {"union sizeof", "union U{char a; int b;}; sizeof(union U);", 4},
+    {"union member overlap", "union U{int a; int b;}; union U u; u.a=7; u.b;", 7},
+    {"union memset", "union U{char c; int i;}; union U u; u.i=0; u.c=5; u.i;", 5},
+    {"union sizeof var", "union U{char a; int b;}; union U u; sizeof(u);", 4},
     {"goal156 switch64", "int r=0; long long x=4294967296; switch(x){case 4294967296: r=7; break; default: r=3;} r;", 7},
     {"goal157 comma-for", "int i; int j; for(i=0,j=10;i<j;i++,j--); i*100+j;", 505},
     {"goal161 stmt-expr arg", "int f(int v){return v;} int r; r=f(({int t=3; t*2;})); r;", 6},

@@ -4716,7 +4716,8 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 /* Look up the variable's type from the symbol table */
                 for (int i = 0; i < g->n_vars; i++) {
                     if (strcmp(g->vars[i].name, n->child->ident) == 0) {
-                        if (g->vars[i].type && g->vars[i].type->kind == HD_TYPE_STRUCT &&
+                        if (g->vars[i].type && (g->vars[i].type->kind == HD_TYPE_STRUCT ||
+                                                g->vars[i].type->kind == HD_TYPE_UNION) &&
                             g->vars[i].type->n_members > 0) {
                             /* The authoritative layout: member byte offsets and
                              * member types live on the variable's HDType. The
@@ -4724,6 +4725,22 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                              * computed from it defaulted every member to 8. */
                             HDType *vt = g->vars[i].type;
                             int end = 0, maxal = 1;
+                            if (vt->kind == HD_TYPE_UNION) {
+                                /* A union is the size of its largest member. */
+                                int umax = 0;
+                                for (int mi = 0; mi < vt->n_members; mi++) {
+                                    int64_t msz = vt->members[mi].type
+                                                      ? hd_type_size(vt->members[mi].type) : 8;
+                                    if (msz <= 0) msz = 8;
+                                    if ((int)msz > umax) umax = (int)msz;
+                                    int al = (int)(msz > 8 ? 8 : msz);
+                                    if (al > maxal) maxal = al;
+                                }
+                                if (maxal > 1) umax = (umax + maxal - 1) / maxal * maxal;
+                                size = umax > 0 ? umax : 8;
+                                if (getenv("MIRDBG")) fprintf(stderr, "[sz-union] %s -> %d\n", n->child->ident, size);
+                                goto sizeof_size_done;
+                            }
                             for (int mi = 0; mi < vt->n_members; mi++) {
                                 int64_t msz = vt->members[mi].type
                                                   ? hd_type_size(vt->members[mi].type) : 8;
@@ -4736,6 +4753,7 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                             }
                             if (maxal > 1) end = (end + maxal - 1) / maxal * maxal;
                             size = end > 0 ? end : 8;
+                        sizeof_size_done: ;
                             if (getenv("MIRDBG")) fprintf(stderr, "[sz-type] %s -> %d\n", n->child->ident, size);
                         } else if (g->vars[i].is_struct) {
                             /* Compute packed byte size from member offsets */
@@ -4953,10 +4971,24 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 break;
             }
             case HD_TYPE_STRUCT:
-                /* Use hd_type_size for accurate packed byte size */
                 size = (int)hd_type_size(n->type);
                 if (size <= 0) size = 8;
                 break;
+            case HD_TYPE_UNION: {
+                /* Largest member, rounded to its alignment. */
+                int umax = 0, ma = 1;
+                for (int mi = 0; mi < n->type->n_members; mi++) {
+                    int64_t msz = n->type->members[mi].type
+                                      ? hd_type_size(n->type->members[mi].type) : 8;
+                    if (msz <= 0) msz = 8;
+                    if ((int)msz > umax) umax = (int)msz;
+                    int al = (int)(msz > 8 ? 8 : msz);
+                    if (al > ma) ma = al;
+                }
+                if (ma > 1) umax = (umax + ma - 1) / ma * ma;
+                size = umax > 0 ? umax : 8;
+                break;
+            }
             default:             size = 8; break;
             }
         }
