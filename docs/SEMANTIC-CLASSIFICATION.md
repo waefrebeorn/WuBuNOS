@@ -73,3 +73,26 @@ Consequences:
 
 To make any future claim here, run the same binary at least three times on an
 otherwise idle machine and compare medians, not single runs.
+
+## Final A/B: one binary, six runs
+
+`HD_NO_SEMANTIC=1` toggles the pass at runtime, so both configurations come from
+the SAME build.
+
+```
+pass OFF:  1519, 1548                      median 1534
+pass ON :  1523, 1551, 1559, 1561, 1581    median 1559
+range   :  1519 .. 1581                    band 62 passes (2.3%)
+```
+
+The medians differ by 25 passes, well inside a 62-pass band, and the OFF samples
+overlap the ON samples. **The semantic pass is statistically indistinguishable
+from the baseline on this harness**, while adding diagnostics that name the
+construct and position.
+
+Decision: keep it enabled. Not because it improves the number, but because it is
+free within measurement error and turns silent miscompiles into reported errors
+(`fail 155-180 -> 147-151`).
+
+Any future change must beat a band of ~60 passes on this machine, not a single
+run. `tools/gauntlet_noise.sh` exists for that purpose.
