@@ -45,11 +45,13 @@ int main(void)
     n = count_errors("int main(void){ return nope; }\n", errs, 16);
     printf("[125] %d diagnostics for an undeclared identifier\n", n);
     for (int i = 0; i < n && i < 3; i++) printf("      %s\n", errs[i]);
+    CHECK(n >= 1);   /* currently red: no semantic pass exists yet */
 
     /* Goal 131: wrong arity at a call site. */
     n = count_errors("void f(int a, int b);\nint main(void){ return f(1); }\n", errs, 16);
     printf("[131] %d diagnostics for a 1-arg call to a 2-param prototype\n", n);
     for (int i = 0; i < n && i < 3; i++) printf("      %s\n", errs[i]);
+    CHECK(n >= 1);   /* currently red: no arity checking exists yet */
 
     printf("\n%s: %d failure(s)\n", fails ? "FAILED" : "ALL PASSED", fails);
     return fails ? 1 : 0;

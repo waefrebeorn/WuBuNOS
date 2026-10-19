@@ -113,6 +113,13 @@ gauntlet_v2: test_gauntlet_v2.c $(FRONT) $(MIR) wubu_tgemm_avx512.o $(filter-out
 	$(CC) $(CFLAGS) -I. -Itest_gauntlet $^ $(LDFLAGS) -o $@
 
 # Multi-threaded gauntlet v3 (parallel fork+timeout)
+# Diagnostics harness: reads HDParser.n_errors directly. Deliberately NOT in
+# test_all while goals 125/131 are open -- a red audit wired into the gate gets
+# switched off. Promote it once both report.
+test_diag: tools/test_diag.c holyd_lexer.c holyd_parse.c holyd_parse_ast.c
+	$(CC) $(CFLAGS) -I. $^ $(LDFLAGS) -o $@
+	./$@
+
 gauntlet_v3: test_gauntlet_v3.c $(FRONT) $(MIR) wubu_tgemm_avx512.o $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) $(JIT_SRC) jit_stubs_arm64.c $(OS_ROOT)/runtime/wubu_spawn.c $(filter-out test_gauntlet_runner.c,$(GAUN))
 	$(CC) $(CFLAGS) -I. -Itest_gauntlet $^ $(LDFLAGS) -pthread -o $@
 
