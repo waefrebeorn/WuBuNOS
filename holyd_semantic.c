@@ -77,7 +77,7 @@ static void sem_collect_decls(HDASTNode *n, SemNames *out)
 {
     if (!n) return;
     if (n->kind == HD_AST_VAR_DECL || n->kind == HD_AST_FUNC_DECL ||
-        n->kind == HD_AST_STRUCT_DECL)
+        n->kind == HD_AST_STRUCT_DECL || n->kind == HD_AST_LABEL)
         sem_add(out, n->ident);
     if (n->kind == HD_AST_BLOCK || n->kind == HD_AST_FUNC_DECL) {
         HDASTNode **list = n->stmts;
@@ -152,6 +152,8 @@ static void sem_check_expr(HDParser *p, HDASTNode *n, const SemNames *scope,
         sem_check_expr(p, n->init, scope, globals, fns);
         return;
     }
+    if (n->kind == HD_AST_IDENT && n->ident[0] == '_' && n->ident[1] == '_')
+        return;                        /* __VA_ARGS__ and friends */
     if (n->kind == HD_AST_IDENT) {
         if (n->ident[0] && !sem_has(scope, n->ident) && !sem_has(globals, n->ident))
             parse_error_at(p, n->line, n->ident, "use of undeclared identifier");
