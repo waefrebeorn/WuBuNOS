@@ -32,13 +32,22 @@ int main(int argc, char **argv)
 
     /* Run the real preprocessor first: the compiler does, so measuring the raw
      * text produced phantom diagnostics for anything beginning with '#'. */
-    char *pp = wubu_preprocess(src);
+    int no_pp = (argc > 2 && !strcmp(argv[2], "--no-pp"));
+    char *pp = no_pp ? NULL : wubu_preprocess(src);
     const char *text = pp ? pp : src;
 
     /* --dump-pp: print the preprocessed translation unit and stop. This lives
      * here (not in a standalone harness) because this binary links the whole
      * front end the way the compiler does. */
     if (argc > 2 && !strcmp(argv[2], "--dump-pp")) {
+        fprintf(stderr, "pp_len=%zu raw_len=%zu\n", strlen(text), (size_t)n);
+        {   /* parse the very same buffer to tie content to result */
+            HDLexer l2; hd_lex_init(&l2, text);
+            HDParser p2; hd_parse_init(&p2, &l2);
+            hd_parse_compilation_unit(&p2);
+            fprintf(stderr, "parse_of_pp_errors=%d\n", p2.n_errors);
+            if (p2.n_errors) fprintf(stderr, "first=%s\n", p2.errors[0]);
+        }
         fputs(text, stdout);
         return 0;
     }

@@ -150,6 +150,13 @@ static void parse_error_tok(HDParser *p, const char *msg) {
 }
 
 static HDType *parse_type(HDParser *p) {
+    /* Leading type qualifiers: `(volatile unsigned short*)`, `const char *`.
+     * They do not change the type for our purposes, but leaving them in place
+     * makes the switch below see a keyword it has no case for. */
+    while (peek(p) == HD_KW_CONST || peek(p) == HD_KW_VOLATILE ||
+           peek(p) == HD_KW_ATOMIC) {
+        advance(p);
+    }
     size_t entry_pos = p->lex->pos;
     HDType *t = (HDType *)calloc(1, sizeof(HDType));
     t->kind = HD_TYPE_I64; /* HolyD default */
