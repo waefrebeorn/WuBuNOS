@@ -188,3 +188,28 @@ properly (lexer suffix + complex layout + arithmetic) or not at all.
 2. `./gauntlet_v3 <file>` to reproduce outside the suite
 3. `HD_DUMP_BUILD=<path>` for the text the builder really sees
 4. reduce to a single construct, fix, then `tools/gauntlet_noise.sh` for the verdict
+
+## The noise band is now ZERO
+
+Earlier in the session, repeated runs of one binary spread over ~62 passes
+(1519..1581) and single-run comparisons were worthless. After the parser was made
+hang-free (541 hanging sources -> 0), three consecutive runs of gauntlet_v3 at
+commit af573d6 returned **identical** numbers:
+
+```
+2031 / 2668   fail 210   error 427
+2031 / 2668   fail 210   error 427
+2031 / 2668   fail 210   error 427
+band: 0 passes
+```
+
+So the variance was never the harness being "load-sensitive" in general -- it was
+timeouts. A test that hangs becomes PASS or ERROR depending on scheduling; a test
+that terminates always lands the same way. With every source terminating, the
+gauge is deterministic and a single run is enough to judge a change.
+
+`tools/gauntlet_noise.sh` still exists for re-measuring the band after any future
+change that could reintroduce nondeterminism (timeouts, threads, allocation).
+
+This also validates the +320 / +72 / +52 gains: each was measured on this
+deterministic gauge, not inside a 62-pass wobble.
