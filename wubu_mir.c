@@ -383,6 +383,7 @@ static const char *op_name(wubu_mir_op_t op)
     case MIR_XOR:   return "xor";
     case MIR_SHL:   return "shl";
     case MIR_SHR:   return "shr";
+    case MIR_SHR_U: return "shr_u";
     case MIR_NEG:   return "neg";
     case MIR_NOT:   return "not";
     case MIR_SEXT32: return "sext32";
