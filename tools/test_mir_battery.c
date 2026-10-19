@@ -183,6 +183,11 @@ static int run_isolated(const Probe *probe)
     if (got != (int)sizeof(result)) return 2;
     if (WIFSIGNALED(status)) return 2;
     g_last_result = result;
+    if (getenv("MIRDBG"))
+        fprintf(stderr, "[parent] probe=%s read=%llx\n", probe->name,
+                (unsigned long long)result);
+    if (getenv("MIRDBG"))
+        fprintf(stderr, "[parent2] g_last=%llx\n", (unsigned long long)g_last_result);
     return (result == expect) ? 0 : 1;
 }
 

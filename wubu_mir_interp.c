@@ -854,6 +854,9 @@ op_default:
     DISPATCH();
 
 done:
+    if (getenv("MIRDBG"))
+        fprintf(stderr, "[done] result=%llx vr0=%llx\n",
+                (unsigned long long)result, (unsigned long long)vr[0]);
     free(vr);
     free(label_pc);
     if (alloc_mem) free(mem);
