@@ -154,7 +154,7 @@ static void sem_check_expr(HDParser *p, HDASTNode *n, const SemNames *scope,
     }
     if (n->kind == HD_AST_IDENT) {
         if (n->ident[0] && !sem_has(scope, n->ident) && !sem_has(globals, n->ident))
-            parse_error_public(p, n->ident, "use of undeclared identifier");
+            parse_error_at(p, n->line, n->ident, "use of undeclared identifier");
         return;
     }
     if (n->kind == HD_AST_CALL || n->kind == HD_AST_FUNC_CALL) {
@@ -162,7 +162,7 @@ static void sem_check_expr(HDParser *p, HDASTNode *n, const SemNames *scope,
                                  ? n->callee->ident : n->ident;
         SemFn *f = callee && callee[0] ? sem_find_fn(fns, callee) : NULL;
         if (f && !f->variadic && n->n_args != f->n_params)
-            parse_error_public(p, callee, "wrong number of arguments");
+            parse_error_at(p, n->line, callee, "wrong number of arguments");
     }
     /* A callee name is deliberately NOT checked here: calling a function that
      * was never declared is a different diagnostic, and K&R-era tests rely on

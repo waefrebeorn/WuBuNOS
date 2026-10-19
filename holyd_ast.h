@@ -10,6 +10,8 @@
 /* AST node definition (opaque in types, concrete here) */
 struct HDASTNode {
     HDASTKind kind;
+    int line;                  /* 1-based source line of the node's first token */
+    int col;                   /* 1-based column */
     HDASTNode *child;          /* For unary/ternary/return/expr_stmt */
     HDASTNode *left;           /* For binary */
     HDASTNode *right;          /* For binary */

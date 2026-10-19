@@ -51,6 +51,27 @@ void parse_error_public(HDParser *p, const char *name, const char *msg)
     parse_error(p, msg);   /* forward decl below keeps this simple */
 }
 
+/* Report at an explicit source position (used by the semantic pass, where the
+ * lexer has already reached EOF and cannot supply the node's line). */
+void parse_error_at(HDParser *p, int line, const char *name, const char *msg)
+{
+    if (p->n_errors < HD_MAX_ERRORS) {
+        snprintf(p->errors[p->n_errors], 256, "line %d: %s%s%s",
+                 line, name && name[0] ? name : "", name && name[0] ? ": " : "", msg);
+        p->n_errors++;
+    }
+    p->has_error = true;
+}
+
+/* Create a node stamped with the current token's position, so diagnostics can
+ * point at the offending construct instead of wherever the lexer ended up. */
+static HDASTNode *pnew(HDParser *p, HDASTKind kind)
+{
+    HDASTNode *n = hd_ast_new(kind);
+    if (n) { n->line = p->lex->line; n->col = p->lex->col; }
+    return n;
+}
+
 static void parse_error(HDParser *p, const char *msg) {
     if (p->n_errors < HD_MAX_ERRORS) {
         snprintf(p->errors[p->n_errors], 256, "line %d: %s",
@@ -706,7 +727,7 @@ static HDASTNode *parse_primary(HDParser *p) {
     if (peek(p) == HD_TOK_IDENT) {
         for (int i = 0; i < p->n_enum_consts; i++) {
             if (strcmp(p->enum_const_names[i], p->lex->tok.text) == 0) {
-                HDASTNode *n = hd_ast_new(HD_AST_INT_LIT);
+                HDASTNode *n = pnew(p, HD_AST_INT_LIT);
                 n->int_val = p->enum_const_vals[i];
                 advance(p);
                 return n;
@@ -715,7 +736,7 @@ static HDASTNode *parse_primary(HDParser *p) {
     }
     switch (peek(p)) {
         case HD_TOK_INT: {
-            HDASTNode *n = hd_ast_new(HD_AST_INT_LIT);
+            HDASTNode *n = pnew(p, HD_AST_INT_LIT);
             n->int_val = p->lex->tok.int_val;
             /* Determine constant type from suffix and value per C rules */
             {
@@ -742,14 +763,14 @@ static HDASTNode *parse_primary(HDParser *p) {
             return n;
         }
         case HD_TOK_CHAR: {
-            HDASTNode *n = hd_ast_new(HD_AST_CHAR_LIT);
+            HDASTNode *n = pnew(p, HD_AST_CHAR_LIT);
             n->str_val[0] = p->lex->tok.str_val[0];
             n->int_val = (int64_t)(uint8_t)p->lex->tok.str_val[0];
             advance(p);
             return n;
         }
         case HD_TOK_FLOAT: {
-            HDASTNode *n = hd_ast_new(HD_AST_FLOAT_LIT);
+            HDASTNode *n = pnew(p, HD_AST_FLOAT_LIT);
             n->float_val = p->lex->tok.float_val;
             HDType *ft = (HDType *)calloc(1, sizeof(HDType));
             ft->kind = HD_TYPE_F64; ft->size = 8;
@@ -758,7 +779,7 @@ static HDASTNode *parse_primary(HDParser *p) {
             return n;
         }
         case HD_TOK_STRING: {
-            HDASTNode *n = hd_ast_new(HD_AST_STRING_LIT);
+            HDASTNode *n = pnew(p, HD_AST_STRING_LIT);
             /* use str_val (the decoded string incl. escape sequences),
              * NOT text (which is the raw source span and can be empty
              * after a previous token's trailing-quote advance). */
@@ -786,7 +807,7 @@ static HDASTNode *parse_primary(HDParser *p) {
             if (strcmp(p->lex->tok.text, "_Alignof") == 0 ||
                 strcmp(p->lex->tok.text, "alignof") == 0) {
                 advance(p); /* _Alignof */
-                HDASTNode *n = hd_ast_new(HD_AST_SIZEOF);
+                HDASTNode *n = pnew(p, HD_AST_SIZEOF);
                 if (peek(p) == HD_TOK_LPAREN) {
                     advance(p); /* ( */
                     int t = peek(p);
@@ -814,7 +835,7 @@ static HDASTNode *parse_primary(HDParser *p) {
                         advance(p);
                     } while (peek(p) != HD_TOK_EOF && depth > 0);
                 }
-                HDASTNode *n = hd_ast_new(HD_AST_INT_LIT);
+                HDASTNode *n = pnew(p, HD_AST_INT_LIT);
                 n->int_val = 0;
                 return n;
             }
@@ -849,10 +870,10 @@ static HDASTNode *parse_primary(HDParser *p) {
                 }
                 expect(p, HD_TOK_RPAREN);
                 HDASTNode *result = selected ? selected : default_expr;
-                if (!result) { result = hd_ast_new(HD_AST_INT_LIT); result->int_val = 0; }
+                if (!result) { result = pnew(p, HD_AST_INT_LIT); result->int_val = 0; }
                 return result;
             }
-            HDASTNode *n = hd_ast_new(HD_AST_IDENT);
+            HDASTNode *n = pnew(p, HD_AST_IDENT);
             strncpy(n->ident, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
             n->type = NULL;  /* Type will be resolved during codegen */
             advance(p);
@@ -865,7 +886,7 @@ static HDASTNode *parse_primary(HDParser *p) {
              * capturing lex->pos mid-token points past the token, so a
              * pos-restore lands on the wrong char. */
             advance(p); /* sizeof */
-            HDASTNode *n = hd_ast_new(HD_AST_SIZEOF);
+            HDASTNode *n = pnew(p, HD_AST_SIZEOF);
             if (peek(p) == HD_TOK_LPAREN) {
                 advance(p); /* ( */
                 int t = peek(p);
@@ -904,7 +925,7 @@ static HDASTNode *parse_primary(HDParser *p) {
                 /* The value is the last expression statement in the block.
                  * Wrap in a STMT_EXPR node so codegen evaluates the block
                  * and returns the last expression's value. */
-                HDASTNode *n = hd_ast_new(HD_AST_STMT_EXPR);
+                HDASTNode *n = pnew(p, HD_AST_STMT_EXPR);
                 n->child = block;
                 return n;
             }
@@ -917,7 +938,7 @@ static HDASTNode *parse_primary(HDParser *p) {
              *   { .field = val, [index] = val, ... }
              * Returns a BRACE_INIT node containing the element expressions. */
             advance(p); /* consume { */
-            HDASTNode *init = hd_ast_new(HD_AST_BRACE_INIT);
+            HDASTNode *init = pnew(p, HD_AST_BRACE_INIT);
             if (!init) { p->has_error = true; return NULL; }
             while (peek(p) != HD_TOK_RBRACE && peek(p) != HD_TOK_EOF) {
                 /* Check for designated initializer: .field = val or [index] = val */
@@ -928,7 +949,7 @@ static HDASTNode *parse_primary(HDParser *p) {
                         parse_error(p, "expected field name after .");
                         break;
                     }
-                    HDASTNode *desig = hd_ast_new(HD_AST_DESIG_INIT);
+                    HDASTNode *desig = pnew(p, HD_AST_DESIG_INIT);
                     strncpy(desig->ident, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
                     advance(p); /* consume field name */
                     expect(p, HD_TOK_ASSIGN);
@@ -942,7 +963,7 @@ static HDASTNode *parse_primary(HDParser *p) {
                     else { parse_error(p, "expected constant index in []"); break; }
                     expect(p, HD_TOK_RBRACKET);
                     expect(p, HD_TOK_ASSIGN);
-                    HDASTNode *desig = hd_ast_new(HD_AST_DESIG_INIT);
+                    HDASTNode *desig = pnew(p, HD_AST_DESIG_INIT);
                     desig->ident[0] = '@'; /* marker: array index designator */
                     desig->int_val = idx;
                     desig->child = parse_assign(p);
@@ -960,7 +981,7 @@ static HDASTNode *parse_primary(HDParser *p) {
                     if (peek(p) == HD_TOK_COLON) {
                         /* GCC extension: fieldname: val */
                         advance(p); /* consume : */
-                        HDASTNode *desig = hd_ast_new(HD_AST_DESIG_INIT);
+                        HDASTNode *desig = pnew(p, HD_AST_DESIG_INIT);
                         strncpy(desig->ident, saved_text, HD_MAX_IDENT_LEN - 1);
                         desig->child = parse_assign(p);
                         hd_ast_add_arg(init, desig);
@@ -998,7 +1019,7 @@ static HDASTNode *parse_postfix(HDParser *p) {
         if (peek(p) == HD_TOK_LPAREN) {
             /* Function call */
             advance(p); /* ( */
-            HDASTNode *call = hd_ast_new(HD_AST_FUNC_CALL);
+            HDASTNode *call = pnew(p, HD_AST_FUNC_CALL);
             call->callee = expr;
             if (peek(p) != HD_TOK_RPAREN) {
                 hd_ast_add_arg(call, parse_assign(p));
@@ -1010,7 +1031,7 @@ static HDASTNode *parse_postfix(HDParser *p) {
         } else if (peek(p) == HD_TOK_LBRACKET) {
             /* Array index */
             advance(p); /* [ */
-            HDASTNode *idx = hd_ast_new(HD_AST_INDEX);
+            HDASTNode *idx = pnew(p, HD_AST_INDEX);
             idx->left = expr;
             idx->right = parse_expr(p);
             expect(p, HD_TOK_RBRACKET);
@@ -1018,7 +1039,7 @@ static HDASTNode *parse_postfix(HDParser *p) {
         } else if (peek(p) == HD_TOK_DOT) {
             /* Member access */
             advance(p); /* . */
-            HDASTNode *mem = hd_ast_new(HD_AST_MEMBER);
+            HDASTNode *mem = pnew(p, HD_AST_MEMBER);
             mem->left = expr;
             if (peek(p) == HD_TOK_IDENT) {
                 strncpy(mem->ident, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
@@ -1028,7 +1049,7 @@ static HDASTNode *parse_postfix(HDParser *p) {
         } else if (peek(p) == HD_TOK_ARROW) {
             /* Arrow access */
             advance(p); /* -> */
-            HDASTNode *mem = hd_ast_new(HD_AST_ARROW);
+            HDASTNode *mem = pnew(p, HD_AST_ARROW);
             mem->left = expr;
             if (peek(p) == HD_TOK_IDENT) {
                 strncpy(mem->ident, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
@@ -1037,12 +1058,12 @@ static HDASTNode *parse_postfix(HDParser *p) {
             expr = mem;
         } else if (peek(p) == HD_TOK_PLUS_PLUS) {
             advance(p);
-            HDASTNode *inc = hd_ast_new(HD_AST_POST_INC);
+            HDASTNode *inc = pnew(p, HD_AST_POST_INC);
             inc->child = expr;
             expr = inc;
         } else if (peek(p) == HD_TOK_MINUS_MINUS) {
             advance(p);
-            HDASTNode *dec = hd_ast_new(HD_AST_POST_DEC);
+            HDASTNode *dec = pnew(p, HD_AST_POST_DEC);
             dec->child = expr;
             expr = dec;
         } else {
@@ -1058,31 +1079,31 @@ static HDASTNode *parse_postfix(HDParser *p) {
 static HDASTNode *parse_unary(HDParser *p) {
     if (peek(p) == HD_TOK_MINUS) {
         advance(p);
-        HDASTNode *n = hd_ast_new(HD_AST_NEG);
+        HDASTNode *n = pnew(p, HD_AST_NEG);
         n->child = parse_unary(p);
         return n;
     }
     if (peek(p) == HD_TOK_BANG) {
         advance(p);
-        HDASTNode *n = hd_ast_new(HD_AST_NOT);
+        HDASTNode *n = pnew(p, HD_AST_NOT);
         n->child = parse_unary(p);
         return n;
     }
     if (peek(p) == HD_TOK_TILDE) {
         advance(p);
-        HDASTNode *n = hd_ast_new(HD_AST_BITNOT);
+        HDASTNode *n = pnew(p, HD_AST_BITNOT);
         n->child = parse_unary(p);
         return n;
     }
     if (peek(p) == HD_TOK_STAR) {
         advance(p);
-        HDASTNode *n = hd_ast_new(HD_AST_DEREF);
+        HDASTNode *n = pnew(p, HD_AST_DEREF);
         n->child = parse_unary(p);
         return n;
     }
     if (peek(p) == HD_TOK_AMP) {
         advance(p);
-        HDASTNode *n = hd_ast_new(HD_AST_ADDR);
+        HDASTNode *n = pnew(p, HD_AST_ADDR);
         n->child = parse_unary(p);
         return n;
     }
@@ -1092,13 +1113,13 @@ static HDASTNode *parse_unary(HDParser *p) {
     }
     if (peek(p) == HD_TOK_PLUS_PLUS) {
         advance(p);
-        HDASTNode *n = hd_ast_new(HD_AST_PRE_INC);
+        HDASTNode *n = pnew(p, HD_AST_PRE_INC);
         n->child = parse_unary(p);
         return n;
     }
     if (peek(p) == HD_TOK_MINUS_MINUS) {
         advance(p);
-        HDASTNode *n = hd_ast_new(HD_AST_PRE_DEC);
+        HDASTNode *n = pnew(p, HD_AST_PRE_DEC);
         n->child = parse_unary(p);
         return n;
     }
@@ -1113,7 +1134,7 @@ static HDASTNode *parse_unary(HDParser *p) {
             return operand; /* __real__ x → x */
         } else {
             /* __imag__ x → 0 (imaginary part is always 0 in our simplified model) */
-            HDASTNode *zero = hd_ast_new(HD_AST_INT_LIT);
+            HDASTNode *zero = pnew(p, HD_AST_INT_LIT);
             zero->int_val = 0;
             (void)operand;
             return zero;
@@ -1158,7 +1179,7 @@ static HDASTNode *parse_binop(HDParser *p, HDASTNode *(*higher)(HDParser*), cons
         for (int i = 0; ops[i].tok != HD_TOK_EOF; i++) {
             if (peek(p) == ops[i].tok) {
                 advance(p);
-                HDASTNode *n = hd_ast_new(ops[i].ast);
+                HDASTNode *n = pnew(p, ops[i].ast);
                 n->left = left;
                 n->right = higher(p);
                 left = n;
@@ -1260,7 +1281,7 @@ static HDASTNode *parse_cast(HDParser *p) {
                 }
                 expect(p, HD_TOK_RBRACE);
 
-                HDASTNode *cl = hd_ast_new(HD_AST_COMPOUND_LITERAL);
+                HDASTNode *cl = pnew(p, HD_AST_COMPOUND_LITERAL);
                 cl->type = cast_type;
                 cl->int_val = elem_count;
                 cl->args = elems;
@@ -1277,7 +1298,7 @@ static HDASTNode *parse_cast(HDParser *p) {
             }
 
             HDASTNode *expr = parse_cast(p);  /* right-associative for nested casts */
-            HDASTNode *n = hd_ast_new(HD_AST_CAST);
+            HDASTNode *n = pnew(p, HD_AST_CAST);
             n->child = expr;
             n->type = cast_type;
             return n;
@@ -1310,7 +1331,7 @@ static HDASTNode *parse_logic_and(HDParser *p) {
     HDASTNode *left = parse_bitor(p);
     while (peek(p) == HD_TOK_AND) {
         advance(p);
-        HDASTNode *n = hd_ast_new(HD_AST_AND);
+        HDASTNode *n = pnew(p, HD_AST_AND);
         n->left = left; n->right = parse_bitor(p);
         left = n;
     }
@@ -1321,7 +1342,7 @@ static HDASTNode *parse_logic_or(HDParser *p) {
     HDASTNode *left = parse_logic_and(p);
     while (peek(p) == HD_TOK_OR) {
         advance(p);
-        HDASTNode *n = hd_ast_new(HD_AST_OR);
+        HDASTNode *n = pnew(p, HD_AST_OR);
         n->left = left; n->right = parse_logic_and(p);
         left = n;
     }
@@ -1334,7 +1355,7 @@ static HDASTNode *parse_ternary(HDParser *p) {
     HDASTNode *expr = parse_logic_or(p);
     if (peek(p) == HD_TOK_QUESTION) {
         advance(p);
-        HDASTNode *n = hd_ast_new(HD_AST_TERNARY);
+        HDASTNode *n = pnew(p, HD_AST_TERNARY);
         n->cond = expr;
         /* The middle operand is a full expression (comma operator allowed);
          * the else operand is right-associative. */
@@ -1368,7 +1389,7 @@ static HDASTNode *parse_assign(HDParser *p) {
     }
 
     advance(p);
-    HDASTNode *n = hd_ast_new(assign_kind);
+    HDASTNode *n = pnew(p, assign_kind);
     n->left = left;
     n->right = parse_assign(p);
     /* Inherit LHS type for compound assignment type conversion */
@@ -1389,7 +1410,7 @@ static HDASTNode *parse_comma(HDParser *p) {
     while (peek(p) == HD_TOK_COMMA) {
         advance(p);
         HDASTNode *right = parse_assign(p);
-        HDASTNode *n = hd_ast_new(HD_AST_COMMA);
+        HDASTNode *n = pnew(p, HD_AST_COMMA);
         n->left = left;
         n->right = right;
         n->type = right->type; /* comma expr has type of right operand */
@@ -1402,7 +1423,7 @@ static HDASTNode *parse_comma(HDParser *p) {
 
 HDASTNode *parse_block(HDParser *p) {
     expect(p, HD_TOK_LBRACE);
-    HDASTNode *block = hd_ast_new(HD_AST_BLOCK);
+    HDASTNode *block = pnew(p, HD_AST_BLOCK);
     if (!block) { p->has_error = true; return NULL; }
     while (peek(p) != HD_TOK_RBRACE && peek(p) != HD_TOK_EOF) {
         int start_pos = p->lex->pos;
@@ -1440,7 +1461,7 @@ static HDASTNode *parse_stmt(HDParser *p) {
     /* Null statement: ';' — just consume and return a no-op */
     if (peek(p) == HD_TOK_SEMI) {
         advance(p);
-        return hd_ast_new(HD_AST_EXPR_STMT);  /* no-op expr stmt */
+        return pnew(p, HD_AST_EXPR_STMT);  /* no-op expr stmt */
     }
     /* _Static_assert(constant, "msg") — compile-time assertion. If the constant
      * is a compile-time-known false, this is a compile ERROR. */
@@ -1471,11 +1492,11 @@ static HDASTNode *parse_stmt(HDParser *p) {
                   cond->kind == HD_AST_GE))
             parse_fatal(p, "static assertion failed");
         match(p, HD_TOK_SEMI);
-        return hd_ast_new(HD_AST_EXPR_STMT);  /* no-op on success */
+        return pnew(p, HD_AST_EXPR_STMT);  /* no-op on success */
     }
     /* If statement */
     if (match(p, HD_KW_IF)) {
-        HDASTNode *n = hd_ast_new(HD_AST_IF);
+        HDASTNode *n = pnew(p, HD_AST_IF);
         expect(p, HD_TOK_LPAREN);
         n->cond = parse_expr(p);
         expect(p, HD_TOK_RPAREN);
@@ -1487,7 +1508,7 @@ static HDASTNode *parse_stmt(HDParser *p) {
 
     /* While statement */
     if (match(p, HD_KW_WHILE)) {
-        HDASTNode *n = hd_ast_new(HD_AST_WHILE);
+        HDASTNode *n = pnew(p, HD_AST_WHILE);
         expect(p, HD_TOK_LPAREN);
         n->cond = parse_expr(p);
         expect(p, HD_TOK_RPAREN);
@@ -1497,7 +1518,7 @@ static HDASTNode *parse_stmt(HDParser *p) {
 
     /* Do-while statement: do body while(cond); */
     if (match(p, HD_KW_DO)) {
-        HDASTNode *n = hd_ast_new(HD_AST_DO_WHILE);
+        HDASTNode *n = pnew(p, HD_AST_DO_WHILE);
         n->body = parse_stmt(p);
         if (match(p, HD_KW_WHILE)) {
             expect(p, HD_TOK_LPAREN);
@@ -1512,28 +1533,28 @@ static HDASTNode *parse_stmt(HDParser *p) {
 
     /* Switch statement: switch(expr) { case VAL: ... default: ... } */
     if (match(p, HD_KW_SWITCH)) {
-        HDASTNode *n = hd_ast_new(HD_AST_SWITCH);
+        HDASTNode *n = pnew(p, HD_AST_SWITCH);
         expect(p, HD_TOK_LPAREN);
         n->cond = parse_expr(p);
         expect(p, HD_TOK_RPAREN);
         /* Parse the body as a sequence of case/default labels + statements.
          * We collect case nodes (cond=value or NULL for default) in n->body's
          * stmts array. */
-        HDASTNode *body = hd_ast_new(HD_AST_BLOCK);
+        HDASTNode *body = pnew(p, HD_AST_BLOCK);
         expect(p, HD_TOK_LBRACE);
         HDASTNode *current = NULL;   /* the case node being filled */
         while (peek(p) != HD_TOK_RBRACE && peek(p) != HD_TOK_EOF) {
             if (match(p, HD_KW_CASE)) {
-                current = hd_ast_new(HD_AST_CASE);
+                current = pnew(p, HD_AST_CASE);
                 current->cond = parse_expr(p);
                 expect(p, HD_TOK_COLON);
-                current->body = hd_ast_new(HD_AST_BLOCK);
+                current->body = pnew(p, HD_AST_BLOCK);
                 hd_ast_add_stmt(body, current);
             } else if (match(p, HD_KW_DEFAULT)) {
                 expect(p, HD_TOK_COLON);
-                current = hd_ast_new(HD_AST_CASE);
+                current = pnew(p, HD_AST_CASE);
                 current->cond = NULL;   /* default */
-                current->body = hd_ast_new(HD_AST_BLOCK);
+                current->body = pnew(p, HD_AST_BLOCK);
                 hd_ast_add_stmt(body, current);
             } else {
                 if (!current) {
@@ -1550,7 +1571,7 @@ static HDASTNode *parse_stmt(HDParser *p) {
 
     /* For statement */
     if (match(p, HD_KW_FOR)) {
-        HDASTNode *n = hd_ast_new(HD_AST_FOR);
+        HDASTNode *n = pnew(p, HD_AST_FOR);
         expect(p, HD_TOK_LPAREN);
         /* C11 allows a DECLARATION in the for-init (`for(int i=0; ...)`)
          * which starts with a type keyword, not an expression. parse_expr
@@ -1593,7 +1614,7 @@ static HDASTNode *parse_stmt(HDParser *p) {
 
     /* Return statement */
     if (match(p, HD_KW_RETURN)) {
-        HDASTNode *n = hd_ast_new(HD_AST_RETURN);
+        HDASTNode *n = pnew(p, HD_AST_RETURN);
         if (peek(p) != HD_TOK_SEMI)
             n->child = parse_expr(p);
         expect(p, HD_TOK_SEMI);
@@ -1603,18 +1624,18 @@ static HDASTNode *parse_stmt(HDParser *p) {
     /* Break */
     if (match(p, HD_KW_BREAK)) {
         expect(p, HD_TOK_SEMI);
-        return hd_ast_new(HD_AST_BREAK);
+        return pnew(p, HD_AST_BREAK);
     }
 
     /* Continue */
     if (match(p, HD_KW_CONTINUE)) {
         expect(p, HD_TOK_SEMI);
-        return hd_ast_new(HD_AST_CONTINUE);
+        return pnew(p, HD_AST_CONTINUE);
     }
 
     /* goto label; */
     if (match(p, HD_KW_GOTO)) {
-        HDASTNode *n = hd_ast_new(HD_AST_GOTO);
+        HDASTNode *n = pnew(p, HD_AST_GOTO);
         if (peek(p) != HD_TOK_IDENT) {
             parse_error(p, "goto requires a label name");
             return n;
@@ -1636,7 +1657,7 @@ static HDASTNode *parse_stmt(HDParser *p) {
         advance(p);              /* ident */
         bool is_label = (peek(p) == HD_TOK_COLON);
         if (is_label) {
-            HDASTNode *n = hd_ast_new(HD_AST_LABEL);
+            HDASTNode *n = pnew(p, HD_AST_LABEL);
             strncpy(n->ident, saved_tok.text, HD_MAX_IDENT_LEN - 1);
             advance(p);          /* : */
             /* Attach the following statement to the label */
@@ -1681,7 +1702,7 @@ static HDASTNode *parse_stmt(HDParser *p) {
     /* Expression statement */
     HDASTNode *expr = parse_expr(p);
     expect(p, HD_TOK_SEMI);
-    HDASTNode *n = hd_ast_new(HD_AST_EXPR_STMT);
+    HDASTNode *n = pnew(p, HD_AST_EXPR_STMT);
     n->child = expr;
     return n;
 }
@@ -1726,7 +1747,7 @@ HDASTNode *hd_parse_decl(HDParser *p) {
             expect(p, HD_TOK_RBRACKET);
         }
         expect(p, HD_TOK_SEMI);
-        HDASTNode *n = hd_ast_new(HD_AST_STRUCT_DECL); /* no-op */
+        HDASTNode *n = pnew(p, HD_AST_STRUCT_DECL); /* no-op */
         n->type = base;
         /* For typedef'd structs/unions with empty tag, set the ident
          * so the MIR generator can register the type by name */
@@ -1790,7 +1811,7 @@ HDASTNode *hd_parse_decl(HDParser *p) {
         expect(p, HD_TOK_LPAREN);
 
         /* Create extern declaration AST node */
-        HDASTNode *ext = hd_ast_new(HD_AST_EXTERN_DECL);
+        HDASTNode *ext = pnew(p, HD_AST_EXTERN_DECL);
         ext->extern_ret_type = ret_type;
         strncpy(ext->extern_c_name, func_name, HD_MAX_IDENT_LEN - 1);
         ext->extern_n_params = 0;
@@ -1868,7 +1889,7 @@ done_extern_params:
              * For an ENUM, also emit the enumerator constants as module-level
              * globals so `int c = GREEN;` resolves GREEN to 1. */
             advance(p);
-            HDASTNode *n = hd_ast_new(type->kind == HD_TYPE_ENUM ? HD_AST_BLOCK : HD_AST_STRUCT_DECL);
+            HDASTNode *n = pnew(p, type->kind == HD_TYPE_ENUM ? HD_AST_BLOCK : HD_AST_STRUCT_DECL);
             n->type = type;
             if (type->kind == HD_TYPE_ENUM && p->n_enum_consts > 0) {
                 /* build a BLOCK: enum decl + one const VAR_DECL per enumerator */
@@ -1877,15 +1898,15 @@ done_extern_params:
                  * reference these enum constants (e.g. `enum Color c = GREEN;`).
                  * The constants remain available for lookup. */
                 for (int c = 0; c < nconsts; c++) {
-                    HDASTNode *vd = hd_ast_new(HD_AST_VAR_DECL);
+                    HDASTNode *vd = pnew(p, HD_AST_VAR_DECL);
                     strncpy(vd->ident, p->enum_const_names[c], HD_MAX_IDENT_LEN - 1);
-                    HDASTNode *init = hd_ast_new(HD_AST_INT_LIT);
+                    HDASTNode *init = pnew(p, HD_AST_INT_LIT);
                     init->int_val = p->enum_const_vals[c];
                     vd->init = init;
                     vd->type = type;
                     hd_ast_add_stmt(n, vd);
                 }
-                HDASTNode *ed = hd_ast_new(HD_AST_STRUCT_DECL);
+                HDASTNode *ed = pnew(p, HD_AST_STRUCT_DECL);
                 ed->type = type;
                 hd_ast_add_stmt(n, ed);
             }
@@ -2003,7 +2024,7 @@ done_extern_params:
          * Codegen already emits HD_AST_FUNC_DECL bodies, so parsing them makes
          * real C programs (and the gauntlet's `int main(){...}` TUs) build. */
         if (peek(p) == HD_TOK_LPAREN && !is_func_ptr) {
-            HDASTNode *fn = hd_ast_new(HD_AST_FUNC_DECL);
+            HDASTNode *fn = pnew(p, HD_AST_FUNC_DECL);
             fn->type = type;
             strncpy(fn->ident, name, HD_MAX_IDENT_LEN - 1);
             fn->n_params = 0;
@@ -2352,7 +2373,7 @@ done_params:
         HDType *pt = (HDType *)calloc(1, sizeof(HDType));
         pt->kind = HD_TYPE_PTR; pt->base = fn; pt->size = 8;
         type = pt;
-        HDASTNode *var = hd_ast_new(HD_AST_VAR_DECL);
+        HDASTNode *var = pnew(p, HD_AST_VAR_DECL);
         strncpy(var->ident, name, HD_MAX_IDENT_LEN - 1);
         var->type = type;
         if (match(p, HD_TOK_ASSIGN)) {
@@ -2377,7 +2398,7 @@ done_params:
     /* Function declaration: type name(params) { body } */
     if (peek(p) == HD_TOK_LPAREN) {
         advance(p); /* ( */
-        HDASTNode *func = hd_ast_new(HD_AST_FUNC_DECL);
+        HDASTNode *func = pnew(p, HD_AST_FUNC_DECL);
         strncpy(func->ident, name, HD_MAX_IDENT_LEN - 1);
         func->type = type;
 
@@ -2416,7 +2437,7 @@ done_params:
      * pointer (garbage). */
     HDType *elem_type = type;
     /* First declarator */
-    HDASTNode *first_var = hd_ast_new(HD_AST_VAR_DECL);
+    HDASTNode *first_var = pnew(p, HD_AST_VAR_DECL);
     strncpy(first_var->ident, name, HD_MAX_IDENT_LEN - 1);
     if (is_static) first_var->is_static = 1;
     if (is_extern) first_var->is_extern = 1;
@@ -2473,13 +2494,13 @@ done_params:
                 if (vla_dims[d] && vla_exprs[d]) {
                     dim_node = vla_exprs[d];
                 } else {
-                    dim_node = hd_ast_new(HD_AST_INT_LIT);
+                    dim_node = pnew(p, HD_AST_INT_LIT);
                     dim_node->int_val = dims[d];
                 }
                 if (total_expr == NULL) {
                     total_expr = dim_node;
                 } else {
-                    HDASTNode *mul = hd_ast_new(HD_AST_MUL);
+                    HDASTNode *mul = pnew(p, HD_AST_MUL);
                     mul->left = total_expr;
                     mul->right = dim_node;
                     total_expr = mul;
@@ -2525,7 +2546,7 @@ done_params:
     /* Additional declarators: , name [= expr] */
     HDASTNode *block = NULL;
     while (match(p, HD_TOK_COMMA)) {
-        HDASTNode *var = hd_ast_new(HD_AST_VAR_DECL);
+        HDASTNode *var = pnew(p, HD_AST_VAR_DECL);
         /* Pointer declarator: `, *q` or `, **q`. Consume the stars and
          * wrap the base element type in that many PTR levels (mirrors the
          * first declarator's `int *p` handling). Without this, `int *p, *q;`
@@ -2580,7 +2601,7 @@ done_params:
             }
         }
         if (!block) {
-            block = hd_ast_new(HD_AST_BLOCK);
+            block = pnew(p, HD_AST_BLOCK);
             block->no_scope_pop = 1;  /* don't push scope — vars are in parent scope */
             hd_ast_add_stmt(block, first_var);
         }
@@ -2599,7 +2620,7 @@ void hd_parse_init(HDParser *p, HDLexer *lex) {
 }
 
 HDASTNode *hd_parse_compilation_unit(HDParser *p) {
-    HDASTNode *unit = hd_ast_new(HD_AST_BLOCK);
+    HDASTNode *unit = pnew(p, HD_AST_BLOCK);
 
     /* Error recovery: one bad declaration must not abort the file. Report the
      * diagnostic, resynchronise at the next `;` (or the enclosing brace) and
