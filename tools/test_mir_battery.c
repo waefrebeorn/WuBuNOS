@@ -122,6 +122,8 @@ static const Probe PROBES[] = {
     {"fn ptr member", "struct S{int (*fn)(int,int); int n;}; int add(int x,int y){return x+y;} struct S s; s.fn=add; s.n=5; s.fn(3,4);", 7},
     {"array member", "struct S{int a[3]; int n;}; struct S s; s.a[0]=1; s.a[1]=2; s.a[2]=3; s.n=3; s.a[0]+s.a[1]+s.a[2];", 6},
     /* ---- more edge cases ---- */
+    {"nest member assign", "struct Inner{int v;}; struct Outer{struct Inner i;}; int g(){struct Outer o; struct Inner in; in.v=77; o.i=in; return o.i.v;} g();", 77},
+    {"nest ret to var", "struct Inner{int v;}; struct Outer{struct Inner i;}; struct Outer f(){struct Outer o; struct Inner in; in.v=77; o.i=in; return o;} struct Outer r; r=f(); r.i.v;", 77},
     {"struct in struct return", "struct Inner{int v;}; struct Outer{struct Inner i;}; struct Outer f(){struct Outer o; struct Inner in; in.v=77; o.i=in; return o;} struct Outer r; f().i.v;", 77},
     {"nested fn call struct", "struct S{int a;}; struct S make(int v){struct S r; r.a=v; return r;} make(make(5).a).a;", 5},
     {"struct comparison", "struct S{int a;}; struct S s; s.a=42; if(s.a==42) 1; else 0;", 1},

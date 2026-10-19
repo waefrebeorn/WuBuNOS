@@ -2925,6 +2925,14 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                             }
                         }
                     }
+                    /* Root is a call returning a struct: f().i.v has no IDENT
+                     * root, so take the struct type from the call's return
+                     * type instead of leaving root_struct_type NULL (which made
+                     * every offset 0 and the whole expression evaluate to 0). */
+                    if (!root_struct_type && dot_node &&
+                        (dot_node->kind == HD_AST_CALL || dot_node->kind == HD_AST_FUNC_CALL))
+                        root_struct_type = mir_dot_struct_type(g, dot_node);
+
                     /* Accumulate offsets from root to innermost member */
                     int total_inner_offset = 0;
                     const HDASTNode *walk = n->left;
