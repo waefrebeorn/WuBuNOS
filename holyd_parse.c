@@ -288,10 +288,11 @@ static HDType *parse_type(HDParser *p) {
             break;
         }
         case HD_KW_STRUCT:
+        case HD_KW_CLASS:   /* HolyC: class shares struct semantics (no vtables) */
         case HD_KW_UNION: {
             /* Struct/union type: (struct|union) Name { ... } or Name.
              * Same member grammar; a union overlaps all members at offset 0. */
-            HDTypeKind comp_kind = (peek(p) == HD_KW_STRUCT) ? HD_TYPE_STRUCT : HD_TYPE_UNION;
+            HDTypeKind comp_kind = (peek(p) == HD_KW_UNION) ? HD_TYPE_UNION : HD_TYPE_STRUCT;
             advance(p); /* struct | union */
             char tag[HD_MAX_IDENT_LEN] = {0};
             if (peek(p) == HD_TOK_IDENT) {
@@ -1183,7 +1184,7 @@ static HDASTNode *parse_cast(HDParser *p) {
         if (tok == HD_KW_I8 || tok == HD_KW_I16 || tok == HD_KW_I32 ||
             tok == HD_KW_I64 || tok == HD_KW_U0 || tok == HD_KW_U8 || tok == HD_KW_U16 ||
             tok == HD_KW_U32 || tok == HD_KW_U64 || tok == HD_KW_F64 ||
-            tok == HD_KW_BOOL || tok == HD_KW_STRUCT || tok == HD_KW_UNION ||
+            tok == HD_KW_BOOL || tok == HD_KW_STRUCT || tok == HD_KW_CLASS || tok == HD_KW_UNION ||
             tok == HD_KW_ENUM || tok == HD_KW_TYPEDEF || tok == HD_KW_COMPLEX ||
             tok == HD_KW_DECIMAL32 || tok == HD_KW_DECIMAL64 || tok == HD_KW_DECIMAL128 ||
             tok == HD_KW_ATOMIC) {

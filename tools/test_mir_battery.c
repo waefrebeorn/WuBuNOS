@@ -126,6 +126,8 @@ static const Probe PROBES[] = {
     {"goal157 comma-for", "int i; int j; for(i=0,j=10;i<j;i++,j--); i*100+j;", 505},
     {"goal161 stmt-expr arg", "int f(int v){return v;} int r; r=f(({int t=3; t*2;})); r;", 6},
     {"goal155 goto fwd", "int f(){int i=0; goto skip; i=99; skip: return i+1;} f();", 1},
+    {"goal154 class", "class C { I64 x; } c; c.x=5; c.x;", 5},
+    {"goal154 class struct coexist", "struct S{int a;}; class C { int b; } c; struct S s; s.a=2; c.b=3; s.a+c.b;", 5},
     {"goal155 same label two fns", "int f(){a: return 1;} int g(){a: return 2;} f()+g();", 3},
     {"goal155 goto back", "int f(){int i=0; loop: i=i+1; if(i<3) goto loop; return i;} f();", 3},
     {"float two vars", "float a=1.5; float b=2.5; a;", 4609434218613702656LL},
