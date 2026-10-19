@@ -6381,6 +6381,10 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
      * the MIR path parses the same sources the x86-64 JIT (golden) does. */
     char *pp = wubu_preprocess(source);
     const char *effective = pp ? pp : source;
+    if (getenv("HD_DUMP_BUILD")) {
+        FILE *dbg = fopen(getenv("HD_DUMP_BUILD"), "wb");
+        if (dbg) { fwrite(effective, 1, strlen(effective), dbg); fclose(dbg); }
+    }
 
     HDLexer lex;
     hd_lex_init(&lex, effective);
@@ -6467,6 +6471,19 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
                     hd_parse_init(&parse, &lex);
                     ast = hd_parse_block(&parse);
                     free(wrapped);
+                    /* A translation unit with several top-level functions or
+                     * declarations cannot be parsed as a BLOCK of statements.
+                     * That is what 'expected ; got {' meant for implicit-int
+                     * definitions like `f () { ... }` after a completed
+                     * function. Retry as a compilation unit before giving up. */
+                    if (parse.has_error) {
+                        hd_ast_free(ast);
+                        parse.has_error = false;
+                        parse.n_errors = 0;
+                        hd_lex_init(&lex, effective);
+                        hd_parse_init(&parse, &lex);
+                        ast = hd_parse_compilation_unit(&parse);
+                    }
                 } else {
                     ast = hd_parse_stmt(&parse);
                 }

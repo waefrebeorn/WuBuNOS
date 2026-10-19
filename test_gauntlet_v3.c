@@ -155,6 +155,18 @@ _exit(0);
 }
 
 int main(int argc, char **argv) {
+    /* Single-file mode: run exactly one source through the same path the suite
+     * uses, so a captured /tmp/failcases file reproduces the harness exactly. */
+    if (argc > 1) {
+        FILE *f = fopen(argv[1], "rb");
+        if (!f) { perror("open"); return 2; }
+        fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
+        char *src = malloc((size_t)n + 1);
+        size_t rd = fread(src, 1, (size_t)n, f); src[rd] = 0; fclose(f);
+        int rc = run_single_test_nofree(argv[1], src, 0);
+        printf("rc=%d diag=[%s]\n", rc, hd_last_diag());
+        return 0;
+    }
     const test_entry_t *suites[] = {
         gauntlet_gcc_torture_tests,
         gauntlet_extern_gcc_tests,
