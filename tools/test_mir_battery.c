@@ -122,6 +122,12 @@ static const Probe PROBES[] = {
     {"fn ptr member", "struct S{int (*fn)(int,int); int n;}; int add(int x,int y){return x+y;} struct S s; s.fn=add; s.n=5; s.fn(3,4);", 7},
     {"array member", "struct S{int a[3]; int n;}; struct S s; s.a[0]=1; s.a[1]=2; s.a[2]=3; s.n=3; s.a[0]+s.a[1]+s.a[2];", 6},
     /* ---- more edge cases ---- */
+    {"goal156 switch64", "int r=0; long long x=4294967296; switch(x){case 4294967296: r=7; break; default: r=3;} r;", 7},
+    {"goal157 comma-for", "int i; int j; for(i=0,j=10;i<j;i++,j--); i*100+j;", 505},
+    {"goal161 stmt-expr arg", "int f(int v){return v;} int r; r=f(({int t=3; t*2;})); r;", 6},
+    {"goal155 goto fwd", "int f(){int i=0; goto skip; i=99; skip: return i+1;} f();", 1},
+    {"goal155 same label two fns", "int f(){a: return 1;} int g(){a: return 2;} f()+g();", 3},
+    {"goal155 goto back", "int f(){int i=0; loop: i=i+1; if(i<3) goto loop; return i;} f();", 3},
     {"float two vars", "float a=1.5; float b=2.5; a;", 4609434218613702656LL},
     {"float second", "float a=1.5; float b=2.5; b;", 4612811918334230528LL},
     {"float lit bits", "1.5;", 4609434218613702656LL},
