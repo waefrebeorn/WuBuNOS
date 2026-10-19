@@ -6475,10 +6475,18 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
         return -1;
     }
 
-    /* The semantic pass (holyd_semantic.c) is NOT wired into the production
-     * compile path yet: enabling it cost 228 gauntlet passes (1581 -> 1353,
-     * errors 907 -> 1200) through false rejections, so it stays a standalone
-     * checker (tools/test_diag.c) until its rule set stops over-reporting. */
+    /* The semantic pass (holyd_semantic.c) is off by default: enabling it cost
+     * 228 gauntlet passes (1581 -> 1353, errors 907 -> 1200) through false
+     * rejections. HD_SEMANTIC=1 enables it for measurement, so the over-reporting
+     * classes can be collected and fixed one at a time. */
+    if (getenv("HD_SEMANTIC")) {
+        hd_semantic_check(&parse, ast);
+        if (parse.n_errors > 0) {
+            hd_ast_free(ast);
+            free(pp);
+            return -1;
+        }
+    }
 
     wubu_mir_init(prog);
     HDMirGen g;
