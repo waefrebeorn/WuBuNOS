@@ -201,9 +201,13 @@ static void strip_attributes(char *line)
     char *p = line;
     char *out = line;
     while (*p) {
-        /* Look for __attribute__ */
-        if (strncmp(p, "__attribute__", 13) == 0 && (p == line || !pp_is_ident_char(p[-1]))) {
-            p += 13;
+        /* Look for __attribute__ or the single-trailing-underscore spelling
+         * __attribute, which GCC also accepts. */
+        int alen = 0;
+        if (strncmp(p, "__attribute__", 13) == 0) alen = 13;
+        else if (strncmp(p, "__attribute", 11) == 0) alen = 11;
+        if (alen && (p == line || !pp_is_ident_char(p[-1]))) {
+            p += alen;
             while (*p == ' ' || *p == '\t') p++;
             if (*p == '(') {
                 p++;
@@ -595,6 +599,10 @@ char *wubu_preprocess(const char *src)
             /* expand macros in this line */
             char exp2[8192];
             pp_expand_line(exp, exp2, sizeof(exp2));
+            /* Macro bodies can introduce attributes the per-line strip above never
+             * saw: `#define ENDIANBIG __attribute((...))` expands after stripping.
+             * Strip again on the expanded text. */
+            strip_attributes(exp2);
             size_t l = strlen(exp2);
             if (o + l + 2 < cap) {
                 memcpy(out + o, exp2, l);
