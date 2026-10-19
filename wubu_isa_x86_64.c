@@ -734,11 +734,22 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             int64_t imm = in->imm;
             int dst_enc = VR_ENC_SAFE(in->dst);
             if (dst_enc >= 0) {
-                /* mov reg, imm — on x86-64 REX.W + B8+rd is ALWAYS movabs
-                 * (imm64); there is no mov r64, imm32 form. So emit imm64. */
-                if (dst_enc >= 8) { e8(&e, 0x49); e8(&e, (uint8_t)(0xB8 + (dst_enc & 7))); }
-                else { e8(&e, 0x48); e8(&e, (uint8_t)(0xB8 + dst_enc)); }
-                e64(&e, (uint64_t)imm);
+                /* REX.W + B8+rd is movabs (imm64) and there is no imm32 form
+                 * of it. REX.W + C7 /0 id is the short form, 7 bytes instead of
+                 * 10 — but it SIGN-extends, so it is only valid when the value
+                 * fits in int32. 0x80000000 must stay movabs or it would become
+                 * 0xFFFFFFFF80000000. */
+                if (imm >= -2147483648LL && imm <= 2147483647LL) {
+                    if (dst_enc >= 8) e8(&e, 0x49);
+                    else              e8(&e, 0x48);
+                    e8(&e, 0xC7);
+                    e8(&e, (uint8_t)(0xC0 | (dst_enc & 7)));
+                    e32(&e, (uint32_t)imm);
+                } else {
+                    if (dst_enc >= 8) { e8(&e, 0x49); e8(&e, (uint8_t)(0xB8 + (dst_enc & 7))); }
+                    else { e8(&e, 0x48); e8(&e, (uint8_t)(0xB8 + dst_enc)); }
+                    e64(&e, (uint64_t)imm);
+                }
             } else {
                 /* spilled: mov rax, imm; mov [rbp+off], rax. Uses movabs too. */
                 e8(&e, 0x48); e8(&e, 0xB8); e64(&e, (uint64_t)imm);
@@ -1110,7 +1121,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             }
             break;
         }
-        case MIR_SHL: case MIR_SHR: {
+        case MIR_SHL: case MIR_SHR: case MIR_SHR_U: {
             /* shifts need rcx */
             int sa = VR_ENC_SAFE(in->a);
             if (sa >= 0) emit_mov_rax_from_vr(&e, sa);
@@ -1127,6 +1138,7 @@ static int x86_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
                 else { rex(&e,1,0,0,0); e8(&e, 0x8B); e8(&e, 0x8D); e32(&e, (uint32_t)off); }
             }
             if (in->op == MIR_SHL) { rex(&e,1,0,0,0); e8(&e, 0xD3); e8(&e, 0xE0); }
+            else if (in->op == MIR_SHR_U) { rex(&e,1,0,0,0); e8(&e, 0xD3); e8(&e, 0xE8); }  /* shr rax, cl (logical, unsigned) */
             else { rex(&e,1,0,0,0); e8(&e, 0xD3); e8(&e, 0xF8); }  /* sar rax, cl (arithmetic, matches interpreter >> on int64) */
             /* No movsxd truncation for shifts — matches interpreter 64-bit semantics */
 
