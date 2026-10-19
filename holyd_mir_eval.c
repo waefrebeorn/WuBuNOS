@@ -35,6 +35,7 @@ typedef struct {
     wubu_vr_t addr;        /* memory base address (0 if not yet allocated) */
     int is_unsigned;
     int is_float;
+    int is_f32;            /* declared with `float` (single precision) */
     int is_array;
     int array_size;        /* outermost dimension */
     int array_stride;      /* inner dimension for 2D+ arrays (1 for 1D) */
@@ -630,6 +631,24 @@ static int mir_var_is_array(HDMirGen *g, const char *name) {
 }
 
 /* symbol table: is the named variable a struct? */
+/* Natural byte size of a member type name, for C-compatible sizeof. The
+ * storage model still gives each member a whole 8-byte cell; sizeof reports the
+ * language-level size so sizeof(struct S) and sizeof(var) agree. */
+static int mir_type_name_bytes(const char *n) {
+    if (!n || !n[0]) return 8;
+    if (!strcmp(n, "char") || !strcmp(n, "I8") || !strcmp(n, "U8")) return 1;
+    if (!strcmp(n, "short") || !strcmp(n, "I16") || !strcmp(n, "U16")) return 2;
+    if (!strcmp(n, "int") || !strcmp(n, "I32") || !strcmp(n, "U32") ||
+        !strcmp(n, "float")) return 4;
+    return 8;               /* I64/U64/double/long long/pointers */
+}
+
+static int mir_var_is_f32(HDMirGen *g, const char *name) {
+    for (int i = g->n_vars - 1; i >= 0; i--)
+        if (strcmp(g->vars[i].name, name) == 0) return g->vars[i].is_f32;
+    return 0;
+}
+
 static int mir_var_is_struct(HDMirGen *g, const char *name) {
     for (int i = 0; i < g->n_vars; i++)
         if (strcmp(g->vars[i].name, name) == 0) return g->vars[i].is_struct;
@@ -1837,8 +1856,15 @@ static wubu_vr_t mir_gen_stmt(HDMirGen *g, const HDASTNode *n) {
                 }
             }
         }
-        if (n->type && n->type->kind == HD_TYPE_F64)
+        if (n->type && (n->type->kind == HD_TYPE_F64 || n->type->kind == HD_TYPE_F32)) {
             vr = mir_decl_var_float(g, n->ident);
+            if (n->type->kind == HD_TYPE_F32)
+                for (int vi = g->n_vars - 1; vi >= 0; vi--)
+                    if (strcmp(g->vars[vi].name, n->ident) == 0) {
+                        g->vars[vi].is_f32 = 1;
+                        break;
+                    }
+        }
         else
             vr = mir_decl_var_unsigned(g, n->ident, is_uns);
         /* Function-pointer initializer: int (*fp)(int)=f; — record the target
@@ -3892,6 +3918,12 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                     n->left && n->left->kind == HD_AST_IDENT ? n->left->ident : "expr",
                     n->right && n->right->kind == HD_AST_IDENT ? n->right->ident : "expr");
         wubu_vr_t r = wubu_mir_binop(g->prog, is_float ? MIR_DADD : MIR_ADD, a, b);
+        /* float (f32) semantics: an expression whose operands are single
+         * precision yields single precision, so narrow the f64 result. */
+        if (is_float &&
+            ((n->left && n->left->kind == HD_AST_IDENT && mir_var_is_f32(g, n->left->ident)) ||
+             (n->right && n->right->kind == HD_AST_IDENT && mir_var_is_f32(g, n->right->ident))))
+            r = wubu_mir_unop(g->prog, MIR_F64_TO_F32, r);
         if (!is_float) {
             HDType *rt = mir_binop_result_type(g, n->left, n->right);
             if (rt && (rt->kind == HD_TYPE_I32 || rt->kind == HD_TYPE_U32))
@@ -4688,16 +4720,20 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                             /* Compute packed byte size from member offsets */
                             mir_struct_t *st = mir_find_struct(g, g->vars[i].struct_name);
                             if (st && st->n_members > 0) {
-                                /* Last member's offset + its size */
-                                int last_mi = st->n_members - 1;
-                                int last_off = st->member_offsets[last_mi];
-                                /* last_off is in cells; compute byte offset + last member size */
-                                int last_memb_sz = 8; /* default 1 cell */
-                                if (st->member_type_names[last_mi][0]) {
-                                    mir_struct_t *inner_st = mir_find_struct(g, st->member_type_names[last_mi]);
-                                    if (inner_st) last_memb_sz = inner_st->total_size * 8;
+                                /* C-compatible layout: accumulate each member's
+                                 * natural size with its own alignment. Using the
+                                 * cell offsets here inflated struct{int;int} to 16. */
+                                int off = 0, max_align = 1;
+                                for (int mi = 0; mi < st->n_members; mi++) {
+                                    int sz = mir_type_name_bytes(st->member_type_names[mi]);
+                                    int al = sz > 8 ? 8 : sz;
+                                    if (al < 1) al = 1;
+                                    if (al > max_align) max_align = al;
+                                    off = (off + al - 1) / al * al;
+                                    off += sz;
                                 }
-                                size = (last_off * 8) + last_memb_sz;
+                                if (max_align > 1) off = (off + max_align - 1) / max_align * max_align;
+                                size = off;
                             } else {
                                 size = 8;
                             }

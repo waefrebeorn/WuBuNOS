@@ -223,6 +223,7 @@ static HDType *parse_type(HDParser *p) {
                          /* `unsigned long` == `unsigned long int` */
                          if (peek(p) == HD_KW_I64 || peek(p) == HD_KW_I32) advance(p);
                          break;
+        case HD_KW_F32:  t->kind = HD_TYPE_F32;  t->size = 4; advance(p); break;
         case HD_KW_F64:  t->kind = HD_TYPE_F64;  advance(p);
                          /* `double _Complex` (base type first) */
                          if (peek(p) == HD_KW_COMPLEX) { advance(p);
