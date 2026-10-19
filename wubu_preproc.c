@@ -440,6 +440,10 @@ char *wubu_preprocess(const char *src)
         {"va_start(ap, last)", "(ap = 0)"},
         {"va_arg(ap, type)", "wubu_va_args[ap++]"},
         {"va_end(ap)", ""},
+        /* offsetof comes from stddef.h, which is stripped along with every other
+         * include. Supply the standard definition instead of leaving it an
+         * unknown identifier whose type argument kills the parse. */
+        {"offsetof(type, member)", "((unsigned long)&(((type*)0)->member))"},
         /* Variadic argument storage: global array + init code */
         {"__wubu_va_args_decl", "int wubu_va_args[32];"},
         {"__wubu_va_save(n)", "do { int __i; for(__i=0; __i<32; __i++) wubu_va_args[__i] = 0; } while(0)"},
