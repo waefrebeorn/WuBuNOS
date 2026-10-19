@@ -3887,6 +3887,10 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             a = mir_promote_to_float(g, a, n->left);
             b = mir_promote_to_float(g, b, n->right);
         }
+        if (getenv("MIRDBG"))
+            fprintf(stderr, "[add] is_float=%d left=%s right=%s\n", is_float,
+                    n->left && n->left->kind == HD_AST_IDENT ? n->left->ident : "expr",
+                    n->right && n->right->kind == HD_AST_IDENT ? n->right->ident : "expr");
         wubu_vr_t r = wubu_mir_binop(g->prog, is_float ? MIR_DADD : MIR_ADD, a, b);
         if (!is_float) {
             HDType *rt = mir_binop_result_type(g, n->left, n->right);
