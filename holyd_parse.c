@@ -860,7 +860,19 @@ static HDASTNode *parse_primary(HDParser *p) {
                 advance(p); /* ( */
                 int t = peek(p);
                 int is_type_kw = (t >= HD_KW_I0 && t <= HD_KW_VOLATILE);
-                if (is_type_kw) {
+                /* sizeof(typedef-name) is a type form, not an expression.
+                 * Without this, `typedef int arr10[10]; sizeof(arr10)` parses
+                 * the name as a variable reference and reports the wrong size. */
+                int is_typedef_name = 0;
+                if (!is_type_kw && t == HD_TOK_IDENT) {
+                    for (int i = 0; i < p->n_typedefs; i++) {
+                        if (strcmp(p->typedef_names[i], p->lex->tok.text) == 0) {
+                            is_typedef_name = 1;
+                            break;
+                        }
+                    }
+                }
+                if (is_type_kw || is_typedef_name) {
                     n->type = parse_type(p);
                     expect(p, HD_TOK_RPAREN);
                     return n;
