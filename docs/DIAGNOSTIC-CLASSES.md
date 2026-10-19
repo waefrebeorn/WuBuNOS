@@ -150,3 +150,41 @@ the parameter loop — a backtracking bug, not a type-system gap.
 
 Without these, three attempts were spent debugging text that looked identical and
 was not.
+
+## Profile at 76.1% — the end of the cheap fixes
+
+```
+2031 / 2668 = 76.1%   errors 425
+```
+
+Each of the last three fixes was worth +1 to +3 passes individually:
+
+| fix | passes |
+|---|---|
+| typedef'd parameters are not K&R name lists | +52 |
+| attributes reintroduced by macro expansion | +3 |
+| offsetof supplied as a builtin | +1 |
+
+That is the signature of diminishing returns: the remaining classes are either
+out of scope or need structural work.
+
+### Out of scope by design
+
+`_Complex`: 182 + 89 + 67 messages across the top three classes. The lexer has no
+imaginary suffix (`1.0i`) and the backend has no complex type. Implementing only
+the parse would turn ERROR into FAIL without a correct answer, so it should be done
+properly (lexer suffix + complex layout + arithmetic) or not at all.
+
+### Still in scope
+
+- `expected ';'` after `.`, `+`, `<` — expression-context parsing, ~250 messages,
+  needs one representative reduction each
+- `expected identifier` clusters — several hundred messages, mostly designators
+  and attribute remnants
+
+### The method that works, in order
+
+1. `HD_DIAG=2` capture -> `/tmp/failcases/<name>.c` (exact source)
+2. `./gauntlet_v3 <file>` to reproduce outside the suite
+3. `HD_DUMP_BUILD=<path>` for the text the builder really sees
+4. reduce to a single construct, fix, then `tools/gauntlet_noise.sh` for the verdict
