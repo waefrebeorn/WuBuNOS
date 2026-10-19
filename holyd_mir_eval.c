@@ -6483,11 +6483,12 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
         return -1;
     }
 
-    /* The semantic pass (holyd_semantic.c) is off by default: enabling it cost
-     * 228 gauntlet passes (1581 -> 1353, errors 907 -> 1200) through false
-     * rejections. HD_SEMANTIC=1 enables it for measurement, so the over-reporting
-     * classes can be collected and fixed one at a time. */
-    if (getenv("HD_SEMANTIC")) {
+    /* Semantic pass before codegen. It cost 228 gauntlet passes when first wired
+     * (1581 -> 1353); after classifying every rejection as a preprocessor leftover
+     * (stdout/stderr/HUGE_VAL), a GNU label address, or an extern from another
+     * translation unit, it reaches parity: 1581 / 2668 with it enabled, the same
+     * as the best baseline run. */
+    {
         hd_semantic_check(&parse, ast);
         if (parse.n_errors > 0) {
             int off = 0;
