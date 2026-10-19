@@ -141,6 +141,13 @@ static HDASTNode *parse_block(HDParser *p);  /* forward-declared for ({ ... }) s
 
 /* -- Parse Type --------------------------------------------------- */
 
+static void parse_error_tok(HDParser *p, const char *msg) {
+    char buf[192];
+    snprintf(buf, sizeof buf, "%s (saw '%s', tok %d)", msg,
+             p->lex->tok.text ? p->lex->tok.text : "", (int)peek(p));
+    parse_error(p, buf);
+}
+
 static HDType *parse_type(HDParser *p) {
     size_t entry_pos = p->lex->pos;
     HDType *t = (HDType *)calloc(1, sizeof(HDType));
@@ -1981,7 +1988,7 @@ done_extern_params:
     }
 
     if (peek(p) != HD_TOK_IDENT && peek(p) != HD_TOK_STAR && peek(p) != HD_TOK_LPAREN) {
-        parse_error(p, "expected identifier");
+        parse_error_tok(p, "expected identifier");
         return NULL;
     }
 
@@ -2068,7 +2075,7 @@ done_extern_params:
             p->lex->line = 0;
             hd_lex_next(p->lex);
             if (peek(p) != HD_TOK_IDENT) {
-                parse_error(p, "expected identifier");
+                parse_error_tok(p, "expected identifier");
                 return NULL;
             }
             strncpy(name, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
@@ -2077,8 +2084,17 @@ done_extern_params:
         }
     } else {
         /* Plain: `int name` or `int name(params)` */
+        /* Type-only declaration: `struct S { int x; };`, `enum E {...};`, or a
+         * stray `int;`. There is no declarator to name, and reporting
+         * "expected identifier" here was the single largest diagnostic class. */
+        if (peek(p) == HD_TOK_SEMI) {
+            advance(p);
+            HDASTNode *empty = pnew(p, HD_AST_BLOCK);
+            empty->no_scope_pop = 1;
+            return empty;
+        }
         if (peek(p) != HD_TOK_IDENT) {
-            parse_error(p, "expected identifier");
+            parse_error_tok(p, "expected identifier");
             return NULL;
         }
         strncpy(name, p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
