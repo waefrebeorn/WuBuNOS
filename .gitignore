@@ -15,6 +15,8 @@ gauntlet_v3
 gauntlet_direct
 gauntlet_output
 test_single
+test_diag
+test_lexer_suffix
 test_gauntlet_output
 
 # Test / bench / debug binaries (untrack; build artifacts)
