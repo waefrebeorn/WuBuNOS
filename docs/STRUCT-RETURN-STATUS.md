@@ -84,3 +84,41 @@ was computed as `1 + 2`, and the result was then reinterpreted as a double
 bit-pattern. Float literals are being parsed/truncated to integers in this path —
 a lexer/constant-pool issue, not an ABI one, and separate from the `xmm0`
 return gap in `docs/FLOAT-RETURN-124.md`.
+
+## Root cause (identified in the interpreter)
+
+`wubu_mir_interp.c`, `op_ret:` restores the caller's register file and then:
+
+```c
+memcpy(cmem + f->frame_off, csave, f->frame_cells * sizeof(int64_t));
+```
+
+i.e. **every cell at or above `globals_end` is rolled back to its
+call-time contents**. The struct-return buffer is allocated at compile time by
+`wubu_mir_alloc(g->prog, size * 8)` — a static address in the MIR's memory, and
+for nested frames it lands *above* `globals_end`.
+
+Sequence for `struct A f(){ struct A s; s.x=7; return s; } t=f(); t.x;`:
+
+1. callee copies `s` into the static buffer and puts the buffer address in v0;
+2. `op_ret` reads the address into `retval`, restores `vr`, and **restores the
+   frame memory — wiping the buffer that was just written**;
+3. the caller reads member `x` through the address and gets 0.
+
+That is exactly the observed value: every struct-return probe returns 0, not a
+garbage number. The return convention is implemented; the call-frame restore
+destroys its result.
+
+## Fix options (next pass)
+
+1. **Exclude the buffer from the restore** — needs the buffer range recorded in
+   the program (`struct_ret_base`/`struct_ret_bytes`) and the memcpy split into
+   the ranges below and above it.
+2. **Allocate buffers below `globals_end`** so they are file-scope persistent,
+   which the restore already leaves alone. Simplest and matches the intent of
+   "the buffer outlives the callee's frame".
+3. **Copy the buffer out at return** — needs the size at `op_ret`, which the
+   instruction does not carry.
+
+Option 2 is the smallest change and the one the comment in `HD_AST_RETURN`
+already implies.
