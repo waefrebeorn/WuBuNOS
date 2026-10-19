@@ -1361,11 +1361,30 @@ static HDASTNode *parse_cast(HDParser *p) {
                 while (peek(p) != HD_TOK_RBRACE && elem_count < 64) {
                     /* Handle designated initializers: .field = expr */
                     if (peek(p) == HD_TOK_DOT) {
-                        advance(p); /* consume . */
-                        if (peek(p) == HD_TOK_IDENT) {
-                            strncpy(elem_field_names[elem_count], p->lex->tok.text, HD_MAX_IDENT_LEN - 1);
-                            elem_field_set[elem_count] = 1;
+                        /* A designator is a PATH: `.f.a = 1` names the member `a`
+                         * inside member `f`. Consuming only the first component
+                         * left the parser at the second '.', which then failed
+                         * with "expected expression". Collect the whole path,
+                         * dot-separated, plus any [] subscripts. */
+                        size_t off = 0;
+                        elem_field_names[elem_count][0] = 0;
+                        elem_field_set[elem_count] = 1;
+                        while (peek(p) == HD_TOK_DOT) {
+                            advance(p); /* . */
+                            if (peek(p) != HD_TOK_IDENT) break;
+                            if (off && off < HD_MAX_IDENT_LEN - 2)
+                                elem_field_names[elem_count][off++] = '.';
+                            size_t l = strlen(p->lex->tok.text);
+                            if (off + l > HD_MAX_IDENT_LEN - 2) l = HD_MAX_IDENT_LEN - 2 - off;
+                            memcpy(elem_field_names[elem_count] + off, p->lex->tok.text, l);
+                            off += l;
+                            elem_field_names[elem_count][off] = 0;
                             advance(p);
+                            while (peek(p) == HD_TOK_LBRACKET) {
+                                advance(p);
+                                if (peek(p) != HD_TOK_RBRACKET) parse_expr(p);
+                                expect(p, HD_TOK_RBRACKET);
+                            }
                         }
                         if (peek(p) == HD_TOK_ASSIGN) advance(p); /* skip = */
                     }
