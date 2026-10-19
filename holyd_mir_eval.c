@@ -4716,7 +4716,28 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                 /* Look up the variable's type from the symbol table */
                 for (int i = 0; i < g->n_vars; i++) {
                     if (strcmp(g->vars[i].name, n->child->ident) == 0) {
-                        if (g->vars[i].is_struct) {
+                        if (g->vars[i].type && g->vars[i].type->kind == HD_TYPE_STRUCT &&
+                            g->vars[i].type->n_members > 0) {
+                            /* The authoritative layout: member byte offsets and
+                             * member types live on the variable's HDType. The
+                             * mir_struct_t table keeps names only, so a size
+                             * computed from it defaulted every member to 8. */
+                            HDType *vt = g->vars[i].type;
+                            int end = 0, maxal = 1;
+                            for (int mi = 0; mi < vt->n_members; mi++) {
+                                int64_t msz = vt->members[mi].type
+                                                  ? hd_type_size(vt->members[mi].type) : 8;
+                                if (msz <= 0) msz = 8;
+                                int al = (int)(msz > 8 ? 8 : msz);
+                                if (al < 1) al = 1;
+                                if (al > maxal) maxal = al;
+                                int m_end = (int)vt->members[mi].offset + (int)msz;
+                                if (m_end > end) end = m_end;
+                            }
+                            if (maxal > 1) end = (end + maxal - 1) / maxal * maxal;
+                            size = end > 0 ? end : 8;
+                            if (getenv("MIRDBG")) fprintf(stderr, "[sz-type] %s -> %d\n", n->child->ident, size);
+                        } else if (g->vars[i].is_struct) {
                             /* Compute packed byte size from member offsets */
                             mir_struct_t *st = mir_find_struct(g, g->vars[i].struct_name);
                             if (st && st->n_members > 0) {
@@ -4726,6 +4747,7 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                                 int off = 0, max_align = 1;
                                 for (int mi = 0; mi < st->n_members; mi++) {
                                     int sz = mir_type_name_bytes(st->member_type_names[mi]);
+                                    if (getenv("MIRDBG")) fprintf(stderr, "[sz-member] '%s' -> %d\n", st->member_type_names[mi], sz);
                                     int al = sz > 8 ? 8 : sz;
                                     if (al < 1) al = 1;
                                     if (al > max_align) max_align = al;
@@ -4734,6 +4756,7 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                                 }
                                 if (max_align > 1) off = (off + max_align - 1) / max_align * max_align;
                                 size = off;
+                                if (getenv("MIRDBG")) fprintf(stderr, "[sz-ident-struct] %s -> %d\n", n->child->ident, size);
                             } else {
                                 size = 8;
                             }
@@ -4749,7 +4772,28 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
                             }
                         } else {
                             /* Scalar: use the variable's declared type */
-                            if (g->vars[i].type) {
+                            if (g->vars[i].type && g->vars[i].type->kind == HD_TYPE_STRUCT &&
+                                g->vars[i].struct_name[0]) {
+                                /* A struct variable whose is_struct flag was not set
+                                 * still needs the C byte size, not cells*8. */
+                                mir_struct_t *st2 = mir_find_struct(g, g->vars[i].struct_name);
+                                if (st2 && st2->n_members > 0) {
+                                    int off2 = 0, ma2 = 1;
+                                    for (int mi = 0; mi < st2->n_members; mi++) {
+                                        int sz = mir_type_name_bytes(st2->member_type_names[mi]);
+                                        int al = sz > 8 ? 8 : sz;
+                                        if (al < 1) al = 1;
+                                        if (al > ma2) ma2 = al;
+                                        off2 = (off2 + al - 1) / al * al;
+                                        off2 += sz;
+                                    }
+                                    if (ma2 > 1) off2 = (off2 + ma2 - 1) / ma2 * ma2;
+                                    size = off2;
+                                    if (getenv("MIRDBG")) fprintf(stderr, "[sz-scalar-struct] %s -> %d\n", n->child->ident, size);
+                                } else {
+                                    size = (int)hd_type_size(g->vars[i].type);
+                                }
+                            } else if (g->vars[i].type) {
                                 size = (int)hd_type_size(g->vars[i].type);
                                 if (size <= 0) size = 4;
                             } else if (g->vars[i].is_float) {
@@ -4916,6 +4960,10 @@ static wubu_vr_t mir_gen_expr(HDMirGen *g, const HDASTNode *n) {
             default:             size = 8; break;
             }
         }
+        if (getenv("MIRDBG"))
+            fprintf(stderr, "[sizeof] size=%d child=%d typekind=%d\n", size,
+                    n->child ? (int)n->child->kind : -1,
+                    (n->type ? (int)n->type->kind : -1));
         return wubu_mir_const(g->prog, (int64_t)size);
     }
     case HD_AST_STRING_LIT: {
