@@ -1316,6 +1316,19 @@ static HDASTNode *parse_cast(HDParser *p) {
             if (!is_type)
                 for (int i = 0; i < p->n_named_types; i++)
                     if (strcmp(p->named_type_names[i], id) == 0) { is_type = true; break; }
+            /* A struct tag can be SHADOWED by a variable of the same name:
+             * `struct s {...}; f(struct s s){ ... (s.b-8) ... }` — inside the
+             * function, `(s.b-8)` is an expression, not a cast. A cast of a
+             * named type is only ever `(T)` or `(T*)`, so require one of those
+             * right after the identifier. */
+            if (is_type) {
+                int sp = p->lex->pos, sl = p->lex->line, sc = p->lex->col;
+                advance(p);
+                int nxt = peek(p);
+                p->lex->pos = sp; p->lex->line = sl; p->lex->col = sc;
+                hd_lex_next(p->lex);
+                if (nxt != HD_TOK_RPAREN && nxt != HD_TOK_STAR) is_type = false;
+            }
         }
         
         if (is_type) {
