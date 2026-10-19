@@ -723,6 +723,26 @@ static HDType *parse_type(HDParser *p) {
         default: break; /* Keep default I64 */
     }
 
+    /* Multi-word type specifiers: `signed char`, `unsigned long`, `long long`.
+     * The lexer maps `signed` to the same token as `int` and `unsigned` to
+     * `unsigned int`, so a second type keyword immediately following means the
+     * pair is one specifier and the second keyword carries the width. */
+    if ((t->kind == HD_TYPE_I32 || t->kind == HD_TYPE_U32) &&
+        peek(p) >= HD_KW_I0 && peek(p) <= HD_KW_BOOL) {
+        int was_unsigned = (t->kind == HD_TYPE_U32);
+        HDType *inner = parse_type(p);
+        if (was_unsigned) {
+            switch (inner->kind) {
+                case HD_TYPE_I8:  inner->kind = HD_TYPE_U8;  break;
+                case HD_TYPE_I16: inner->kind = HD_TYPE_U16; break;
+                case HD_TYPE_I64: inner->kind = HD_TYPE_U64; break;
+                default: break;
+            }
+        }
+        free(t);
+        t = inner;
+    }
+
 struct_done:
     /* Pointer types: type * */
     while (peek(p) == HD_TOK_STAR) {

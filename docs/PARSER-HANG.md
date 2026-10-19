@@ -107,3 +107,27 @@ Verified: the repro now terminates with 32 diagnostics instead of hanging. Those
 diagnostics expose the *underlying* gap — `signed char` / `unsigned char`
 parameter types are not handled in parameter lists — which is the next defect, not
 this one.
+
+## Root cause of the whole class: multi-word type specifiers
+
+After the loop fix, the repro reported 32 parse errors, all around the parameter
+list. The lexer maps C keywords onto HolyC type tokens:
+
+```
+"void"->U0  "char"->I8  "signed"->I32  "int"->I32  "short"->I16
+"long"->I64  "unsigned"->U32
+```
+
+so `signed char` arrives as TWO type keywords (I32 then I8). `parse_type` consumed
+the first and returned, leaving `char` in the stream for the declarator — which is
+what produced "expected identifier", the K&R misdetection, and ultimately the
+loop.
+
+Fix: after the switch, if the kind is I32/U32 and the next token is another type
+keyword, parse it as the inner type and take its width, propagating unsignedness
+(I8->U8, I16->U16, I64->U64).
+
+Result: the repro parses with **0 diagnostics**, battery stays 142 PASS / 1 WRONG,
+and the gauntlet reads 1583 / 2668 (59.3%) with errors at 927 — the lowest error
+count seen (previous low 932), consistent with tests that used to time out in this
+loop now running to completion.
