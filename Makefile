@@ -116,7 +116,7 @@ gauntlet_v2: test_gauntlet_v2.c $(FRONT) $(MIR) wubu_tgemm_avx512.o $(filter-out
 # Diagnostics harness: reads HDParser.n_errors directly. Deliberately NOT in
 # test_all while goals 125/131 are open -- a red audit wired into the gate gets
 # switched off. Promote it once both report.
-test_diag: tools/test_diag.c holyd_lexer.c holyd_parse.c holyd_parse_ast.c
+test_diag: tools/test_diag.c holyd_lexer.c holyd_parse.c holyd_parse_ast.c holyd_semantic.c
 	$(CC) $(CFLAGS) -I. $^ $(LDFLAGS) -o $@
 	./$@
 

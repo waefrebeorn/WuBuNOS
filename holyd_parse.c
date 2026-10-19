@@ -53,11 +53,12 @@ void parse_error_public(HDParser *p, const char *name, const char *msg)
 
 /* Report at an explicit source position (used by the semantic pass, where the
  * lexer has already reached EOF and cannot supply the node's line). */
-void parse_error_at(HDParser *p, int line, const char *name, const char *msg)
+void parse_error_at(HDParser *p, int line, int col, const char *name, const char *msg)
 {
     if (p->n_errors < HD_MAX_ERRORS) {
-        snprintf(p->errors[p->n_errors], 256, "line %d: %s%s%s",
-                 line, name && name[0] ? name : "", name && name[0] ? ": " : "", msg);
+        snprintf(p->errors[p->n_errors], 256, "line %d col %d: %s%s%s",
+                 line, col, name && name[0] ? name : "",
+                 name && name[0] ? ": " : "", msg);
         p->n_errors++;
     }
     p->has_error = true;
@@ -74,8 +75,8 @@ static HDASTNode *pnew(HDParser *p, HDASTKind kind)
 
 static void parse_error(HDParser *p, const char *msg) {
     if (p->n_errors < HD_MAX_ERRORS) {
-        snprintf(p->errors[p->n_errors], 256, "line %d: %s",
-                 p->lex->line, msg);
+        snprintf(p->errors[p->n_errors], 256, "line %d col %d: %s",
+                 p->lex->line, p->lex->col, msg);
         p->n_errors++;
     }
     p->has_error = true;
