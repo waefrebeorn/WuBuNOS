@@ -131,6 +131,8 @@ gauntlet_v3: test_gauntlet_v3.c $(FRONT) $(MIR) wubu_tgemm_avx512.o $(filter-out
 test: test_isa_driver test_sse2_dadd test_softfloat test_peephole test_elf_cubin test_mir_float test_fuzz_diff test_tgemm test_gap_audit test_selfhost_battery test_lexer_suffix
 	@echo "=== ISA Driver Test ==="
 	./test_isa_driver
+	@echo "=== SSE2 Encode Test ==="
+	./test_sse2_dadd
 
 # Soft-float runtime test (pure C11 IEEE-754 software float)
 test_lexer_suffix: holyd_lexer.c holyd_lexer.h holyd_types.h tools/test_lexer_suffix.c
