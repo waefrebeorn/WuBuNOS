@@ -146,3 +146,26 @@ alignment/padding, then cells = ceil(bytes/8)), not a `sizeof` tweak. It also
 determines whether `struct in struct return` can copy nested members correctly,
 since the arena copy loop is driven by `total_size`. Until then both probes stay
 OPEN with this note as the reason.
+
+## The two sizeof paths disagree with each other (measured)
+
+`sizeof(struct S)` and `sizeof(s)` for `struct S{int a;int b;}` do not agree:
+
+| expression | path | result |
+|---|---|---|
+| `sizeof(struct S)` | type form | **8** (passes) |
+| `sizeof(s)` | ident form | **16** (fails) |
+
+The ident path computes `last_off * 8 + last_member_size`, where
+`member_offsets` are in **cells**: for two int members that is `1*8 + 8 = 16`.
+The type path reports the declared size, 8.
+
+So this is not a `sizeof` bug in either branch — it is the storage model
+showing through: this compiler gives every struct member a whole 8-byte cell, so
+`struct{int;int}` genuinely occupies 16 bytes at runtime, while the type-form
+`sizeof` reports the C-expected 8. Making both correct requires byte-granular
+member offsets (see above), and making them merely *consistent* today would mean
+reporting 16 and changing the probe.
+
+Recorded rather than patched: a consistency patch would hide a layout defect
+behind a matching pair of numbers.
