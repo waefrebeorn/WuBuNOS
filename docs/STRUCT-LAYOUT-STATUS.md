@@ -65,3 +65,27 @@ struct-by-value returns — both fixed and verified earlier in this session
 (138 probes) plus the gauntlet chapter-18 suite risks silently un-fixing the
 return ABI. The change is mechanical but must be done in one pass with both
 measurements available.
+
+## Measured: the offsets really are cells
+
+Removing the two `* 8` conversions ("cell → byte") in
+`mir_struct_member_offset` and `mir_struct_member_offset_by_index` was tried and
+fails loudly:
+
+```
+WRONG struct member        (expect 3, got 515)
+WRONG struct return 2m     (expect 49, got 1841)
+WRONG struct pass by value (expect 60, got 1978940)
+```
+
+Those are byte/word confusion artefacts: member access then adds a cell index to
+a byte base and reads a neighbouring cell. So the parser's `members[].offset`
+values are **cells by construction** — `t->size` is advanced by `member_cells`,
+computed per member (`ceil(element bytes / 8) * array_size`, or the inner
+struct's cell size).
+
+The rewrite therefore starts in `holyd_parse.c` (§ regular member: `offset =
+t->size`, and the `member_cells` computation), not in the two consumers. The
+consumers are correct for the model they were written against; the parser has to
+produce byte offsets first, then every `* 8` becomes a no-op to delete in the
+same commit.
