@@ -2347,8 +2347,14 @@ done_params:
         HDASTNode *var = hd_ast_new(HD_AST_VAR_DECL);
         strncpy(var->ident, name, HD_MAX_IDENT_LEN - 1);
         var->type = type;
-        if (match(p, HD_TOK_ASSIGN))
-            var->init = parse_expr(p);
+        if (match(p, HD_TOK_ASSIGN)) {
+            /* `int b = ;` is a syntax error; without this the empty
+             * initializer was accepted silently and no diagnostic fired. */
+            if (peek(p) == HD_TOK_SEMI)
+                parse_error(p, "expected expression after '='");
+            else
+                var->init = parse_expr(p);
+        }
         expect(p, HD_TOK_SEMI);
         return var;
     }
