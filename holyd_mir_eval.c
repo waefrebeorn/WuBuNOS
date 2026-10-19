@@ -6488,7 +6488,7 @@ int hd_build_mir(const char *source, wubu_mir_prog_t *prog) {
      * (stdout/stderr/HUGE_VAL), a GNU label address, or an extern from another
      * translation unit, it reaches parity: 1581 / 2668 with it enabled, the same
      * as the best baseline run. */
-    {
+    if (!getenv("HD_NO_SEMANTIC")) {
         hd_semantic_check(&parse, ast);
         if (parse.n_errors > 0) {
             int off = 0;
