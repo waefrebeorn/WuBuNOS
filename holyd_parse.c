@@ -126,7 +126,8 @@ static bool match(HDParser *p, HDTokenType type) {
 static void expect(HDParser *p, HDTokenType type) {
     if (peek(p) == type) { advance(p); return; }
     char msg[128];
-    snprintf(msg, sizeof(msg), "expected token %d, got %d", type, peek(p));
+    snprintf(msg, sizeof(msg), "expected token %d, got %d ('%s')", type, peek(p),
+             p->lex->tok.text ? p->lex->tok.text : "");
     parse_error(p, msg);
 }
 
