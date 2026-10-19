@@ -2334,7 +2334,12 @@ done_params:
          * declared types to the matching parameter names; unlisted params
          * default to int. */
         if (fn->is_knr && peek(p) != HD_TOK_LBRACE) {
-            while (peek(p) != HD_TOK_LBRACE && peek(p) != HD_TOK_EOF) {
+            /* A K&R declaration list runs until '{'. Stop at '}' too: parse_type()
+             * does not consume a brace, so a stray '}' here looped forever, calling
+             * parse_type and allocating an HDType on every iteration. */
+            while (peek(p) != HD_TOK_LBRACE && peek(p) != HD_TOK_RBRACE &&
+                   peek(p) != HD_TOK_EOF) {
+                size_t knr_pos = p->lex->pos;
                 HDType *dt = parse_type(p);
                 for (;;) {
                     if (peek(p) != HD_TOK_IDENT) break;
@@ -2350,6 +2355,10 @@ done_params:
                     break;
                 }
                 match(p, HD_TOK_SEMI);
+                if (p->lex->pos == knr_pos) {
+                    parse_error(p, "expected K&R parameter declaration");
+                    advance(p);
+                }
             }
             for (int k = 0; k < (int)fn->n_params; k++) {
                 if (!fn->param_types[k]) {

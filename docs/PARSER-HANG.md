@@ -75,3 +75,35 @@ re-entering `parse_type` without consuming the token. Guards added meanwhile:
 Neither guard alone stops this repro, which is consistent with the spin being
 inside `parse_decl`'s declaration path rather than the unit loop. Battery is
 unchanged at 142 PASS / 1 WRONG (the known `float add` probe).
+
+## FIXED — the K&R parameter-list loop
+
+A live backtrace (gdb run under a timed interrupt; attach is blocked by
+`ptrace_scope=1`) showed the truth:
+
+```
+#3 parse_type      holyd_parse.c:145   (calloc)
+#4 hd_parse_decl   holyd_parse.c:2338
+#5 hd_parse_compilation_unit  holyd_parse.c:2657
+```
+
+The list at 2338 is the **K&R parameter declaration loop**:
+
+```c
+while (peek(p) != HD_TOK_LBRACE && peek(p) != HD_TOK_EOF) {
+    HDType *dt = parse_type(p);        /* allocates, consumes nothing on '}' */
+```
+
+`parse_type` does not consume `}`; it returns a default I64. The loop then repeats
+forever, allocating one `HDType` per iteration — which is why it looked like a slow
+hang rather than a hot spin.
+
+Two changes:
+1. the loop also stops at `HD_TOK_RBRACE`;
+2. a progress guard reports "expected K&R parameter declaration" and advances when
+   `parse_type` consumed nothing.
+
+Verified: the repro now terminates with 32 diagnostics instead of hanging. Those
+diagnostics expose the *underlying* gap — `signed char` / `unsigned char`
+parameter types are not handled in parameter lists — which is the next defect, not
+this one.
