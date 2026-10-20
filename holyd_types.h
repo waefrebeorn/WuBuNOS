@@ -16,7 +16,7 @@
 #define HD_MAX_IDENT_LEN    64
 #define HD_MAX_AST_DEPTH    128
 #define HD_MAX_LOCALS       64
-#define HD_MAX_PARAMS       16
+#define HD_MAX_PARAMS       64
 #define HD_MAX_STRING_LEN   4096
 #define HD_MAX_ERRORS       32
 #define HD_MAX_FUNCTIONS    64

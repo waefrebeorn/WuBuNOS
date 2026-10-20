@@ -339,3 +339,7 @@ test_fib_debug: tools/test_fib_debug.c $(FRONT) $(MIR) wubu_tgemm_avx512.o $(fil
 	$(CC) $(CFLAGS) -I. $^ $(LDFLAGS) -o $@
 jit_test: tools/jit_test.c $(FRONT) $(MIR) wubu_tgemm_avx512.o $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) $(JIT_SRC) jit_stubs_arm64.c $(OS_ROOT)/runtime/wubu_spawn.c
 	$(CC) $(CFLAGS) -I. -I$(OS_ROOT) $^ $(LDFLAGS) -o $@
+
+# Test targets must always run: make otherwise reports "up to date" and skips
+# the ./$@ step entirely, so a green log can mean the binary never executed.
+.PHONY: test_auto_tune test_cost_model test_crash_items test_diag test_elf_cubin test_fib_debug test_fp16 test_fuzz_diff test_gap_audit test_genetic test_hlir test_hlir_lower test_isa_driver test_lexer_suffix test_memplan test_mir_battery test_mir_debug test_mir_dump test_mir_f32_gemm test_mir_float test_mir_opt test_mlir_parser test_mlir_text test_model_mini test_online_learn test_onnx_parser test_peephole test_safetensors test_safetensors_bridge test_selfhost_battery test_single test_softfloat test_sse2_dadd test_tgemm test_wasm_backend test_wasm_simd
