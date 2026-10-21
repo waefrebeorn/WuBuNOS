@@ -365,3 +365,17 @@ test_zero_warnings:
 		diff tools/warning_baseline.txt tools/.warn_now.sorted; \
 	fi; \
 	rm -f tools/.warn_now.txt tools/.warn_now.sorted
+
+# ---- Compile-flag parity gate (n844) ----
+# Every $(CC) recipe must use the canonical $(CFLAGS) or be a documented
+# deviation (see tools/compile_flag_parity.txt). The gate regenerates the audit
+# and FAILS if the Makefile drifts from the locked manifest.
+test_compile_flag_parity:
+	@python3 tools/check_compile_flags.py > tools/.parity.now.txt; \
+	if diff -q tools/compile_flag_parity.txt tools/.parity.now.txt >/dev/null; then \
+		echo "ALL PASSED"; rm -f tools/.parity.now.txt; \
+	else \
+		echo "FAIL: compile-flag parity drift - re-run tools/check_compile_flags.py and update tools/compile_flag_parity.txt"; \
+		diff tools/compile_flag_parity.txt tools/.parity.now.txt; rm -f tools/.parity.now.txt; \
+	exit 1; \
+	fi

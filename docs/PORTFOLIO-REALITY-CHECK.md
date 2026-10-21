@@ -20,3 +20,12 @@ test_zero_warnings (rebuilds the full compiler via `make -B test_isa_driver`,
 greps warning: lines, and diffs against tools/warning_baseline.txt);
 tools/warning_baseline.txt locks the 125-warning baseline.
 **Test:** make test_zero_warnings prints ALL PASSED.
+
+## n844  STACK/P2  wubunos/Makefile
+**Capability:** compile-flag parity gate -- every compiler recipe is classified as
+SAME (canonical CFLAGS) or DEVIATES (GAUNTLET_CFLAGS / explicit codegen override),
+locked in a manifest; the gate fails on new or undocumented drift.
+**Evidence:** Makefile defines test_compile_flag_parity; tools/check_compile_flags.py
+classifies every recipe flag source; tools/compile_flag_parity.txt locks the
+49-recipe manifest (8 documented deviations).
+**Test:** make test_compile_flag_parity prints ALL PASSED.
