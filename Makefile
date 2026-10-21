@@ -15,7 +15,7 @@
 CC      = gcc
 OS_ROOT ?= /home/wubu/wubuos/src
 CFLAGS  = -O3 -std=c11 -D_POSIX_C_SOURCE=200809L -DWUBU_HOSTED \
-          -march=native -mavx2 -mfma -frename-registers -funroll-loops \
+          -march=native -mavx2 -mfma -frename-registers -funroll-loops -MMD -MP \
           -include wubu_gnu_compat.h -I. -I$(OS_ROOT)/jit -I$(OS_ROOT)/runtime -fopenmp
 
 # The JIT runtime (wubu_isa_x86_64.c x86_run + the emitter) is miscompiled by
@@ -27,6 +27,9 @@ CFLAGS  = -O3 -std=c11 -D_POSIX_C_SOURCE=200809L -DWUBU_HOSTED \
 GAUNTLET_CFLAGS = -O2 -std=c11 -D_POSIX_C_SOURCE=200809L -DWUBU_HOSTED \
           -include wubu_gnu_compat.h -I. -I$(OS_ROOT)/jit -I$(OS_ROOT)/runtime -fopenmp
 LDFLAGS = -lm
+
+
+-include $(wildcard *.d tools/*.d)
 
 # ---- Source groups ----
 
@@ -142,6 +145,11 @@ test_lexer_suffix: holyd_lexer.c holyd_lexer.h holyd_types.h tools/test_lexer_su
 test_softfloat: wubu_softfloat.c wubu_softfloat.h tools/test_softfloat.c
 	$(CC) $(CFLAGS) -I. -o $@ tools/test_softfloat.c wubu_softfloat.c -lm
 	./$@
+
+# n831: header-dependency tracking (-MMD -MP + -include .d)
+test_header_deps: tools/test_header_deps.c tools/test_header_deps.h
+	$(CC) $(CFLAGS) -I. -o $@ tools/test_header_deps.c
+	@test -f test_header_deps.d && grep -q 'test_header_deps.h' test_header_deps.d && ./$@ && echo 'ALL PASSED' || { echo 'FAIL: header-dep tracking gate'; rm -f $@ test_header_deps.d; exit 1; }
 
 # ELF64 cubin container writer
 test_elf_cubin: wubu_elf64_cubin.c wubu_elf64_cubin.h tools/test_elf_cubin.c
