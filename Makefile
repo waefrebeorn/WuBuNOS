@@ -16,7 +16,7 @@ CC      = gcc
 OS_ROOT ?= /home/wubu/wubuos/src
 CFLAGS  = -O3 -std=c11 -D_POSIX_C_SOURCE=200809L -DWUBU_HOSTED \
           -march=native -mavx2 -mfma -frename-registers -funroll-loops -MMD -MP \
-          -include wubu_gnu_compat.h -I. -I$(OS_ROOT)/jit -I$(OS_ROOT)/runtime -fopenmp
+          -include wubu_gnu_compat.h -I. -I$(OS_ROOT)/jit -I$(OS_ROOT)/runtime -fopenmp -Wall -Wextra
 
 # The JIT runtime (wubu_isa_x86_64.c x86_run + the emitter) is miscompiled by
 # the -march=native -mavx2 -mfma auto-vectorizer: 48 x86-64 gauntlet tests
@@ -351,3 +351,17 @@ jit_test: tools/jit_test.c $(FRONT) $(MIR) wubu_tgemm_avx512.o $(filter-out wubu
 # Test targets must always run: make otherwise reports "up to date" and skips
 # the ./$@ step entirely, so a green log can mean the binary never executed.
 .PHONY: test_auto_tune test_cost_model test_crash_items test_diag test_elf_cubin test_fib_debug test_fp16 test_fuzz_diff test_gap_audit test_genetic test_hlir test_hlir_lower test_isa_driver test_lexer_suffix test_memplan test_mir_battery test_mir_debug test_mir_dump test_mir_f32_gemm test_mir_float test_mir_opt test_mlir_parser test_mlir_text test_model_mini test_online_learn test_onnx_parser test_peephole test_safetensors test_safetensors_bridge test_selfhost_battery test_single test_softfloat test_sse2_dadd test_tgemm test_wasm_backend test_wasm_simd
+
+# ---- Zero-warning gate (n834) ----
+# CFLAGS carries -Wall -Wextra; this gate FAILS if the compiler build emits
+# any warning not present in the locked baseline (tools/warning_baseline.txt).
+test_zero_warnings:
+	@$(MAKE) -B test_isa_driver >/dev/null 2>tools/.warn_now.txt; \
+	grep "warning:" tools/.warn_now.txt | sort > tools/.warn_now.sorted; \
+	if diff -q tools/warning_baseline.txt tools/.warn_now.sorted >/dev/null; then \
+		echo "ALL PASSED"; \
+	else \
+		echo "FAIL: zero-warning gate - warnings differ from locked baseline"; \
+		diff tools/warning_baseline.txt tools/.warn_now.sorted; \
+	fi; \
+	rm -f tools/.warn_now.txt tools/.warn_now.sorted
