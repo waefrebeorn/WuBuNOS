@@ -323,18 +323,56 @@ int gen_stmt(HDGen *gen, const HDASTNode *node) {
                     if (node->init) {
                         HDType *decl_t = node->type;
                         HDType *init_t = expr_static_type(gen, node->init);
-                        bool decay = decl_t && decl_t->kind == HD_TYPE_PTR &&
-                                     init_t && init_t->kind == HD_TYPE_ARRAY;
-                        if (decay) emit_base_addr(gen, node->init);
-                        else       gen_expr(gen, node->init);
-                        /* mov [rip + disp32], rax (patched after code_size known) */
-                        size_t patch_pos = gen->code_size;
-                        emit_byte(gen, 0x48); emit_byte(gen, 0x89); emit_byte(gen, 0x05);
-                        emit_dword(gen, 0);
-                        if (gen->n_global_patches < 128) {
-                            gen->global_patches[gen->n_global_patches].code_patch_pos = patch_pos + 3;
-                            gen->global_patches[gen->n_global_patches].global_offset = global_offset;
-                            gen->n_global_patches++;
+                        bool is_brace = (node->init->kind == HD_AST_COMPOUND_LITERAL ||
+                                         node->init->kind == HD_AST_BRACE_INIT) &&
+                                        node->init->n_args > 0;
+                        if (is_brace) {
+                            /* Global array/struct initializer {e0,e1,...}: store each
+                             * element into the data-section global at consecutive
+                             * offsets, addressed via a RIP-relative base (mirrors the
+                             * local-variable brace path below, but the base is the
+                             * global's .data address, patched like the scalar store).
+                             * Previously module-level init called gen_expr(init) +
+                             * ONE qword store, so a brace array left the global
+                             * zeroed (entry read 0 from buf[0]). */
+                            int elem_size = 8;
+                            if (decl_t && decl_t->base)
+                                elem_size = (int)hd_type_size(decl_t->base);
+                            if (elem_size < 1) elem_size = 8;
+                            /* lea rdi, [rip + disp32]  (48 8D 3D disp32); base patch */
+                            emit_byte(gen, 0x48); emit_byte(gen, 0x8D); emit_byte(gen, 0x3D);
+                            size_t base_patch = gen->code_size;
+                            emit_dword(gen, 0);
+                            if (gen->n_global_patches < 128) {
+                                gen->global_patches[gen->n_global_patches].code_patch_pos = base_patch;
+                                gen->global_patches[gen->n_global_patches].global_offset = global_offset;
+                                gen->n_global_patches++;
+                            }
+                            for (int ei = 0; ei < node->init->n_args; ei++) {
+                                gen_expr(gen, node->init->args[ei]);
+                                /* mov [rdi + ei*elem_size], rax */
+                                if (ei * elem_size < 128) {
+                                    emit_byte(gen, 0x48); emit_byte(gen, 0x89);
+                                    emit_byte(gen, 0x47); emit_byte(gen, (uint8_t)(ei * elem_size));
+                                } else {
+                                    emit_byte(gen, 0x48); emit_byte(gen, 0x89);
+                                    emit_byte(gen, 0x87); emit_dword(gen, (uint32_t)(ei * elem_size));
+                                }
+                            }
+                        } else {
+                            bool decay = decl_t && decl_t->kind == HD_TYPE_PTR &&
+                                         init_t && init_t->kind == HD_TYPE_ARRAY;
+                            if (decay) emit_base_addr(gen, node->init);
+                            else       gen_expr(gen, node->init);
+                            /* mov [rip + disp32], rax (patched after code_size known) */
+                            size_t patch_pos = gen->code_size;
+                            emit_byte(gen, 0x48); emit_byte(gen, 0x89); emit_byte(gen, 0x05);
+                            emit_dword(gen, 0);
+                            if (gen->n_global_patches < 128) {
+                                gen->global_patches[gen->n_global_patches].code_patch_pos = patch_pos + 3;
+                                gen->global_patches[gen->n_global_patches].global_offset = global_offset;
+                                gen->n_global_patches++;
+                            }
                         }
                     }
                 }
