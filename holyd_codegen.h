@@ -51,6 +51,7 @@ void hd_register_holyd_runtime(HDGen *gen);
 
 /* High-level compile/execute */
 void *hd_compile(const char *source, size_t *out_size);
+void *hd_compile_func(const char *source, const char *func_name);
 int64_t hd_eval(const char *source);
 
 #endif /* WUBUNOS_HOLYC_CODEGEN_H */

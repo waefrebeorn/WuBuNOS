@@ -437,6 +437,38 @@ void *hd_compile_func(const char *source, const char *func_name) {
 
     hd_ast_free(ast);
 
+    /* Each function body was already JIT-compiled into its own exec buffer
+     * inside gen_stmt's FUNC_DECL handling (func_ptr set there). With pure
+     * function declarations, the module-level code buffer is empty, so the
+     * old re-alloc path below (jit_alloc_exec(code_size+data_size)) asked
+     * for 0 bytes -> NULL and returned NULL for every requested function.
+     * Return the already-exec'd func_ptr for the named function. */
+    if (target_func && target_func->ident) {
+        for (int i = 0; i < gen.n_functions; i++) {
+            if (gen.functions[i].func_ptr &&
+                strcmp(gen.functions[i].name, target_func->ident) == 0) {
+                free(gen.code);
+                free(gen.data);
+                return gen.functions[i].func_ptr;
+            }
+        }
+        free(gen.code);
+        free(gen.data);
+        return NULL;
+    }
+    /* No func_name: fall back to the first compiled function. */
+    for (int i = 0; i < gen.n_functions; i++) {
+        if (gen.functions[i].func_ptr) {
+            void *fp = gen.functions[i].func_ptr;
+            free(gen.code);
+            free(gen.data);
+            return fp;
+        }
+    }
+
+    /* Genuinely no functions compiled: this is only reachable if a source
+     * that had func decls failed to produce any body (already NULL above),
+     * or the caller mixed declarations and expected something else. */
     if (gen.code_size == 0) { free(gen.code); free(gen.data); return NULL; }
 
     void *exec = jit_alloc_exec(gen.code_size + gen.data_size);
