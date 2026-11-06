@@ -25,6 +25,29 @@ int hd_write_pe(const char *filename,
                 const size_t *patch_offsets,
                 const size_t *patch_globals,
                 size_t n_patches);
+
+/* Program emitter (self-hosting rung 3): emit module code + function bodies
+ * as ONE position-independent image. `funcs[i].code` is a function body (may
+ * carry its own global disp32 patches); `call_offs[j]` is a `call rel32`
+ * position INSIDE module_code whose displacement targets funcs[call_fn[j]].
+ * The emitter lays module + funcs contiguously as .text and fixes every
+ * RIP-relative global disp32 (in module and in each function) against the
+ * .data RVA, and rewrites each call rel32 to be image-relative. */
+typedef struct {
+    const uint8_t *code;
+    size_t code_size;
+    const size_t *global_offs;   /* disp32 positions within this body */
+    const size_t *global_goff;   /* data-section offset each points at */
+    size_t n_global_patches;
+} HDProgramFunc;
+
+int hd_write_pe_program(const char *filename,
+                        const uint8_t *module_code, size_t module_size,
+                        const size_t *module_global_offs, const size_t *module_global_goff,
+                        size_t n_module_globals,
+                        const size_t *call_offs, const size_t *call_fn, size_t n_calls,
+                        const HDProgramFunc *funcs, size_t n_funcs,
+                        const uint8_t *data, size_t data_size);
 int hd_write_bin(const char *filename,
                  const uint8_t *code, size_t code_size,
                  int bootable);

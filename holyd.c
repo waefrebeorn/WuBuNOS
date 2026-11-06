@@ -447,7 +447,10 @@ static int run_emit_pe(const char *src_file, const char *out_file) {
         return 1;
     }
 
-    /* Copy function body and patch globals */
+    /* Copy function body UNPATCHED — the emitter fixes RIP-relative globals
+     * against the real .data RVA (not the old code-end convention). Building
+     * on the PE loader in wubuos/src/kernel, this makes a holyd program with
+     * globals a relocatable PE32+ image. */
     size_t func_size = mainfunc.code_size;
     uint8_t *func_code = (uint8_t *)malloc(func_size);
     if (!func_code) {
@@ -457,24 +460,29 @@ static int run_emit_pe(const char *src_file, const char *out_file) {
     }
     memcpy(func_code, mainfunc.func_ptr, func_size);
 
-    /* Patch RIP-relative globals */
+    /* Build the emitter's patch arrays from mainfunc.global_patches
+     * (skip any with invalid offsets). */
+    size_t np = (size_t)mainfunc.n_global_patches;
+    size_t *p_offs = np ? (size_t *)calloc(np, sizeof(size_t)) : NULL;
+    size_t *p_globs = np ? (size_t *)calloc(np, sizeof(size_t)) : NULL;
+    size_t n_valid = 0;
     for (int i = 0; i < mainfunc.n_global_patches; i++) {
         size_t pp = mainfunc.global_patches[i].code_patch_pos;
         size_t go = mainfunc.global_patches[i].global_offset;
-        if (pp + 4 <= func_size) {
-            int32_t disp32 = (int32_t)(func_size + go - pp - 4);
-            memcpy(func_code + pp, &disp32, 4);
-        }
+        if (pp + 4 > func_size) continue;
+        p_offs[n_valid] = pp; p_globs[n_valid] = go; n_valid++;
     }
 
-    size_t patch_offsets[1] = {0}, patch_globals[1] = {0};
     if (hd_write_pe(out_file, func_code, func_size,
                     gen.data, gen.data_size,
-                    patch_offsets, patch_globals, 0) != 0) {
+                    p_offs, p_globs, n_valid) != 0) {
         fprintf(stderr, "holyd: failed to write %s\n", out_file);
+        free(p_offs); free(p_globs);
         free(func_code); free(gen.code); free(gen.data);
         return 1;
     }
+
+    free(p_offs); free(p_globs);
 
     printf("holyd: %s (%zu bytes code)\n", out_file, func_size);
     free(func_code);
