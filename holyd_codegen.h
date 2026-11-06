@@ -48,6 +48,18 @@ int hd_write_pe_program(const char *filename,
                         const size_t *call_offs, const size_t *call_fn, size_t n_calls,
                         const HDProgramFunc *funcs, size_t n_funcs,
                         const uint8_t *data, size_t data_size);
+
+/* Import-carrying emitter (rung 6): standard-layout PE32+ with .text + .idata.
+ * `code` calls qword [rip+disp32] through its own import slot; `call_disp[i]`
+ * is the offset of the disp32 (right after the FF/15 opcode). The emitter
+ * emits the import descriptor/ILT/INT/IAT for <dll, func_names[*]>, and the
+ * loader's wubu_pe_snap_iat patches the IAT via the registry. */
+int hd_write_pe_imported(const char *filename,
+                         const uint8_t *code, size_t code_size,
+                         const size_t *call_disp, size_t n_calls,
+                         const char *dll,
+                         const char **func_names, size_t n_funcs,
+                         uint8_t *out_func_offsets /* optional, n_funcs bytes */);
 int hd_write_bin(const char *filename,
                  const uint8_t *code, size_t code_size,
                  int bootable);
