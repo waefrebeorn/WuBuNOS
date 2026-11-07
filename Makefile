@@ -131,7 +131,7 @@ gauntlet_v3: test_gauntlet_v3.c $(FRONT) $(MIR) wubu_tgemm_avx512.o $(filter-out
 
 # ---- Run targets ----
 
-test: test_isa_driver test_sse2_dadd test_softfloat test_peephole test_elf_cubin test_mir_float test_fuzz_diff test_tgemm test_gap_audit test_selfhost_battery test_lexer_suffix
+test: test_isa_driver test_sse2_dadd test_softfloat test_peephole test_elf_cubin test_mir_float test_fuzz_diff test_tgemm test_gap_audit test_selfhost_battery test_lexer_suffix test_backend_consistency
 	@echo "=== ISA Driver Test ==="
 	./test_isa_driver
 	@echo "=== SSE2 Encode Test ==="
@@ -328,6 +328,14 @@ test_mir_battery: tools/test_mir_battery.c $(MIR) wubu_tgemm_avx512.o $(filter-o
 	./$@
 
 # Debug: dump MIR for failing battery cases
+# B4: cross-backend consistency -- the OLD holyd_codegen_* emitter->loader path
+# and the MODERN holyd_mir_eval must agree on the same construct-heavy programs
+# (pointer-walk string checksum, struct members, multi-digit parse, a lexer).
+# Anchors are the loader-path results verified in wubuos tokenizer_test.
+test_backend_consistency: tools/test_backend_consistency.c $(MIR) wubu_tgemm_avx512.o $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) holyd_mir_eval.c holyd_semantic.c holyd_lexer.c holyd_parse.c holyd_parse_ast.c holyd_codegen.c holyd_codegen_emit.c holyd_codegen_expr.c holyd_codegen_stmt.c holyd_codegen_api.c holyd_runtime.c wubu_preproc.c jit_stub.c jit_stubs_arm64.c
+	$(CC) $(CFLAGS) -I. $^ $(LDFLAGS) -o $@
+	./$@
+
 test_mir_dump: tools/test_mir_dump.c $(MIR) wubu_tgemm_avx512.o $(filter-out wubu_isa_jit_stubs.c,$(ISA)) wubu_isa_x86_64.c wubu_isa_vulkan.c wubu_isa_spirv.c $(INTERP) $(OS_INTERP) holyd_mir_eval.c holyd_semantic.c holyd_lexer.c holyd_parse.c holyd_parse_ast.c holyd_codegen.c holyd_codegen_emit.c holyd_codegen_expr.c holyd_codegen_stmt.c holyd_codegen_api.c holyd_runtime.c wubu_preproc.c jit_stub.c jit_stubs_arm64.c
 	$(CC) $(CFLAGS) -I. $^ $(LDFLAGS) -o $@
 	./$@
@@ -350,7 +358,7 @@ jit_test: tools/jit_test.c $(FRONT) $(MIR) wubu_tgemm_avx512.o $(filter-out wubu
 
 # Test targets must always run: make otherwise reports "up to date" and skips
 # the ./$@ step entirely, so a green log can mean the binary never executed.
-.PHONY: test_auto_tune test_cost_model test_crash_items test_diag test_elf_cubin test_fib_debug test_fp16 test_fuzz_diff test_gap_audit test_genetic test_hlir test_hlir_lower test_isa_driver test_lexer_suffix test_memplan test_mir_battery test_mir_debug test_mir_dump test_mir_f32_gemm test_mir_float test_mir_opt test_mlir_parser test_mlir_text test_model_mini test_online_learn test_onnx_parser test_peephole test_safetensors test_safetensors_bridge test_selfhost_battery test_single test_softfloat test_sse2_dadd test_tgemm test_wasm_backend test_wasm_simd
+.PHONY: test_auto_tune test_backend_consistency test_cost_model test_crash_items test_diag test_elf_cubin test_fib_debug test_fp16 test_fuzz_diff test_gap_audit test_genetic test_hlir test_hlir_lower test_isa_driver test_lexer_suffix test_memplan test_mir_battery test_mir_debug test_mir_dump test_mir_f32_gemm test_mir_float test_mir_opt test_mlir_parser test_mlir_text test_model_mini test_online_learn test_onnx_parser test_peephole test_safetensors test_safetensors_bridge test_selfhost_battery test_single test_softfloat test_sse2_dadd test_tgemm test_wasm_backend test_wasm_simd
 
 # ---- Zero-warning gate (n834) ----
 # CFLAGS carries -Wall -Wextra; this gate FAILS if the compiler build emits
