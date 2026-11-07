@@ -485,8 +485,19 @@ int gen_expr(HDGen *gen, const HDASTNode *node) {
                 while (gen->data_size % 8 != 0) {
                     emit_data_byte(gen, 0);
                 }
-                /* mov rax, data_section_base + str_offset */
-                emit_mov_rax_imm64(gen, (int64_t)(size_t)(gen->data + str_offset));
+                /* lea rax, [rip + disp32] patched to .data RVA + str_offset.
+                 * (Previously: emit_mov_rax_imm64(gen, gen->data + str_offset) —
+                 * an ABSOLUTE HOST pointer that only worked in the live JIT;
+                 * across emit->map->run it read garbage. Same fix shape as the
+                 * array-to-pointer decay global case below.) */
+                size_t s_patch = gen->code_size + 3;
+                emit_byte(gen, 0x48); emit_byte(gen, 0x8D); emit_byte(gen, 0x05);
+                emit_dword(gen, 0);
+                if (gen->n_global_patches < 128) {
+                    gen->global_patches[gen->n_global_patches].code_patch_pos = s_patch;
+                    gen->global_patches[gen->n_global_patches].global_offset = str_offset;
+                    gen->n_global_patches++;
+                }
             }
             break;
 
