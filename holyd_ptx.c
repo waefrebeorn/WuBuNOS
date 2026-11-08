@@ -13,6 +13,13 @@
 #include <stdio.h>
 #include <stdarg.h>
 
+/* CUDA driver API -- required by the HAS_CUDA execution path below.  The
+ * toolkit headers live in /usr/include/cuda.h (no /usr/local/cuda prefix on
+ * this host). */
+#ifdef HAS_CUDA
+#include <cuda.h>
+#endif
+
 /* Initialize PTX generator */
 void ptx_gen_init(PTXGen *gen) {
     memset(gen, 0, sizeof(*gen));
@@ -83,7 +90,10 @@ void ptx_emit_holyd_gpu_matmul(PTXGen *gen) {
     
     ptx_emit(gen, "    .reg .b64 A_addr, B_addr, C_addr;\n");
     ptx_emit(gen, "    .reg .u32 M_dim, N_dim, K_dim;\n");
-    ptx_emit(gen, "    .reg .b32 tid_x, tid_y;\n\n");
+    ptx_emit(gen, "    .reg .u32 tid_x, tid_y, tid_tmp;\n");
+    /* Predicates used by the bounds checks below MUST be declared -- without
+     * this the driver rejects the module with CUDA_ERROR_INVALID_PTX (218). */
+    ptx_emit(gen, "    .reg .pred p0, p1;\n\n");
     
     ptx_emit(gen, "    ld.param.u64 A_addr, [A_ptr];\n");
     ptx_emit(gen, "    ld.param.u64 B_addr, [B_ptr];\n");
@@ -92,8 +102,20 @@ void ptx_emit_holyd_gpu_matmul(PTXGen *gen) {
     ptx_emit(gen, "    ld.param.u32 N_dim, [N];\n");
     ptx_emit(gen, "    ld.param.u32 K_dim, [K];\n\n");
     
-    ptx_emit(gen, "    mov.u32 tid_x, %%ctaid.x * %%ntid.x + %%tid.x;\n");
-    ptx_emit(gen, "    mov.u32 tid_y, %%ctaid.y * %%ntid.y + %%tid.y;\n\n");
+    /* Special registers can be neither arithmetic operands nor appear in an
+     * expression -- ptxas rejects `%ctaid.x * %ntid.x + %tid.x` and also
+     * `mul.lo.u32 d, a, %ntid.x`.  Move each special register into a general
+     * register first, then compute. */
+    ptx_emit(gen, "    mov.u32 tid_x, %%ctaid.x;\n");
+    ptx_emit(gen, "    mov.u32 tid_tmp, %%ntid.x;\n");
+    ptx_emit(gen, "    mul.lo.u32 tid_x, tid_x, tid_tmp;\n");
+    ptx_emit(gen, "    mov.u32 tid_tmp, %%tid.x;\n");
+    ptx_emit(gen, "    add.u32 tid_x, tid_x, tid_tmp;\n");
+    ptx_emit(gen, "    mov.u32 tid_y, %%ctaid.y;\n");
+    ptx_emit(gen, "    mov.u32 tid_tmp, %%ntid.y;\n");
+    ptx_emit(gen, "    mul.lo.u32 tid_y, tid_y, tid_tmp;\n");
+    ptx_emit(gen, "    mov.u32 tid_tmp, %%tid.y;\n");
+    ptx_emit(gen, "    add.u32 tid_y, tid_y, tid_tmp;\n\n");
     
     ptx_emit(gen, "    setp.ge.u32 p0, tid_x, M_dim;\n");
     ptx_emit(gen, "    @p0 ret;\n");
@@ -155,9 +177,11 @@ int hd_exec_ptx(const char *ptx_code, void **args, int num_args) {
         return -1;
     }
 
-    /* Get kernel function */
+    /* Get kernel function.  MUST match the name ptx_emit_holyd_gpu_matmul
+     * emits ("gpu_matmul") -- the old "matmul_kernel" never resolved, so the
+     * exec path could not work. */
     CUfunction kernel;
-    if (cuModuleGetFunction(&kernel, module, "matmul_kernel") != CUDA_SUCCESS) {
+    if (cuModuleGetFunction(&kernel, module, "gpu_matmul") != CUDA_SUCCESS) {
         cuModuleUnload(module);
         cuCtxDestroy(context);
         return -1;
@@ -166,7 +190,12 @@ int hd_exec_ptx(const char *ptx_code, void **args, int num_args) {
     /* Launch kernel with 256 threads per block */
     int block_size = 256;
     int grid_size = (num_args + block_size - 1) / block_size;
-    void *cu_args[] = { &args[0], &args[1], &args[2], &args[3], &args[4], &args[5] };
+    /* kernelParams[i] must be the ADDRESS OF the i-th parameter value.  The
+     * caller's `args` already holds those addresses (args[i] = &param_i), so
+     * pass the slot VALUES -- not &args[i], which is the address of the slot
+     * and made the kernel write device results into the host stack. */
+    void *cu_args[6];
+    for (int i = 0; i < 6 && i < num_args; i++) cu_args[i] = args[i];
 
     CUresult res = cuLaunchKernel(kernel,
         grid_size, 1, 1,    /* grid dim */

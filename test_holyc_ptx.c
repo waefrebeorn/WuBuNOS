@@ -14,6 +14,10 @@
 #include <string.h>
 #include <stdlib.h>
 
+#ifdef HAS_CUDA
+#include <cuda.h>
+#endif
+
 static int g_pass = 0, g_fail = 0;
 #define CHECK(cond, msg) do { \
     if (cond) { g_pass++; printf("  [PASS] %s\n", msg); } \
@@ -103,14 +107,60 @@ static void test_compile(void) {
 
 static void test_runtime_contract(void) {
     printf("\n[PTX Runtime Contract]\n");
-    /* No CUDA on this host: exec must fail cleanly, not crash. */
     CHECK(hd_exec_ptx(NULL, NULL, 0) == -1, "NULL PTX/args is rejected");
-    void *args[6] = {0};
-    CHECK(hd_exec_ptx("// stub\n", args, 6) == -1,
-          "exec without a CUDA driver returns -1");
     CHECK(hd_builtin_gpu_matmul(0, 0, 0, 0, 0, 0) == 0,
           "GpuMatMul built-in returns 0");
 }
+
+#ifdef HAS_CUDA
+/* Real GPU leg: compile WuBu's PTX, load it with the driver, resolve the
+ * kernel and launch it on the device.  Proves the whole PTX path works, not
+ * just the text emitter. */
+static void test_gpu_exec(void) {
+    printf("\n[PTX GPU Execution]\n");
+    if (cuInit(0) != CUDA_SUCCESS) { printf("  [skip] no CUDA driver\n"); return; }
+
+    CUdevice dev;
+    if (cuDeviceGet(&dev, 0) != CUDA_SUCCESS) { printf("  [skip] no device\n"); return; }
+
+    /* cuMemAlloc needs a current context. */
+    CUcontext ctx = NULL;
+    if (cuCtxCreate(&ctx, 0, dev) != CUDA_SUCCESS) {
+        printf("  [skip] cannot create a context\n");
+        return;
+    }
+
+    char name[128];
+    cuDeviceGetName(name, sizeof(name), dev);
+    printf("        device: %s\n", name);
+
+    CUdeviceptr dA = 0, dB = 0, dC = 0;
+    unsigned M = 16, N = 8, K = 16;
+    int ok = (cuMemAlloc(&dA, 256) == CUDA_SUCCESS) &&
+             (cuMemAlloc(&dB, 256) == CUDA_SUCCESS) &&
+             (cuMemAlloc(&dC, 256) == CUDA_SUCCESS);
+    CHECK(ok, "device memory allocated for A/B/C");
+    if (!ok) { cuCtxDestroy(ctx); return; }
+
+    char *ptx = hd_compile_ptx("return 42;");
+    CHECK(ptx != NULL, "PTX generated for the GPU path");
+
+    void *args[6] = { &dA, &dB, &dC, &M, &N, &K };
+    int rc = ptx ? hd_exec_ptx(ptx, args, 6) : -1;
+    CHECK(rc == 0, "hd_exec_ptx loads, resolves and launches the kernel on the GPU");
+
+    cuMemFree(dA); cuMemFree(dB); cuMemFree(dC);
+    cuCtxDestroy(ctx);
+    free(ptx);
+}
+#else
+static void test_gpu_exec(void) {
+    printf("\n[PTX GPU Execution]\n");
+    void *args[6] = {0};
+    CHECK(hd_exec_ptx("// stub\n", args, 6) == -1,
+          "exec without a CUDA driver returns -1");
+}
+#endif
 
 int main(void) {
     printf("=== HolyC PTX backend behaviour gate ===\n");
@@ -118,6 +168,7 @@ int main(void) {
     test_emitters();
     test_compile();
     test_runtime_contract();
+    test_gpu_exec();
     printf("\n=== holyc_ptx: %d passed, %d failed ===\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }
