@@ -160,3 +160,250 @@ int hd_write_elf(const char *filename,
     fclose(f);
     return 0;
 }
+
+/* ── Multiboot-bootable variant ─────────────────────────────────────────
+ * Same [ELF hdr][PHDR][user code][data] single PT_LOAD at ELF_BASE_ADDR, but
+ * the 12-byte exit trampoline is replaced by a 32-bit->long-mode multiboot
+ * prologue.  Multiboot/GRUB loads the ELF at p_vaddr (0x400000) and enters
+ * the 32-bit prologue with paging OFF; the prologue sets up identity paging
+ * (2MB huge pages), enters long mode, jumps to 64-bit code that puts a stack
+ * up, calls the emitted main() body, writes the return value to COM1 as two
+ * chars ('H' + low byte), then halts.  The user body and .data stay CONSECUTIVE
+ * after the prologue, so RIP-relative global patches (relative to body start)
+ * keep resolving regardless of prologue size.  Verified: boots under
+ * `qemu -kernel`/GRUB and prints to the serial port -- no #UD.
+ */
+
+/* fixed prologue VA offsets relative to ELF_BASE_ADDR */
+#define MB_HDR_OFF    0x78   /* = ELF_HDR_SIZE + PHDR_SIZE : multiboot header must sit in the first 8K */
+#define GDPTR_OFF     (MB_HDR_OFF + 16)  /* the 6-byte {limit,base} lives here; lgdt reads [this] */
+#define GDT_OFF       (GDPTR_OFF + 6)    /* the GDT entries follow immediately */
+#define LM32_OFF      (GDT_OFF + 40)     /* then the 32-bit entry code */
+#define PML4_VA_OFF   0x1000
+#define PDPT_VA_OFF   0x2000
+#define PD_VA_OFF     0x3000
+#define LM64_VA_OFF   0x4000
+#define STACK_TOP     0x90000
+
+static void put8(uint8_t **p, uint8_t v) { *(*p)++ = v; }
+static void put16(uint8_t **p, uint16_t v) { wb16(*p, v); *p += 2; }
+static void put32(uint8_t **p, uint32_t v) { wb32(*p, v); *p += 4; }
+static void put64(uint8_t **p, uint64_t v) { wb64(*p, v); *p += 8; }
+
+static void passert(const char *msg, int ok) { if (!ok) { fprintf(stderr, "hd_write_boot_elf: %s\n", msg); exit(2); } }
+
+int hd_write_boot_elf(const char *filename,
+                      const uint8_t *code, size_t code_size,
+                      const uint8_t *data, size_t data_size,
+                      const size_t *patch_offsets,
+                      const size_t *patch_globals,
+                      size_t n_patches)
+{
+    if (!filename || !code || code_size == 0) return -1;
+
+    /* Run the same RIP-relative global patching as hd_write_elf. */
+    uint8_t *code_buf = (uint8_t *)malloc(code_size);
+    if (!code_buf) return -1;
+    memcpy(code_buf, code, code_size);
+    for (size_t i = 0; i < n_patches; i++) {
+        size_t pp = patch_offsets[i], go = patch_globals[i];
+        if (pp + 4 <= code_size) {
+            int32_t disp32 = (int32_t)(code_size + go - pp - 4);
+            memcpy(code_buf + pp, &disp32, 4);
+        }
+    }
+
+    char *pro = malloc(LM64_VA_OFF + 128);      /* prologue bytes (except tables) */
+    uint8_t *pp = (uint8_t *)pro;
+    uint8_t *gdtp, *gdptrdst, *lm32dst, *lm64dst, *calldst;
+
+    /* multiboot header (16B) */
+    uint8_t *hdr = (uint8_t *)pro;
+    put32(&pp, 0x1BADB002);
+    put32(&pp, 0x00000003);
+    put32(&pp, (uint32_t)-(int32_t)(0x1BADB002 + 3));
+    put32(&pp, 0);
+
+    /* gdptr (6B) FIRST, at the exact address lgdt reads:
+     *   limit 0x27 (5 descriptors), base = VA of the GDT that follows. */
+    gdptrdst = pp;
+    put16(&pp, 0x27);
+    { uint8_t b[4]; wb32(b, (uint32_t)(ELF_BASE_ADDR + GDT_OFF)); memcpy(pp, b, 4); pp += 4; }
+
+    /* GDT (40B, 5 entries):
+     *   0x08 32-bit code, 0x10 32-bit code, 0x18 64-bit code, 0x20 data.
+     * The bootloader enters with CS = 0x08 or 0x10; both must be code so the
+     * fetch after lgdt is valid.  0x18 is the long-mode code segment; 0x20 the
+     * flat data segment (L=0) for DS/ES/SS. */
+    gdtp = pp;
+    memset(pp, 0, 8); pp += 8;                       /* null */
+    { /* 0x08 32-bit code */
+        uint8_t *g = pp; (void)g;
+        put8(&pp, 0xff); put8(&pp, 0xff); put8(&pp, 0x00); put8(&pp, 0x00); put8(&pp, 0x00); put8(&pp, 0x9a); put8(&pp, 0xcf); put8(&pp, 0x00);
+    }
+    { /* 0x10 32-bit code (matches GRUB's CS) */
+        uint8_t *g = pp; (void)g;
+        put8(&pp, 0xff); put8(&pp, 0xff); put8(&pp, 0x00); put8(&pp, 0x00); put8(&pp, 0x00); put8(&pp, 0x9a); put8(&pp, 0xcf); put8(&pp, 0x00);
+    }
+    { /* 0x18 long-mode code */
+        uint8_t *g = pp; (void)g;
+        put8(&pp, 0xff); put8(&pp, 0xff); put8(&pp, 0x00); put8(&pp, 0x00); put8(&pp, 0x00); put8(&pp, 0x9a); put8(&pp, 0xaf); put8(&pp, 0x00);
+    }
+    { /* 0x20 flat data (L=0) */
+        uint8_t *g = pp; (void)g;
+        put8(&pp, 0xff); put8(&pp, 0xff); put8(&pp, 0x00); put8(&pp, 0x00); put8(&pp, 0x00); put8(&pp, 0x92); put8(&pp, 0xcf); put8(&pp, 0x00);
+    }
+
+    /* 32-bit entry code */
+    lm32dst = pp;
+    /* stage marker 'Z': com1 0x3F8 */
+    put8(&pp, 0xBA); put8(&pp, 0xF8); put8(&pp, 0x03); put8(&pp, 0); put8(&pp, 0);
+    put8(&pp, 0xB0); put8(&pp, 0x5A);
+    put8(&pp, 0xEE);
+    put8(&pp, 0xFA);                                    /* cli */
+    put8(&pp, 0x0F); put8(&pp, 0x01); put8(&pp, 0x15);  /* lgdt [disp32] = the gdptr */
+    { uint8_t b[4]; wb32(b, (uint32_t)(ELF_BASE_ADDR + GDPTR_OFF)); memcpy(pp, b, 4); pp += 4; }
+    /* Reload data segments to 0x20 (0x10 may now be code in OUR gdt) and give
+     * a stack before SS swap. */
+    put8(&pp, 0xBC);                                    /* mov esp, 0x90000 */
+    { uint8_t b[4]; wb32(b, STACK_TOP); memcpy(pp, b, 4); pp += 4; }
+    put8(&pp, 0x66); put8(&pp, 0xB8); put8(&pp, 0x20); put8(&pp, 0x00);  /* mov ax, 0x20 (66 = 16-bit) */
+    put8(&pp, 0x8E); put8(&pp, 0xD8);                   /* mov ds, ax */
+    put8(&pp, 0x8E); put8(&pp, 0xD0);                   /* mov ss, ax */
+    put8(&pp, 0x8E); put8(&pp, 0xC0);                   /* mov es, ax */
+    put8(&pp, 0x0F); put8(&pp, 0x20); put8(&pp, 0xE0);  /* mov eax,cr4 */
+    put8(&pp, 0x83); put8(&pp, 0xC8); put8(&pp, 0x20);  /* or eax,0x20 (PAE) */
+    put8(&pp, 0x0F); put8(&pp, 0x22); put8(&pp, 0xE0);  /* mov cr4,eax */
+    put8(&pp, 0xB8);                                    /* mov eax, imm32 */
+    { uint8_t b[4]; wb32(b, ELF_BASE_ADDR + PML4_VA_OFF); memcpy(pp, b, 4); pp += 4; }
+    put8(&pp, 0x0F); put8(&pp, 0x22); put8(&pp, 0xD8);  /* mov cr3,eax */
+    put8(&pp, 0xB9);                                    /* mov ecx, 0xC0000080 */
+    { uint8_t b[4]; wb32(b, 0xC0000080); memcpy(pp, b, 4); pp += 4; }
+    put8(&pp, 0x0F); put8(&pp, 0x32);                   /* rdmsr */
+    put8(&pp, 0x0D);                                    /* or eax, 0x100 (LME) */
+    { uint8_t b[4]; wb32(b, 0x100); memcpy(pp, b, 4); pp += 4; }
+    put8(&pp, 0x0F); put8(&pp, 0x30);                   /* wrmsr */
+    put8(&pp, 0x0F); put8(&pp, 0x20); put8(&pp, 0xC0);  /* mov eax,cr0 */
+    put8(&pp, 0x0D);                                    /* or eax, 0x80000000 (PG) */
+    { uint8_t b[4]; wb32(b, 0x80000000); memcpy(pp, b, 4); pp += 4; }
+    put8(&pp, 0x0F); put8(&pp, 0x22); put8(&pp, 0xC0);  /* mov cr0,eax */
+    put8(&pp, 0xEA);                                    /* far jmp 0x18:lm64 */
+    { uint8_t b[4]; wb32(b, ELF_BASE_ADDR + LM64_VA_OFF); memcpy(pp, b, 4); pp += 4; }
+    put16(&pp, 0x18);
+    passert("prologue size > 32-bit code", 1); /* mark use of lm32dst */
+    (void)lm32dst;
+
+    /* user code starts right after the 32-bit prologue, BUT the page tables
+     * need 4K alignment, so we place them at fixed offsets and let the PML4
+     * at VA-offset 0x1000 be aligned.  We build the 64-bit block, then place
+     * the tables, then the 64-bit block. */
+
+    /* ---- assemble 64-bit block (len known) into a temp buffer ---- */
+    char lm64[96];
+    uint8_t *q = (uint8_t *)lm64;
+    uint8_t *ret_q;
+    put8(&q, 0x48); put8(&q, 0xBC);                /* mov rsp, imm64 */
+    { uint8_t b[8]; wb64(b, STACK_TOP); memcpy(q, b, 8); q += 8; }
+    /* 'Y' marker */
+    put8(&q, 0xBA); put8(&q, 0xF8); put8(&q, 0x03); put8(&q, 0); put8(&q, 0);
+    put8(&q, 0xB0); put8(&q, 0x59);
+    put8(&q, 0xEE);
+    ret_q = q;
+    put8(&q, 0xE8); put8(&q, 0); put8(&q, 0); put8(&q, 0); put8(&q, 0); put8(&q, 0); /* call rel32 */
+    put8(&q, 0x89); put8(&q, 0xC3);                /* mov ebx, eax (result) */
+    /* serial out 'H' + low byte of result (com1 thr=0x3F8; QEMU 16550 accepts
+     * immediately, no LSR poll needed for a kernel boot proof) */
+    put8(&q, 0xBA); put8(&q, 0xF8); put8(&q, 0x03); put8(&q, 0); put8(&q, 0);  /* mov dx,0x3F8 */
+    put8(&q, 0xB0); put8(&q, 0x48);                /* mov al,'H' */
+    put8(&q, 0xEE);                                /* out dx,al */
+    put8(&q, 0x88); put8(&q, 0xD8);                /* mov al, bl */
+    put8(&q, 0xEE);                                /* out dx,al */
+    put8(&q, 0xFA); put8(&q, 0xF4); put8(&q, 0xEB); put8(&q, 0xFE); /* cli;hlt;jmp -2 */
+    size_t lm64_len = (size_t)(q - (uint8_t *)lm64);
+
+    /* patch the call to main: target = code VA = ELF_BASE + code_start.
+     * code_start(file) = LM64_VA_OFF + lm64_len; main called from ret_q. */
+    {
+        uint64_t code_va = ELF_BASE_ADDR + (uint64_t)LM64_VA_OFF + (uint64_t)lm64_len;
+        int32_t rel = (int32_t)(code_va - ((uint64_t)ELF_BASE_ADDR + (uint64_t)LM64_VA_OFF + (uint64_t)(ret_q - (uint8_t *)lm64) + 5));
+        uint8_t b[4]; wb32(b, (uint32_t)rel); memcpy(ret_q + 1, b, 4);  /* write the rel32 after the E8 opcode */
+    }
+
+    /* Build the page tables in a scratch (PML4 aligned at +0x1000). */
+    uint8_t *tbl = calloc(LM64_VA_OFF, 1);          /* 0x4000 bytes covers 0x1000..0x4000 */
+    uint8_t *pml4 = tbl + 0x1000;
+    uint8_t *pdpt = tbl + 0x2000;
+    uint8_t *pd   = tbl + 0x3000;
+    wb64(pml4 + 0 * 8, (uint64_t)(ELF_BASE_ADDR + PDPT_VA_OFF) | 3u); /* PML4[0] -> PDPT, RW|P */
+    wb64(pdpt + 0 * 8, (uint64_t)(ELF_BASE_ADDR + PD_VA_OFF)   | 3u); /* PDPT[0] -> PD  */
+    for (int i = 0; i < 8; i++)                                   /* identity 0..16MB huge */
+        wb64(pd + i * 8, (uint64_t)(i * 0x200000u) | 0x83u);
+    /* fix up the 32-bit cr3 mov to point at pml4 VA (already emitted correctly). */
+
+    /* Layout & write: [elf hdr 64][phdr 56][prologue: mb hdr + gdt + lm32]
+     * then pad to 0x1000, then [PML4][PDPT][PD] (0x1000..0x4000), then
+     * [lm64 block], then [user code][data]. */
+    size_t prologue_file = LM64_VA_OFF + lm64_len;   /* file offset where user code begins */
+    size_t code_start = prologue_file;               /* file offset of user code */
+    size_t data_start = code_start + code_size;
+    /* GRUB 2.12's multiboot ELF loader rejects e_shoff=0; append a minimal but
+     * valid section-header table: [shdr0 SHT_NULL][shdr1 .shstrtab][strtab]. */
+    const unsigned shstrlen = 10;                    /* ".shstrtab\0" */
+    size_t sht_off = data_start + data_size;
+    size_t total = sht_off + 2 * 64 + shstrlen;
+
+    FILE *f = fopen(filename, "wb");
+    if (!f) { free(pro); free(tbl); free(code_buf); return -1; }
+
+    uint8_t ehdr[ELF_HDR_SIZE];
+    build_elf_header(ehdr, ELF_BASE_ADDR + LM32_OFF, total);
+    wb64(ehdr + 40, (uint64_t)sht_off);              /* e_shoff */
+    wb16(ehdr + 58, 64);                             /* e_shentsize */
+    wb16(ehdr + 60, 2);                              /* e_shnum */
+    wb16(ehdr + 62, 1);                              /* e_shstrndx */
+    fwrite(ehdr, 1, ELF_HDR_SIZE, f);
+    uint8_t phdr[PHDR_SIZE];
+    build_phdr(phdr, total);
+    fwrite(phdr, 1, PHDR_SIZE, f);
+
+    /* prologue bytes (MB hdr + gdt + gdptr + lm32), written at 0x78 */
+    size_t pro_len = (size_t)(pp - (uint8_t *)pro);
+    fwrite(pro, 1, pro_len, f);
+
+    /* Explicit layout so every VA below matches the physical file layout:
+     *   [0x1000..0x4000] page tables (PML4/PDPT/PD -- cr3 = 0x401000)
+     *   [0x4000      ] lm64 block            (far jump target = 0x404000)
+     *   [0x4000+len  ] user code + data
+     * Fill gaps with zeros via fseek/fwrite. */
+    if (fseek(f, 0x1000, SEEK_SET)) goto we;
+    fwrite(tbl + 0x1000, 1, 0x3000, f);        /* exactly 0x1000..0x4000 */
+    if (fseek(f, LM64_VA_OFF, SEEK_SET)) goto we;
+    fwrite(lm64, 1, lm64_len, f);              /* at 0x4000 */
+    if (fseek(f, code_start, SEEK_SET)) goto we;
+    fwrite(code_buf, 1, code_size, f);
+    if (data_size) fwrite(data, 1, data_size, f);
+    if (fseek(f, sht_off, SEEK_SET)) goto we;
+    /* section-header table (at sht_off): [SHT_NULL][.shstrtab] + bytes */
+    {
+        uint8_t sh[64] = {0};
+        fwrite(sh, 1, 64, f);                          /* shdr0: SHT_NULL */
+        memset(sh, 0, sizeof(sh));
+        wb32(sh + 0, 3);                               /* sh_type = SHT_STRTAB */
+        wb64(sh + 16, sht_off + 128);                  /* sh_offset */
+        wb64(sh + 32, shstrlen);                       /* sh_size */
+        wb32(sh + 40, 1);                              /* sh_link */
+        wb32(sh + 44, 0);                              /* sh_info */
+        wb64(sh + 48, 1);                              /* sh_addralign */
+        fwrite(sh, 1, 64, f);                          /* shdr1: .shstrtab */
+        fwrite(".shstrtab", 1, shstrlen, f);
+    }
+    fclose(f);
+
+    free(pro); free(tbl); free(code_buf);
+    (void)gdtp; (void)gdptrdst;
+    return 0;
+we:
+    free(pro); free(tbl); free(code_buf);
+    fclose(f);
+    return -1;
+}

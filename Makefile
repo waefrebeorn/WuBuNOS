@@ -227,6 +227,31 @@ test_holyd_native: holyd_emit_elf holyd_elf_run
 	else echo "HOLY-NATIVE FAIL (checksum): exit=$$ec want 67 (323 & 0xff)"; exit 1; fi
 	rm -f /tmp/_nat.hc /tmp/_nat.elf /tmp/_csum.hc /tmp/_csum.elf /tmp/_nat.out /tmp/_csum.out
 
+# ── Full-circle boot: HolyD-emitted ELF boots under GRUB into long mode ──
+# Emits a multiboot-bootable kernel (`hd_write_boot_elf`: 32-bit prologue ->
+# paging -> long mode -> 64-bit payload that prints to COM1), packs it in a
+# GRUB ISO, boots it in QEMU, and asserts the serial trace contains the
+# 32-bit entry marker ('Z') and the post-transition 64-bit marker ('Y') --
+# proof the compiler's own ELF reaches bare-metal long mode without a gcc
+# kernel and without tripping an exception.  Needs grub-mkrescue (xorriso)
+# and qemu-system-x86_64.
+#   make boot-verify
+boot-verify: holyd_emit_elf
+	printf 'int main() { return 42; }' > /tmp/_bv.hc
+	./tools/holyd_emit_elf --boot /tmp/_bv.hc /tmp/_bv.elf
+	rm -rf /tmp/_bviso && mkdir -p /tmp/_bviso/boot/grub
+	cp /tmp/_bv.elf /tmp/_bviso/boot/boot.wubu
+	printf 'set timeout=0\nset default=0\nmenuentry "holyd" { multiboot /boot/boot.wubu\nboot\n}\n' > /tmp/_bviso/boot/grub/grub.cfg
+	grub-mkrescue -o /tmp/_bv.iso /tmp/_bviso >/dev/null 2>&1
+	rm -f /tmp/_bv.serial
+	timeout 20 qemu-system-x86_64 -cdrom /tmp/_bv.iso -serial file:/tmp/_bv.serial \
+		-display none -m 128 -no-reboot >/dev/null 2>&1 || true
+	if grep -q "Z" /tmp/_bv.serial 2>/dev/null && grep -q "Y" /tmp/_bv.serial 2>/dev/null; then \
+	  echo "HOLY-BOOT PASS: HolyD ELF boots under GRUB, enters long mode (Z,Y on serial)"; \
+	else echo "HOLY-BOOT FAIL: serial lacks Z and/or Y ($$(wc -c < /tmp/_bv.serial 2>/dev/null) bytes)"; exit 1; fi
+	rm -f /tmp/_bv.hc /tmp/_bv.elf /tmp/_bv.iso /tmp/_bv.serial
+	rm -rf /tmp/_bviso
+
 
 clean:
 	rm -f test_isa_driver test_mir_opt gauntlet_runner

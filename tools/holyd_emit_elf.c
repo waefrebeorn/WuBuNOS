@@ -35,8 +35,10 @@ static char *read_file(const char *path) {
 }
 
 int main(int argc, char **argv) {
+    int boot = 0;
+    if (argc >= 2 && strcmp(argv[1], "--boot") == 0) { boot = 1; argv++; argc--; }
     if (argc < 3) {
-        fprintf(stderr, "usage: holyd_emit_elf <src.hc> <out.elf>\n");
+        fprintf(stderr, "usage: holyd_emit_elf [--boot] <src.hc> <out>\n");
         return 2;
     }
     char *src = read_file(argv[1]);
@@ -95,8 +97,14 @@ int main(int argc, char **argv) {
     }
 
     size_t patch_offsets[1] = {0}, patch_globals[1] = {0};
-    if (hd_write_elf(argv[2], func_code, func_size, gen.data, gen.data_size,
-                     patch_offsets, patch_globals, 0) != 0) {
+    int rc;
+    if (boot)
+        rc = hd_write_boot_elf(argv[2], func_code, func_size, gen.data, gen.data_size,
+                               patch_offsets, patch_globals, 0);
+    else
+        rc = hd_write_elf(argv[2], func_code, func_size, gen.data, gen.data_size,
+                          patch_offsets, patch_globals, 0);
+    if (rc != 0) {
         fprintf(stderr, "failed to write %s\n", argv[2]);
         free(func_code); free(gen.code); free(gen.data);
         return 1;
