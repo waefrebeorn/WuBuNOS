@@ -218,10 +218,14 @@ holyd_elf_run: tools/holyd_elf_run.c
 test_holyd_native: holyd_emit_elf holyd_elf_run
 	printf 'int main(void) { return 42; }' > /tmp/_nat.hc
 	./tools/holyd_emit_elf /tmp/_nat.hc /tmp/_nat.elf
-	./tools/holyd_elf_run /tmp/_nat.elf; e=$$?; \
-	if [ "$$e" -eq 42 ]; then echo "HOLY-NATIVE PASS: compiled code returned 42 on the native CPU"; \
-	else echo "HOLY-NATIVE FAIL: exit=$$e (want 42)"; exit 1; fi
-	rm -f /tmp/_nat.hc /tmp/_nat.elf /tmp/_nat.out
+	./tools/holyd_elf_run /tmp/_nat.elf; e42=$$?; \
+	if [ "$$e42" -eq 42 ]; then echo "HOLY-NATIVE: return-42 -> exit 42 OK"; \
+	else echo "HOLY-NATIVE FAIL (return-42): exit=$$e42"; exit 1; fi
+	./tools/holyd_emit_elf tools/selfbuild_checksum.hc /tmp/_csum.elf
+	./tools/holyd_elf_run /tmp/_csum.elf; ec=$$?; \
+	if [ "$$ec" -eq 67 ]; then echo "HOLY-NATIVE: pointer-walk 323 -> exit 67 OK (matches loader)"; \
+	else echo "HOLY-NATIVE FAIL (checksum): exit=$$ec want 67 (323 & 0xff)"; exit 1; fi
+	rm -f /tmp/_nat.hc /tmp/_nat.elf /tmp/_csum.hc /tmp/_csum.elf /tmp/_nat.out /tmp/_csum.out
 
 
 clean:
