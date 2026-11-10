@@ -299,7 +299,7 @@ int hd_write_boot_elf(const char *filename,
      * the tables, then the 64-bit block. */
 
     /* ---- assemble 64-bit block (len known) into a temp buffer ---- */
-    char lm64[96];
+    char lm64[320];
     uint8_t *q = (uint8_t *)lm64;
     uint8_t *ret_q;
     put8(&q, 0x48); put8(&q, 0xBC);                /* mov rsp, imm64 */
@@ -311,13 +311,20 @@ int hd_write_boot_elf(const char *filename,
     ret_q = q;
     put8(&q, 0xE8); put8(&q, 0); put8(&q, 0); put8(&q, 0); put8(&q, 0); /* call rel32 (E8 + 4 rel bytes = 5) */
     put8(&q, 0x89); put8(&q, 0xC3);                /* mov ebx, eax (result) */
-    /* serial out 'H' + low byte of result (com1 thr=0x3F8; QEMU 16550 accepts
-     * immediately, no LSR poll needed for a kernel boot proof) */
-    put8(&q, 0xBA); put8(&q, 0xF8); put8(&q, 0x03); put8(&q, 0); put8(&q, 0);  /* mov dx,0x3F8 */
-    put8(&q, 0xB0); put8(&q, 0x48);                /* mov al,'H' */
-    put8(&q, 0xEE);                                /* out dx,al */
-    put8(&q, 0x88); put8(&q, 0xD8);                /* mov al, bl */
-    put8(&q, 0xEE);                                /* out dx,al */
+    /* print ebx as 8 hex digits to COM1 (0x3F8), unrolled so no loop/rel/reg
+     * tricks can mis-encode: compiled result -> readable text ("0000002a" 42,
+     * "00000143" 323). */
+    for (int shift = 28; shift >= 0; shift -= 4) {
+        put8(&q, 0x89); put8(&q, 0xD8);              /* mov eax, ebx */
+        put8(&q, 0xC1); put8(&q, 0xE8); put8(&q, (uint8_t)shift); /* shr eax, <shift> */
+        put8(&q, 0x24); put8(&q, 0x0F);              /* and al, 0x0F */
+        put8(&q, 0x3C); put8(&q, 0x0A);              /* cmp al, 10 */
+        put8(&q, 0x72); put8(&q, 0x02);              /* jb +2 */
+        put8(&q, 0x04); put8(&q, 0x07);              /* add al, 7 (a-f) */
+        put8(&q, 0x04); put8(&q, 0x30);              /* add al, '0' */
+        put8(&q, 0xBA); put8(&q, 0xF8); put8(&q, 0x03); put8(&q, 0); put8(&q, 0); /* mov dx,0x3F8 */
+        put8(&q, 0xEE);                              /* out dx, al */
+    }
     put8(&q, 0xFA); put8(&q, 0xF4); put8(&q, 0xEB); put8(&q, 0xFE); /* cli;hlt;jmp -2 */
     size_t lm64_len = (size_t)(q - (uint8_t *)lm64);
 

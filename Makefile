@@ -257,9 +257,9 @@ boot-verify: holyd_emit_elf
 	rm -f /tmp/_bv2.serial
 	timeout 20 qemu-system-x86_64 -cdrom /tmp/_bv2.iso -serial file:/tmp/_bv2.serial \
 		-display none -m 128 -no-reboot >/dev/null 2>&1 || true
-	python3 -c 'import sys; s=open("/tmp/_bv2.serial","rb").read(); sys.exit(0 if b"YH" in s and b"\x43" in s else 1)' 2>/dev/null && \
-	  echo "HOLY-BOOT-DATA PASS: checksum program reads .data in long mode (result 323=0x43 on serial)" || \
-	  { echo "HOLY-BOOT-DATA FAIL: checksum boot lacked YH + 0x43 ($$(wc -c < /tmp/_bv2.serial 2>/dev/null) bytes)"; exit 1; }
+	python3 -c 'import sys; s=open("/tmp/_bv2.serial","rb").read(); sys.exit(0 if b"00000143" in s else 1)' 2>/dev/null && \
+	  echo "HOLY-BOOT-DATA PASS: checksum program reads .data in long mode and prints hex 00000143 (323) on serial" || \
+	  { echo "HOLY-BOOT-DATA FAIL: checksum boot lacked 00000143 ($$(wc -c < /tmp/_bv2.serial 2>/dev/null) bytes)"; exit 1; }
 	rm -f /tmp/_bv2.hc /tmp/_bv2.elf /tmp/_bv2.iso /tmp/_bv2.serial
 	rm -f /tmp/_bv.hc /tmp/_bv.elf /tmp/_bv.iso /tmp/_bv.serial
 	rm -rf /tmp/_bviso
