@@ -199,6 +199,30 @@ test_selfhost_battery: isa-test/selfhost_battery.c $(FRONT) $(MIR) wubu_tgemm_av
 	$(CC) $(CFLAGS) -I. -I$(OS_ROOT) $^ -o $@ -lm
 	./$@
 
+# ── Full-circle emitter: HolyD -> ELF, then run it natively ───────────────
+# The thin emitter compiles a freestanding source straight to a loadable
+# x86-64 ELF (frontend + old codegen + elf writer only, no wuburuntime broker)
+# and the runner executes the emitted code on the real CPU.  The self-test
+# compiles `return 42`, emits main42.elf, and asserts it exits 42 natively --
+# proof the compiler produces genuine machine code, the kernel of the
+# "HolyD compiles the OS into a bootable image" pipeline.
+#   make test_holyd_native
+holyd_emit_elf: tools/holyd_emit_elf.c tools/std_jit_stub.c holyd_lexer.c holyd_parse.c holyd_parse_ast.c holyd_codegen.c holyd_codegen_emit.c holyd_codegen_expr.c holyd_codegen_stmt.c holyd_codegen_api.c holyd_runtime.c wubu_preproc.c holyd_elf.c
+	$(CC) -O2 -std=c11 -D_POSIX_C_SOURCE=200809L -DWUBU_HOSTED -include wubu_gnu_compat.h \
+		-I. -I$(OS_ROOT)/jit -I$(OS_ROOT)/runtime -I$(OS_ROOT) \
+		$^ -o tools/holyd_emit_elf
+
+holyd_elf_run: tools/holyd_elf_run.c
+	$(CC) -O2 -std=c11 -I. $^ -o tools/holyd_elf_run
+
+test_holyd_native: holyd_emit_elf holyd_elf_run
+	printf 'int main(void) { return 42; }' > /tmp/_nat.hc
+	./tools/holyd_emit_elf /tmp/_nat.hc /tmp/_nat.elf
+	./tools/holyd_elf_run /tmp/_nat.elf; e=$$?; \
+	if [ "$$e" -eq 42 ]; then echo "HOLY-NATIVE PASS: compiled code returned 42 on the native CPU"; \
+	else echo "HOLY-NATIVE FAIL: exit=$$e (want 42)"; exit 1; fi
+	rm -f /tmp/_nat.hc /tmp/_nat.elf /tmp/_nat.out
+
 
 clean:
 	rm -f test_isa_driver test_mir_opt gauntlet_runner
