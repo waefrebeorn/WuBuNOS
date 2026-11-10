@@ -70,6 +70,8 @@ test_gauntlet/depot/8cc/upstream/
 test_gauntlet/depot/compcert/upstream/
 test_gauntlet/depot/csmith/upstream/
 test_isa_driver
+test_backend_consistency
+test_holyc_ptx
 holyd_test
 tools/holyd_emit_elf
 tools/holyd_elf_run
