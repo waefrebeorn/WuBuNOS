@@ -90,6 +90,15 @@ int64_t wubu_fp_write_file(const char *name, const char *contents);
  * resolves `Print` / `FpWriteFile` to real host addresses. */
 void hd_register_holyd_runtime(HDGen *gen);
 
+/* Boot-image variant: register the HolyD print builtins (`print` / `Print` /
+ * `puts`) to a serial_puts routine placed inside the bootable ELF at
+ * HD_SERIAL_PUTS_OFF, so a HolyD program's own `Print("...")` writes to COM1
+ * in the booted kernel (no host, no gcc).  serial_puts_addr must be the
+ * routine's final virtual address (HD_ELF_BASE_ADDR + HD_SERIAL_PUTS_OFF). */
+#define HD_ELF_BASE_ADDR   0x400000u
+#define HD_SERIAL_PUTS_OFF 0x6000u
+void hd_register_boot_runtime(HDGen *gen, uintptr_t serial_puts_addr);
+
 /* High-level compile/execute */
 void *hd_compile(const char *source, size_t *out_size);
 void *hd_compile_func(const char *source, const char *func_name);

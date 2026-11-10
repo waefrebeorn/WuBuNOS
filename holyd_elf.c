@@ -23,6 +23,10 @@
 #include <stdlib.h>
 
 #define ELF_BASE_ADDR   0x400000
+/* Fixed file offset of the boot-image serial_puts routine (must match
+ * HD_SERIAL_PUTS_OFF in holyd_codegen.h; the emitter registers the print
+ * builtins to ELF_BASE_ADDR + this offset). */
+#define SERIAL_PUTS_OFF 0x6000
 
 /* Portable write helpers — no struct packing, no __attribute__ */
 static void wb16(uint8_t *buf, uint16_t v) {
@@ -358,6 +362,8 @@ int hd_write_boot_elf(const char *filename,
     const unsigned shstrlen = 10;                    /* ".shstrtab\0" */
     size_t sht_off = data_start + data_size;
     size_t total = sht_off + 2 * 64 + shstrlen;
+    /* the PT_LOAD must also cover the serial_puts routine at SERIAL_PUTS_OFF */
+    if (total < SERIAL_PUTS_OFF + 18) total = SERIAL_PUTS_OFF + 18;
 
     FILE *f = fopen(filename, "wb");
     if (!f) { free(pro); free(tbl); free(code_buf); return -1; }
@@ -403,6 +409,23 @@ int hd_write_boot_elf(const char *filename,
         wb64(sh + 48, 1);                              /* sh_addralign */
         fwrite(sh, 1, 64, f);                          /* shdr1: .shstrtab */
         fwrite(".shstrtab", 1, shstrlen, f);
+    }
+    /* serial_puts(const char *s in rdi): write the string to COM1 0x3F8.
+     * SysV ABI, no stack, no libc -- a compiled HolyD `Print("...")` calls
+     * this and the booted kernel itself prints. */
+    if (fseek(f, SERIAL_PUTS_OFF, SEEK_SET)) goto we;
+    {
+        static const uint8_t serial_puts[] = {
+            0xBA, 0xF8, 0x03, 0x00, 0x00,  /* mov edx, 0x3f8 */
+            0x8A, 0x07,                    /* loop: mov al, [rdi] */
+            0x84, 0xC0,                    /* test al, al */
+            0x74, 0x06,                    /* jz +6 -> ret */
+            0xEE,                          /* out dx, al */
+            0x48, 0xFF, 0xC7,              /* inc rdi */
+            0xEB, 0xF4,                    /* jmp -12 -> loop */
+            0xC3                           /* ret */
+        };
+        fwrite(serial_puts, 1, sizeof(serial_puts), f);
     }
     fclose(f);
 

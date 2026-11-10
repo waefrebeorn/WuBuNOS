@@ -120,3 +120,20 @@ void hd_register_holyd_runtime(HDGen *gen) {
         gen->n_extern_funcs++;
     }
 }
+
+/* Boot-image runtime: the print builtins resolve to the serial_puts routine
+ * the boot ELF places at HD_SERIAL_PUTS_OFF, so compiled HolyD code does real
+ * COM1 output in the booted kernel.  Same SysV ABI as wubu_print (arg0 in
+ * rdi). */
+void hd_register_boot_runtime(HDGen *gen, uintptr_t serial_puts_addr) {
+    if (!gen || serial_puts_addr == 0) return;
+    static const char *const names[] = { "print", "Print", "puts" };
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        if (gen->n_extern_funcs >= 32) return;
+        strncpy(gen->extern_funcs[gen->n_extern_funcs].c_name, names[i],
+                HD_MAX_IDENT_LEN - 1);
+        gen->extern_funcs[gen->n_extern_funcs].c_name[HD_MAX_IDENT_LEN - 1] = '\0';
+        gen->extern_funcs[gen->n_extern_funcs].func_addr = (void *)serial_puts_addr;
+        gen->n_extern_funcs++;
+    }
+}

@@ -55,6 +55,8 @@ int main(int argc, char **argv) {
 
     HDGen gen;
     hd_gen_init(&gen);
+    if (boot)
+        hd_register_boot_runtime(&gen, HD_ELF_BASE_ADDR + HD_SERIAL_PUTS_OFF);
     emit_prologue(&gen);
     if (ast->kind == HD_AST_BLOCK) {
         for (int i = 0; i < ast->n_stmts; i++) {
