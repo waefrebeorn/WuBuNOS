@@ -71,3 +71,5 @@ test_gauntlet/depot/compcert/upstream/
 test_gauntlet/depot/csmith/upstream/
 test_isa_driver
 holyd_test
+tools/holyd_emit_elf
+tools/holyd_elf_run
