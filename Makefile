@@ -249,6 +249,18 @@ boot-verify: holyd_emit_elf
 	if grep -q "Z" /tmp/_bv.serial 2>/dev/null && grep -q "Y" /tmp/_bv.serial 2>/dev/null; then \
 	  echo "HOLY-BOOT PASS: HolyD ELF boots under GRUB, enters long mode (Z,Y on serial)"; \
 	else echo "HOLY-BOOT FAIL: serial lacks Z and/or Y ($$(wc -c < /tmp/_bv.serial 2>/dev/null) bytes)"; exit 1; fi
+	# also boot the checksum-323 program: .data string access in booted long mode
+	printf 'int main() {\n    char *s = "WUBU";\n    char *p = s;\n    int c = 0;\n    while (*p != 0) { c = c + (int)*p; p = p + 1; }\n    return c;\n}\n' > /tmp/_bv2.hc
+	./tools/holyd_emit_elf --boot /tmp/_bv2.hc /tmp/_bv2.elf
+	cp /tmp/_bv2.elf /tmp/_bviso/boot/boot.wubu
+	grub-mkrescue -o /tmp/_bv2.iso /tmp/_bviso >/dev/null 2>&1
+	rm -f /tmp/_bv2.serial
+	timeout 20 qemu-system-x86_64 -cdrom /tmp/_bv2.iso -serial file:/tmp/_bv2.serial \
+		-display none -m 128 -no-reboot >/dev/null 2>&1 || true
+	python3 -c 'import sys; s=open("/tmp/_bv2.serial","rb").read(); sys.exit(0 if b"YH" in s and b"\x43" in s else 1)' 2>/dev/null && \
+	  echo "HOLY-BOOT-DATA PASS: checksum program reads .data in long mode (result 323=0x43 on serial)" || \
+	  { echo "HOLY-BOOT-DATA FAIL: checksum boot lacked YH + 0x43 ($$(wc -c < /tmp/_bv2.serial 2>/dev/null) bytes)"; exit 1; }
+	rm -f /tmp/_bv2.hc /tmp/_bv2.elf /tmp/_bv2.iso /tmp/_bv2.serial
 	rm -f /tmp/_bv.hc /tmp/_bv.elf /tmp/_bv.iso /tmp/_bv.serial
 	rm -rf /tmp/_bviso
 

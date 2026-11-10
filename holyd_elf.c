@@ -309,7 +309,7 @@ int hd_write_boot_elf(const char *filename,
     put8(&q, 0xB0); put8(&q, 0x59);
     put8(&q, 0xEE);
     ret_q = q;
-    put8(&q, 0xE8); put8(&q, 0); put8(&q, 0); put8(&q, 0); put8(&q, 0); put8(&q, 0); /* call rel32 */
+    put8(&q, 0xE8); put8(&q, 0); put8(&q, 0); put8(&q, 0); put8(&q, 0); /* call rel32 (E8 + 4 rel bytes = 5) */
     put8(&q, 0x89); put8(&q, 0xC3);                /* mov ebx, eax (result) */
     /* serial out 'H' + low byte of result (com1 thr=0x3F8; QEMU 16550 accepts
      * immediately, no LSR poll needed for a kernel boot proof) */
