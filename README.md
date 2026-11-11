@@ -10,6 +10,11 @@ self-hosting battery that proves every C11 construct the kernel needs.
 
 ---
 
+
+> **~WuBu~ AGI** — one system, many repositories. This is the **Compiler**. The Body is [WuBuOS](https://github.com/waefrebeorn/WuBuOS), the Brain [wubuwizard](https://github.com/waefrebeorn/wubuwizard).
+
+
+> **~WuBu~ AGI** — one system, many repositories. This is the **Compiler**. The Body is [WuBuOS](https://github.com/waefrebeorn/WuBuOS), the Brain [wubuwizard](https://github.com/waefrebeorn/wubuwizard).
 ## HolyD — the founding myth
 
 > *"can we make all expansions to HolyC 'HolyD' like a big joke that I swang my
