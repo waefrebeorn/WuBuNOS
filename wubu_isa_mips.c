@@ -367,13 +367,13 @@ static int mips_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_siz
                          e32(&e, mips_addui(0, MIPS_REG_T2, 1));
                          e32(&e, mips_sub(MIPS_REG_T2, MIPS_REG_T0, MIPS_REG_T0)); break; /* $t0 = 1 - (b<a) = (b>=a) = (a<=b) */
             case MIR_EQ: /* a == b: slt(a,b) | slt(b,a) then negate */
-                         e32(&e, mips_slt(MIPS_REG_T2, MIPS_REG_T0, MIPS_REG_T1)); /* $t2 = (a<b) */
+                         e32(&e, mips_slt(MIPS_REG_T0, MIPS_REG_T1, MIPS_REG_T2)); /* $t2 = (a<b) */
                          e32(&e, mips_slt(MIPS_REG_T0, MIPS_REG_T1, MIPS_REG_T0)); /* $t0 = (b<a) */
                          e32(&e, mips_or(MIPS_REG_T2, MIPS_REG_T0, MIPS_REG_T0)); /* $t0 = (a<b)|(b<a) = a!=b */
                          e32(&e, mips_addui(0, MIPS_REG_T2, 1));
                          e32(&e, mips_sub(MIPS_REG_T2, MIPS_REG_T0, MIPS_REG_T0)); break; /* $t0 = 1 - a!=b = a==b */
             case MIR_NE:
-                         e32(&e, mips_slt(MIPS_REG_T2, MIPS_REG_T0, MIPS_REG_T1));
+                         e32(&e, mips_slt(MIPS_REG_T0, MIPS_REG_T1, MIPS_REG_T2));
                          e32(&e, mips_slt(MIPS_REG_T0, MIPS_REG_T1, MIPS_REG_T0));
                          e32(&e, mips_or(MIPS_REG_T2, MIPS_REG_T0, MIPS_REG_T0)); break; /* $t0 = a!=b */
             default: e32(&e, mips_slt(MIPS_REG_T1, MIPS_REG_T0, MIPS_REG_T0)); break;

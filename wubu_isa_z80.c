@@ -136,6 +136,8 @@ static void e16(z80_emitter_t *e, uint16_t w)
 #define Z80_JP_Z_NN   0xCA
 #define Z80_JP_NC_NN  0xD2
 #define Z80_JP_C_NN   0xDA
+#define Z80_JP_PO_NN  0xE2
+#define Z80_JP_PE_NN  0xEA
 #define Z80_JP_P_NN   0xF2
 #define Z80_JP_M_NN   0xFA
 #define Z80_JR_D      0x18
@@ -296,8 +298,19 @@ static void emit_compare(z80_emitter_t *e, int mir_op, uint16_t va,
         e8(e, Z80_LD_A_N); e8(e, 0x01);
         store_a_to_slot(e, vdst);
         break;
-    case MIR_LT: /* JP C set1; set0; JP done; set1 */
-        e8(e, Z80_JP_C_NN);
+    case MIR_LT: { /* signed A<B: S XOR V after CP (V=0: JP M; V=1: JP P) */
+        uint32_t ov = internal_label(e);
+        e8(e, Z80_JP_PE_NN);
+        e16(e, 0x0000);
+        patch_push(e, patches, np, cap, e->n - 2, 2, ov);
+        e8(e, Z80_JP_M_NN);
+        e16(e, 0x0000);
+        patch_push(e, patches, np, cap, e->n - 2, 2, set1);
+        e8(e, Z80_JP_NN);
+        e16(e, 0x0000);
+        patch_push(e, patches, np, cap, e->n - 2, 2, set0);
+        note_label(e, ov, e->n);
+        e8(e, Z80_JP_P_NN);
         e16(e, 0x0000);
         patch_push(e, patches, np, cap, e->n - 2, 2, set1);
         note_label(e, set0, e->n);
@@ -310,42 +323,23 @@ static void emit_compare(z80_emitter_t *e, int mir_op, uint16_t va,
         e8(e, Z80_LD_A_N); e8(e, 0x01);
         store_a_to_slot(e, vdst);
         break;
-    case MIR_LE: /* JP C set1; JP Z set1; set0; JP done; set1 */
-        e8(e, Z80_JP_C_NN);
-        e16(e, 0x0000);
-        patch_push(e, patches, np, cap, e->n - 2, 2, set1);
+    }
+    case MIR_LE: { /* signed A<=B: Z OR (S XOR V) */
+        uint32_t ov = internal_label(e);
         e8(e, Z80_JP_Z_NN);
         e16(e, 0x0000);
         patch_push(e, patches, np, cap, e->n - 2, 2, set1);
-        note_label(e, set0, e->n);
-        e8(e, Z80_LD_A_N); e8(e, 0x00);
-        store_a_to_slot(e, vdst);
+        e8(e, Z80_JP_PE_NN);
+        e16(e, 0x0000);
+        patch_push(e, patches, np, cap, e->n - 2, 2, ov);
+        e8(e, Z80_JP_M_NN);
+        e16(e, 0x0000);
+        patch_push(e, patches, np, cap, e->n - 2, 2, set1);
         e8(e, Z80_JP_NN);
         e16(e, 0x0000);
-        patch_push(e, patches, np, cap, e->n - 2, 2, done);
-        note_label(e, set1, e->n);
-        e8(e, Z80_LD_A_N); e8(e, 0x01);
-        store_a_to_slot(e, vdst);
-        break;
-    case MIR_GT: /* JP Z set0; JP C set0; set1; JP done; set0 */
-        e8(e, Z80_JP_Z_NN);
-        e16(e, 0x0000);
         patch_push(e, patches, np, cap, e->n - 2, 2, set0);
-        e8(e, Z80_JP_C_NN);
-        e16(e, 0x0000);
-        patch_push(e, patches, np, cap, e->n - 2, 2, set0);
-        note_label(e, set1, e->n);
-        e8(e, Z80_LD_A_N); e8(e, 0x01);
-        store_a_to_slot(e, vdst);
-        e8(e, Z80_JP_NN);
-        e16(e, 0x0000);
-        patch_push(e, patches, np, cap, e->n - 2, 2, done);
-        note_label(e, set0, e->n);
-        e8(e, Z80_LD_A_N); e8(e, 0x00);
-        store_a_to_slot(e, vdst);
-        break;
-    case MIR_GE: /* JP NC set1; set0; JP done; set1 */
-        e8(e, Z80_JP_NC_NN);
+        note_label(e, ov, e->n);
+        e8(e, Z80_JP_P_NN);
         e16(e, 0x0000);
         patch_push(e, patches, np, cap, e->n - 2, 2, set1);
         note_label(e, set0, e->n);
@@ -358,6 +352,62 @@ static void emit_compare(z80_emitter_t *e, int mir_op, uint16_t va,
         e8(e, Z80_LD_A_N); e8(e, 0x01);
         store_a_to_slot(e, vdst);
         break;
+    }
+    case MIR_GT: { /* signed A>B: !Z AND !(S XOR V) (V=0: JP P; V=1: JP M) */
+        uint32_t ov = internal_label(e);
+        e8(e, Z80_JP_Z_NN);
+        e16(e, 0x0000);
+        patch_push(e, patches, np, cap, e->n - 2, 2, set0);
+        e8(e, Z80_JP_PE_NN);
+        e16(e, 0x0000);
+        patch_push(e, patches, np, cap, e->n - 2, 2, ov);
+        e8(e, Z80_JP_P_NN);
+        e16(e, 0x0000);
+        patch_push(e, patches, np, cap, e->n - 2, 2, set1);
+        e8(e, Z80_JP_NN);
+        e16(e, 0x0000);
+        patch_push(e, patches, np, cap, e->n - 2, 2, set0);
+        note_label(e, ov, e->n);
+        e8(e, Z80_JP_M_NN);
+        e16(e, 0x0000);
+        patch_push(e, patches, np, cap, e->n - 2, 2, set1);
+        note_label(e, set0, e->n);
+        e8(e, Z80_LD_A_N); e8(e, 0x00);
+        store_a_to_slot(e, vdst);
+        e8(e, Z80_JP_NN);
+        e16(e, 0x0000);
+        patch_push(e, patches, np, cap, e->n - 2, 2, done);
+        note_label(e, set1, e->n);
+        e8(e, Z80_LD_A_N); e8(e, 0x01);
+        store_a_to_slot(e, vdst);
+        break;
+    }
+    case MIR_GE: { /* signed A>=B: !(S XOR V) (V=0: JP P; V=1: JP M) */
+        uint32_t ov = internal_label(e);
+        e8(e, Z80_JP_PE_NN);
+        e16(e, 0x0000);
+        patch_push(e, patches, np, cap, e->n - 2, 2, ov);
+        e8(e, Z80_JP_P_NN);
+        e16(e, 0x0000);
+        patch_push(e, patches, np, cap, e->n - 2, 2, set1);
+        e8(e, Z80_JP_NN);
+        e16(e, 0x0000);
+        patch_push(e, patches, np, cap, e->n - 2, 2, set0);
+        note_label(e, ov, e->n);
+        e8(e, Z80_JP_M_NN);
+        e16(e, 0x0000);
+        patch_push(e, patches, np, cap, e->n - 2, 2, set1);
+        note_label(e, set0, e->n);
+        e8(e, Z80_LD_A_N); e8(e, 0x00);
+        store_a_to_slot(e, vdst);
+        e8(e, Z80_JP_NN);
+        e16(e, 0x0000);
+        patch_push(e, patches, np, cap, e->n - 2, 2, done);
+        note_label(e, set1, e->n);
+        e8(e, Z80_LD_A_N); e8(e, 0x01);
+        store_a_to_slot(e, vdst);
+        break;
+    }
     /* unsigned compares: CP is natively unsigned on Z80 (C=1 iff a<b).
      *   ULT: JP C set1        UGE: JP NC set1
      *   ULE: JP C|JP Z set1   UGT: JP Z set0; JP NC set1 */

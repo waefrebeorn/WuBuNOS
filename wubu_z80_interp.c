@@ -75,6 +75,9 @@ static void set_flags_sub(z80_cpu_t *cpu, uint8_t res, uint8_t a, uint8_t v)
     if (res == 0) cpu->f |= F_Z;
     cpu->f |= F_N;
     if (a < v) cpu->f |= F_C;   /* borrow */
+    /* P/V = signed overflow: operands differ in sign and the result's
+     * sign differs from a's. Signed compares (S XOR V) need this. */
+    if (((a ^ v) & (a ^ res)) & 0x80) cpu->f |= F_P;
 }
 
 /* the 8-bit register file: A B C D E H L (the compiler's LD r,n +
@@ -201,8 +204,10 @@ int64_t wubu_z80_run(const uint8_t *code, size_t size, int64_t arg)
         case 0x84: case 0x85: case 0x87: {
             r = op & 7;
             uint8_t v = (r == 6) ? cpu.mem[(uint16_t)((cpu.h << 8) | cpu.l)] : *reg8(&cpu, r);
-            uint8_t res = (uint8_t)(cpu.a + v);
+            uint8_t a0 = cpu.a;
+            uint8_t res = (uint8_t)(a0 + v);
             set_flags_alu(&cpu, res, 0, 0);
+            if ((~(a0 ^ v) & (a0 ^ res)) & 0x80) cpu.f |= F_P; /* V */
             cpu.a = res;
             break;
         }
