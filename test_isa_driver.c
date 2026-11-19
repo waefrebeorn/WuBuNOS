@@ -620,6 +620,57 @@ static void test_frame_layout(void)
     free(code);
 }
 
+/* Test: comparison battery — EQ/LT/GT signed + unsigned family.
+ * Added by the hardcoding census (2026-11-19): the PIC encoder's private
+ * opcode table had drifted from the interpreter (EQ emitted GTS, LT
+ * emitted LEU, GT emitted GTU) and NO test covered EQ/LT, so it shipped.
+ * Values stay inside int8 so 8-bit backends are exercised honestly. */
+static void test_compare_battery(void)
+{
+    printf("-- Test: comparison battery (EQ/LT/GT/ULT/ULE/UGT/UGE) --\n");
+    const struct { wubu_mir_op_t op; int64_t a, b, want; const char *nm; } cases[] = {
+        { MIR_EQ,  5,  5, 1, "eq(5,5)" },
+        { MIR_EQ,  5,  6, 0, "eq(5,6)" },
+        { MIR_LT,  2,  3, 1, "lt(2,3)" },
+        { MIR_LT,  3,  2, 0, "lt(3,2)" },
+        { MIR_LT, -5,  3, 1, "lt(-5,3)" },
+        { MIR_LT,  3, -5, 0, "lt(3,-5)" },
+        { MIR_GT,  3,  2, 1, "gt(3,2)" },
+        { MIR_GT,  2,  3, 0, "gt(2,3)" },
+        { MIR_GT, -5,  3, 0, "gt(-5,3)" },
+        { MIR_GT,  3, -5, 1, "gt(3,-5)" },
+        { MIR_ULT, 1,  2, 1, "ult(1,2)" },
+        { MIR_ULT, 2,  1, 0, "ult(2,1)" },
+        { MIR_ULE, 2,  2, 1, "ule(2,2)" },
+        { MIR_ULE, 3,  2, 0, "ule(3,2)" },
+        { MIR_UGT, 2,  1, 1, "ugt(2,1)" },
+        { MIR_UGE, 2,  2, 1, "uge(2,2)" },
+    };
+    const char *names[] = {"x86-64", "8086", "m68k", "6502", "riscv", "z80", "mips", "8051", "avr", "pic", "amdgpu", "ptx", "arm64"};
+    for (unsigned ci = 0; ci < sizeof(cases)/sizeof(cases[0]); ci++) {
+        wubu_mir_prog_t prog;
+        wubu_mir_init(&prog);
+        wubu_vr_t a = wubu_mir_const(&prog, cases[ci].a);
+        wubu_vr_t b = wubu_mir_const(&prog, cases[ci].b);
+        wubu_vr_t r = wubu_mir_binop(&prog, cases[ci].op, a, b);
+        wubu_mir_ret(&prog, r);
+        for (int i = 0; i < 13; i++) {
+            const wubu_isa_driver_t *d = wubu_isa_find(names[i]);
+            if (!d) continue;
+            int64_t result = 0;
+            if (run_with_driver(d, &prog, &result) == 0) {
+                char msg[96];
+                snprintf(msg, sizeof msg, "%s %s", names[i], cases[ci].nm);
+                CHECK(result == cases[ci].want, msg);
+                if (result != cases[ci].want)
+                    printf("  %s: got %lld want %lld\n", msg,
+                           (long long)result, (long long)cases[ci].want);
+            }
+        }
+        wubu_mir_free(&prog);
+    }
+}
+
 int main(void)
 {
     printf("=== ISA DRIVER SPACE TEST ===\n\n");
@@ -656,6 +707,7 @@ int main(void)
     printf("\n");
     test_modulo();
     test_unsigned_compare();
+    test_compare_battery();
     printf("\n");
     test_branch();
     printf("\n");

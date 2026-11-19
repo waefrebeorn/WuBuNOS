@@ -43,39 +43,11 @@ static void pic_note_label(pic_emitter_t *e, uint32_t label, size_t off) {
     e->label_offsets[label] = off;
 }
 
-/* Virtual PIC opcodes — accumulator/W + file-register model */
-#define PIC_LIW  0x01 /* LIW imm     — W = imm */
-#define PIC_ADW  0x02 /* ADW fr      — W = W + RAM[fr] */
-#define PIC_SUW  0x03 /* SUW fr      — W = W - RAM[fr] */
-#define PIC_ANW  0x04 /* ANW fr      — W = W & RAM[fr] */
-#define PIC_ORW  0x05 /* ORW fr      — W = W | RAM[fr] */
-#define PIC_XRW  0x06 /* XRW fr      — W = W ^ RAM[fr] */
-#define PIC_MVF  0x07 /* MVF fr      — RAM[fr] = W */
-#define PIC_MVW  0x08 /* MVW fr      — W = RAM[fr] */
-#define PIC_NEG  0x09 /* NEG         — W = -W */
-#define PIC_NOT  0x0A /* NOT         — W = ~W */
-#define PIC_CLR  0x0B /* CLR fr      — RAM[fr] = 0 */
-#define PIC_INC  0x0C /* INC fr      — RAM[fr]++ */
-#define PIC_DEC  0x0D /* DEC fr      — RAM[fr]-- */
-#define PIC_MUL  0x0F /* MUL fr      — W = (W * RAM[fr]) & 0xFF */
-#define PIC_DIV  0x10 /* DIV fr      — W = W / RAM[fr] (unsigned) */
-#define PIC_MOD  0x11 /* MOD fr      — W = W % RAM[fr] (unsigned) */
-#define PIC_SHL  0x12 /* SHL fr      — W = (W << RAM[fr]) & 0xFF */
-#define PIC_SHR  0x13 /* SHR fr      — W = W >> RAM[fr] (unsigned) */
-#define PIC_GTU  0x14 /* GTU fr      — W = (W > RAM[fr]) ? 1 : 0 */
-#define PIC_LTU  0x15 /* LTU fr      — W = (W < RAM[fr]) ? 1 : 0 */
-#define PIC_EQ   0x16
-/* NOTE: opcode values must match the INTERP's table (wubu_pic_interp.c),
- * not the compiler's local historical numbering. GEU=0x1D, LT-complement=0x1E. */
-#define PIC_GEU  0x1D
-#define PIC_ULEQ 0x1F /* EQ  fr      — W = (W == RAM[fr]) ? 1 : 0 */
-#define PIC_RET  0x0E /* RET         — return W */
-#define PIC_FOP  0x20 /* soft-float hostcall */
-#define PIC_MEMOP 0x23 /* MIR memory LOAD/STORE */
-#define PIC_CALL 0x24
-#define PIC_FUNC_RET 0x25
-#define PIC_JMP 0x26
-#define PIC_FRET 0x21 /* soft-float return */
+/* Virtual PIC opcodes: ONE owner, wubu_pic_opcodes.h. The executor's
+ * numbering is the contract. The old private table here had drifted
+ * (EQ=0x16 where the executor runs GTS; LTU=0x15 where it runs LEU) —
+ * equality and less-than compiled to the wrong operations. */
+#include "wubu_pic_opcodes.h"
 
 
 /* is instruction index `idx` inside any declared function body? */
@@ -229,18 +201,21 @@ static int pic_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             pic_ep8(&e, (uint8_t)in->dst);
             break;
         case MIR_GT:
+            /* signed >: GTS, not GTU (GTU made GT(-5,3) true). */
             pic_ep8(&e, PIC_MVW);
             pic_ep8(&e, (uint8_t)in->a);
-            pic_ep8(&e, PIC_GTU);
+            pic_ep8(&e, PIC_GTS);
             pic_ep8(&e, (uint8_t)in->b);
             pic_ep8(&e, PIC_MVF);
             pic_ep8(&e, (uint8_t)in->dst);
             break;
         case MIR_LT:
+            /* signed <: no direct opcode; a < b  <=>  b > a (GTS with
+             * operands swapped). The old PIC_LTU=0x15 ran LEU (<=). */
             pic_ep8(&e, PIC_MVW);
-            pic_ep8(&e, (uint8_t)in->a);
-            pic_ep8(&e, PIC_LTU);
             pic_ep8(&e, (uint8_t)in->b);
+            pic_ep8(&e, PIC_GTS);
+            pic_ep8(&e, (uint8_t)in->a);
             pic_ep8(&e, PIC_MVF);
             pic_ep8(&e, (uint8_t)in->dst);
             break;
@@ -262,9 +237,10 @@ static int pic_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             pic_ep8(&e, (uint8_t)in->dst);
             break;
         case MIR_ULT:
+            /* unsigned <: LEQ (0x1E). The old PIC_LTU=0x15 ran LEU (<=). */
             pic_ep8(&e, PIC_MVW);
             pic_ep8(&e, (uint8_t)in->a);
-            pic_ep8(&e, PIC_LTU);
+            pic_ep8(&e, PIC_LEQ);
             pic_ep8(&e, (uint8_t)in->b);
             pic_ep8(&e, PIC_MVF);
             pic_ep8(&e, (uint8_t)in->dst);
