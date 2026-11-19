@@ -376,7 +376,7 @@ static void wubu_tgemm_avx512(int64_t *mem, int64_t A, int64_t B,
     size_t b_buf_size = (size_t)KC * NC * sizeof(int64_t);
     int64_t *A_packed = (int64_t *)aligned_alloc(64, a_buf_size);
     int64_t *B_packed = (int64_t *)aligned_alloc(64, b_buf_size);
-    if (!A_packed || !B_packed) { free(A_packed); free(B_packed); return; }
+    if (!A_packed || !B_packed) { wubu_aligned_free(A_packed); wubu_aligned_free(B_packed); return; }
 
     for (int i3 = 0; i3 < M; i3 += MC) {
         int mc = (i3 + MC <= M) ? MC : M - i3;
@@ -446,8 +446,8 @@ static void wubu_tgemm_avx512(int64_t *mem, int64_t A, int64_t B,
             }
         }
     }
-    free(A_packed);
-    free(B_packed);
+    wubu_aligned_free(A_packed);
+    wubu_aligned_free(B_packed);
 #endif /* HAS_AVX512 */
 }
 

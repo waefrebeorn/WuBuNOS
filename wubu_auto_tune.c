@@ -67,7 +67,7 @@ static double time_gemm_kernel(int M, int N, int K, const tune_tgemm_t *t)
         if (r >= 0 && sec < best) best = sec;
     }
 
-    free(block);
+    wubu_aligned_free(block);
     return best;
 }
 

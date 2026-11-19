@@ -16,7 +16,7 @@ CC      = gcc
 OS_ROOT ?= /home/wubu/wubuos/src
 CFLAGS  = -O3 -std=c11 -D_POSIX_C_SOURCE=200809L -DWUBU_HOSTED \
           -march=native -mavx2 -mfma -frename-registers -funroll-loops -MMD -MP \
-          -include wubu_gnu_compat.h -I. -I$(OS_ROOT)/jit -I$(OS_ROOT)/runtime -fopenmp -Wall -Wextra
+          -include wubu_gnu_compat.h -I. -Icompat/win32 -I$(OS_ROOT)/jit -I$(OS_ROOT)/runtime -fopenmp -Wall -Wextra
 
 # The JIT runtime (wubu_isa_x86_64.c x86_run + the emitter) is miscompiled by
 # the -march=native -mavx2 -mfma auto-vectorizer: 48 x86-64 gauntlet tests
@@ -25,7 +25,7 @@ CFLAGS  = -O3 -std=c11 -D_POSIX_C_SOURCE=200809L -DWUBU_HOSTED \
 # as the documented clock_gettime/-funroll-loops bug. Scrub the arch+vector
 # flags for the gauntlet_runner link only; the rest of the build keeps them.
 GAUNTLET_CFLAGS = -O2 -std=c11 -D_POSIX_C_SOURCE=200809L -DWUBU_HOSTED \
-          -include wubu_gnu_compat.h -I. -I$(OS_ROOT)/jit -I$(OS_ROOT)/runtime -fopenmp
+          -include wubu_gnu_compat.h -I. -Icompat/win32 -I$(OS_ROOT)/jit -I$(OS_ROOT)/runtime -fopenmp
 LDFLAGS = -lm
 
 

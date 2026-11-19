@@ -31,7 +31,9 @@
 #include <stdarg.h>
 #include <unistd.h>
 #include <signal.h>
+#ifndef _WIN32
 #include <sys/wait.h>
+#endif
 #include <time.h>
 #include <errno.h>
 
@@ -1256,7 +1258,7 @@ static int ptx_compile(const wubu_mir_prog_t *p, uint8_t **out_code, size_t *out
     char *ptx = emit_ptx(p);
     if (!ptx) return -1;
 
-#ifdef WUBU_HOSTED
+#if defined(WUBU_HOSTED) && !defined(_WIN32)
     /* 2a. Hosted: compile PTX -> cubin via ptxas (with caching) */
 
     /* Process-unique scratch paths. These were fixed shared names, so two
@@ -1343,7 +1345,7 @@ static int64_t ptx_run(const uint8_t *code, size_t size, int64_t arg)
 {
     if (!code || size == 0) return 0;
 
-#ifdef WUBU_HOSTED
+#if defined(WUBU_HOSTED) && !defined(_WIN32)
     /* Ensure the host stub is compiled */
     if (ensure_stub() != 0) {
         fprintf(stderr, "[ptx] cannot run — host stub not available\n");

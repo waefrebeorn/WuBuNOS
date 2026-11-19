@@ -56,7 +56,7 @@ int main() {
         for (int i = 0; i < 5; i++) printf("%.1f ", times[i]*1000);
         printf("]\n");
         
-        free(A); free(B); free(C);
+        wubu_aligned_free(A); wubu_aligned_free(B); wubu_aligned_free(C);
     }
     
     return 0;

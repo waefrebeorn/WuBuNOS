@@ -68,7 +68,7 @@ int main() {
         printf("%-6d  %10.3f ms  %8.1f GFLOPS  maxerr=%f %s\n",
                N, best_ms, gflops, maxerr, maxerr > 1.0 ? "WARN" : "OK");
 
-        free(A); free(B); free(C);
+        wubu_aligned_free(A); wubu_aligned_free(B); wubu_aligned_free(C);
     }
 
     printf("\n=== BF16 Benchmark Complete ===\n");

@@ -174,7 +174,7 @@ void wubu_tgemm_f32_avx512(const float * __restrict__ A,
                     }
                 }
             }
-            free(bpack);
+            wubu_aligned_free(bpack);
         }
     }
 /*
@@ -186,8 +186,8 @@ void wubu_tgemm_bf16_avx512(const uint16_t *A_bf16, const uint16_t *B_bf16, floa
     float *A_fp32 = (float*)aligned_alloc(64, (size_t)M * K * sizeof(float));
     float *B_fp32 = (float*)aligned_alloc(64, (size_t)K * N * sizeof(float));
     if (!A_fp32 || !B_fp32) {
-        if (A_fp32) free(A_fp32);
-        if (B_fp32) free(B_fp32);
+        if (A_fp32) wubu_aligned_free(A_fp32);
+        if (B_fp32) wubu_aligned_free(B_fp32);
         return;
     }
 
@@ -202,6 +202,6 @@ void wubu_tgemm_bf16_avx512(const uint16_t *A_bf16, const uint16_t *B_bf16, floa
 
     wubu_tgemm_f32_avx512(A_fp32, B_fp32, C, M, N, K);
 
-    free(A_fp32);
-    free(B_fp32);
+    wubu_aligned_free(A_fp32);
+    wubu_aligned_free(B_fp32);
 }

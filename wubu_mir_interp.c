@@ -652,7 +652,7 @@ op_t_gemm_f32:
         int Ndim = (int)((in->imm >> 11) & 0x7FF);
         int K = (int)(in->imm & 0x7FF);
         int64_t a = vr[in->a], b = vr[in->b], c = vr[in->dst];
-        wubu_tgemm_f32_mir(mem, a, b, c, M, Ndim, K);
+        wubu_tgemm_f32_mir((int64_t *)mem, a, b, c, M, Ndim, K);
     }
     DISPATCH();
 

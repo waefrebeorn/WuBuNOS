@@ -47,7 +47,7 @@ int main() {
         double gflops = 2.0 * N * N * N / (avg * 1e9);
         
         printf("N=%4d  avg=%.3fms  GFLOPS=%.1f\n", N, avg*1000, gflops);
-        free(mem);
+        wubu_aligned_free(mem);
     }
     return 0;
 }

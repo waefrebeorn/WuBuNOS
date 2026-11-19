@@ -51,6 +51,6 @@ int main() {
     printf("\n  avg=%.3f ms  min=%.3f ms  max=%.3f ms\n", sum/10*1000, min_t*1000, max_t*1000);
     printf("  avg GFLOPS=%.1f  peak GFLOPS=%.1f\n", 2.0*N*N*N/(sum/10*1e9), 2.0*N*N*N/(min_t*1e9));
     
-    free(A); free(B); free(C);
+    wubu_aligned_free(A); wubu_aligned_free(B); wubu_aligned_free(C);
     return 0;
 }

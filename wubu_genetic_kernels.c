@@ -93,7 +93,7 @@ static double evaluate_genome(const genome_t *g, int M, int N, int K)
         if (r >= 0 && sec < best) best = sec;
     }
 
-    free(block);
+    wubu_aligned_free(block);
     if (best <= 0.0) return 0.0;
     double gflops = 2.0 * (double)M * (double)N * (double)K / (best * 1e9);
     return gflops;
