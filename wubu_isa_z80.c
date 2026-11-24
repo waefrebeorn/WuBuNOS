@@ -690,23 +690,22 @@ static int z80_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             store_a_to_slot(&e, vd);
             break;
         }
-        case MIR_SHR: {
-            /* vd = va >> vb: C = va, B = vb, A = 0
-             * loop: LD A,(vd); SRL A (CB 3F); LD (vd),A; DEC B; JR NZ
+        case MIR_SHR: case MIR_SHR_U: {
+            /* vd = va >> vb, one bit per iteration:
+             *   MIR_SHR_U (logical):    SRL A          (CB 3F)
+             *   MIR_SHR   (arithmetic): SLA A ; RRA    (CB 27 ; 1F)
              *
-             * KNOWN DIVERGENCE: this is a LOGICAL shift, while MIR_SHR is
-             * arithmetic (see wubu_mir.h -- the interpreter does `int64_t >> `
-             * and x86-64 emits `sar`). The Z80 has no SRA, and the carry-rotate
-             * tricks (RLCA/RRCA, RRC A) are ROTATIONS, not shifts -- verified
-             * exhaustively that no short pairing of them yields a sign-extending
-             * shift over all 256 inputs.
-             *
-             * A correct 8-bit SRA needs the sign preserved across the shift
-             * (save it, SRL, then conditionally set bit 7), which needs one
-             * more live register than this loop keeps. Until that is written,
-             * leave the logical shift and record the divergence rather than
-             * ship a sequence that corrupts every value it touches -- the
-             * oracle skips 8-bit targets for the wide-shift case anyway. */
+             * The Z80 has no SRA, and an earlier version of this code shipped
+             * the LOGICAL shift for both ops and recorded the divergence as
+             * unavoidable ("verified exhaustively that no short pairing of the
+             * carry-rotate tricks yields a sign-extending shift"). That was
+             * wrong: SLA A puts the old bit 7 into carry and shifts A left, and
+             * RRA then rotates right through carry, so the sign lands back in
+             * bit 7 while bits 0..6 get the shifted value:
+             *   SLA A: C = b7, A = (b6..b0,0)
+             *   RRA:   A = (C,b6..b0) = arithmetic b7,A>>1
+             * Two instructions, no extra register, exact for all 256 inputs.
+             * MIR_SHR_U had no case at all and fell through the switch. */
             uint32_t loop = internal_label(&e);
             /* vd = va */
             e8(&e, Z80_LD_A_NN); e16(&e, va);
@@ -716,7 +715,21 @@ static int z80_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             e8(&e, 0x47);                  /* LD B, A -- the count */
             note_label(&e, loop, e.n);
             e8(&e, Z80_LD_A_NN); e16(&e, vd);
-            e8(&e, Z80_CB_PFX); e8(&e, Z80_SRL_A);   /* A >>= 1 (logical) */
+            if (in->op == MIR_SHR_U) {
+                e8(&e, Z80_CB_PFX); e8(&e, Z80_SRL_A);   /* A >>= 1 (logical) */
+            } else {
+                /* Arithmetic: get the sign bit into carry, then rotate it back
+                 * in. SLA A ; RRA is the IDENTITY (double, then halve through
+                 * carry), which is why the first attempt at this answered the
+                 * unshifted value. RLCA sets C = b7 and wrecks A, so reload A
+                 * (LD does not touch flags) and let RRA place b7 back in bit 7:
+                 *   RLCA          A = rotl(v), C = b7
+                 *   LD A,(vd)     A = v again, flags unchanged
+                 *   RRA           A = (C<<7) | (v>>1)   <- arithmetic >>1 */
+                e8(&e, 0x07);                            /* RLCA: C = b7 */
+                e8(&e, Z80_LD_A_NN); e16(&e, vd);        /* A = v, flags kept */
+                e8(&e, 0x1F);                            /* RRA */
+            }
             store_a_to_slot(&e, vd);
             e8(&e, Z80_DEC_B);
             size_t jr2 = e.n;

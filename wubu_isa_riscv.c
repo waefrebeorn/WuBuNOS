@@ -534,6 +534,18 @@ static int riscv_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
             store_d(&e, REG_T0, REG_FP, (int32_t)slot_off(e.frame, in->dst));
             break;
         }
+        case MIR_SHR_U: {
+            /* MIR_SHR_U is LOGICAL (wubu_mir.h: shr, zero-filling). Same path as
+             * MIR_SHR with funct7 = 0 (SRL) instead of 0b0100000 (SRA). This op
+             * had NO case here at all, so it fell through the switch and the
+             * destination kept whatever it held -- a silent wrong answer, not an
+             * error, which is the worst kind. */
+            load_d(&e, REG_T0, REG_FP, (int32_t)slot_off(e.frame, in->a));
+            load_d(&e, REG_T1, REG_FP, (int32_t)slot_off(e.frame, in->b));
+            op_r(&e, FN7_DEFAULT, REG_T1, REG_T0, FN3_SRL, REG_T0);
+            store_d(&e, REG_T0, REG_FP, (int32_t)slot_off(e.frame, in->dst));
+            break;
+        }
         case MIR_NEG: {
             load_d(&e, REG_T0, REG_FP, (int32_t)slot_off(e.frame, in->a));
             /* rd = rs1 - rs2 = x0 - t0 = -t0. op_r's arg order is

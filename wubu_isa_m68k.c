@@ -345,7 +345,7 @@ static int m68k_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_siz
             NOT_D(0);
             move_d_a6(&e, 0, slot_disp(in->dst));
             break;
-        case MIR_SHL: case MIR_SHR:
+        case MIR_SHL: case MIR_SHR: case MIR_SHR_U:
         {
             /* loop shift: D0 = value, D1 = count
              * loop: tst.l d1 ; beq done ; lsl.l #1,d0 (or lsr) ; subq.l #1,d1 ; bra loop
@@ -356,7 +356,12 @@ static int m68k_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_siz
             size_t beq_pos = e.n;
             PATCH_AT(beq_pos, CC_EQ, 0);     /* BEQ -> done (patched below) */
             e16(&e, 0x6700);                 /* BEQ.s placeholder */
-            if (in->op == MIR_SHL) LSL1D0(); else ASR1D0();
+            /* SHL -> LSL, SHR (arithmetic) -> ASR, SHR_U -> LSR. MIR_SHR_U had
+             * no case and fell through the switch: the destination kept its old
+             * value, which reads as a wrong answer rather than a missing op. */
+            if (in->op == MIR_SHL) LSL1D0();
+            else if (in->op == MIR_SHR) ASR1D0();
+            else LSR1D0();
             SUBQ1(1);                        /* subq.l #1,d1 */
             /* bra loop (backward): emit + patch immediately */
             {

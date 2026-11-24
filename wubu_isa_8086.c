@@ -296,7 +296,7 @@ static int i8086_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
             e8(&e, 0xF7); e8(&e, 0xD0);        /* not ax */
             emit_store_ax_slot(&e, slot_disp(in->dst));
             break;
-        case MIR_SHL: case MIR_SHR:
+        case MIR_SHL: case MIR_SHR: case MIR_SHR_U:
         {
             /* loop shift: ax = value, cx = count
              * loop: test cx,cx (85 C9) ; jz done ; shl/shr ax,1 (D1 E0/E8)
@@ -308,7 +308,13 @@ static int i8086_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
             e8(&e, 0x85); e8(&e, 0xC9);        /* test cx,cx */
             size_t jz_pos = e.n;
             e8(&e, 0x74); e8(&e, 0x00);        /* jz done (patched below) */
-            e8(&e, 0xD1); e8(&e, in->op == MIR_SHL ? 0xE0 : 0xE8); /* shl/shr ax,1 */
+            /* 0xD1 /2 = SHL (0xE0), /5 = SHR logical (0xE8), /7 = SAR
+             * arithmetic (0xF8). This emitted SHR for BOTH MIR_SHR and the
+             * logical op, so the arithmetic shift answered the unsigned one:
+             * shr(-16,2) returned a large positive instead of -4. MIR_SHR_U,
+             * meanwhile, had no case at all. */
+            e8(&e, 0xD1);
+            e8(&e, in->op == MIR_SHL ? 0xE0 : (in->op == MIR_SHR ? 0xF8 : 0xE8));
             e8(&e, 0x49);                      /* dec cx */
             {
                 int32_t rel = (int32_t)(loop - (e.n + 2));

@@ -368,15 +368,40 @@ int64_t wubu_z80_run(const uint8_t *code, size_t size, int64_t arg)
         /* NOP : 00000000 */
         case 0x00:
             break;
+        /* RLCA : 00000111 -- rotate A left, bit 7 into carry.
+         * The compiler needs the carry to build an ARITHMETIC shift right:
+         *   RLCA (C = b7) ; LD A,(v) (flags untouched) ; RRA (b7 back in bit 7)
+         * so these two bare opcodes had to exist, with real carry behaviour. */
+        case 0x07: {
+            uint8_t c0 = (uint8_t)(cpu.a >> 7);
+            cpu.a = (uint8_t)((cpu.a << 1) | c0);
+            cpu.f = (uint8_t)((cpu.f & ~F_C) | (c0 ? F_C : 0));
+            break;
+        }
+        /* RRA : 00011111 -- rotate A right THROUGH carry. */
+        case 0x1F: {
+            uint8_t c0 = (uint8_t)(cpu.a & 1);
+            cpu.a = (uint8_t)(((cpu.f & F_C) ? 0x80 : 0) | (cpu.a >> 1));
+            cpu.f = (uint8_t)((cpu.f & ~F_C) | (c0 ? F_C : 0));
+            break;
+        }
         /* the 0xCB prefix: the shift/rotate family on A
          * (the compiler emits SRL A for MIR_SHR) */
         case 0xCB: {
             uint8_t cb = cpu.mem[cpu.pc++];
             switch (cb) {
-            case 0x3F: cpu.a >>= 1; break;                      /* SRL A */
-            case 0x2F: cpu.a = (uint8_t)((int8_t)cpu.a >> 1); break; /* SRA A */
-            case 0x37: cpu.a = (uint8_t)(cpu.a << 1); break;    /* SLL A */
-            case 0x07: cpu.a = (uint8_t)((cpu.a << 1) | (cpu.a >> 7)); break; /* RLC A */
+            case 0x3F: { uint8_t c0 = cpu.a & 1;             /* SRL A */
+                         cpu.a >>= 1;
+                         cpu.f = (uint8_t)((cpu.f & ~F_C) | (c0 ? F_C : 0));
+                         break; }
+            /* CB 2F is NOT a real Z80 opcode (silicon has no SRA); it is kept
+             * because a caller may emit it, but the compiler uses the real
+             * RLCA/LD/RRA sequence below for MIR_SHR now. */
+            case 0x2F: cpu.a = (uint8_t)((int8_t)cpu.a >> 1); break; /* SRA A (ext) */
+            case 0x37: { uint8_t c0 = (uint8_t)(cpu.a >> 7);  /* SLA A */
+                         cpu.a = (uint8_t)(cpu.a << 1);
+                         cpu.f = (uint8_t)((cpu.f & ~F_C) | (c0 ? F_C : 0));
+                         break; }
             default: cpu.halted = 1; break;
             }
             break;

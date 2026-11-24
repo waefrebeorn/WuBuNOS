@@ -37,8 +37,14 @@ static WArm64Reg phys_to_arm64(int phys) {
     return WREG_X8; /* fallback */
 }
 
+/* Spill slots live ABOVE the current SP, inside the frame that the prologue
+ * allocates (frame = n_spilled*8 + 64). They used to be NEGATIVE, and ARM64's
+ * LDR/STR immediate form takes an UNSIGNED scaled imm12 -- so -8 was masked to
+ * 0xFFF and the load/store addressed sp+32760 instead of sp-8, i.e. outside the
+ * frame. That SIGSEGVs any program whose result spills (shru(16,2) was the first
+ * case that did), and silently read garbage otherwise. */
 static int32_t spill_off(int slot) {
-    return -(int32_t)((slot + 1) * 8);
+    return (int32_t)((slot + 1) * 8);
 }
 
 /* ---- patch system ---- */
@@ -139,7 +145,7 @@ static int arm64_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
             if ((dst) != __src) warm64_mov_reg(&e.enc, dst, __src); \
         } else { \
             int32_t __off = VR_SPILL(vr); \
-            warm64_ldr_imm(&e.enc, dst, WREG_SP, (int32_t)(__off / 8), 1); \
+            warm64_ldr_imm(&e.enc, dst, WREG_SP, __off, 1); \
         } \
     } while(0)
 
@@ -149,7 +155,7 @@ static int arm64_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
             if ((src) != __dst) warm64_mov_reg(&e.enc, __dst, src); \
         } else { \
             int32_t __off = VR_SPILL(vr); \
-            warm64_str_imm(&e.enc, src, WREG_SP, (int32_t)(__off / 8), 1); \
+            warm64_str_imm(&e.enc, src, WREG_SP, __off, 1); \
         } \
     } while(0)
 
@@ -159,19 +165,17 @@ static int arm64_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
 
         switch (in->op) {
         case MIR_CONST: {
-            int64_t imm = in->imm;
-            uint32_t uimm = (uint32_t)(imm & 0xFFFFFFFF);
-            uint16_t hw0 = uimm & 0xFFFF;
-            warm64_movz_imm(&e.enc, WREG_X0, hw0, 0, 1);
-            if (uimm > 0xFFFF) {
-                uint16_t hw1 = (uimm >> 16) & 0xFFFF;
-                warm64_movz_imm(&e.enc, WREG_X0, hw1, 1, 1);
-            }
-            if (imm > 0xFFFFFFFFLL || imm < 0) {
-                uint16_t hw2 = ((uint64_t)imm >> 32) & 0xFFFF;
-                uint16_t hw3 = ((uint64_t)imm >> 48) & 0xFFFF;
-                warm64_movz_imm(&e.enc, WREG_X0, hw2, 2, 1);
-                warm64_movz_imm(&e.enc, WREG_X0, hw3, 3, 1);
+            /* MOVZ sets one halfword and ZEROES the rest; MOVK inserts one and
+             * KEEPS the rest. A 64-bit constant therefore needs MOVZ for the low
+             * halfword and MOVK for every other -- this emitted MOVZ for all of
+             * them, so each chunk wiped the previous one and the register ended
+             * up holding only the last. -16 became 0xFFFF000000000000, its >>2
+             * became huge, and the low byte read back as 0. */
+            uint64_t u = (uint64_t)in->imm;
+            warm64_movz_imm(&e.enc, WREG_X0, (uint16_t)(u & 0xFFFF), 0, 1);
+            for (int hw = 1; hw < 4; hw++) {
+                uint16_t chunk = (uint16_t)((u >> (hw * 16)) & 0xFFFF);
+                if (chunk) warm64_movk_imm(&e.enc, WREG_X0, chunk, hw, 1);
             }
             STORE_VR(WREG_X0, in->dst);
             break;
@@ -246,12 +250,21 @@ static int arm64_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
             STORE_VR(WREG_X0, in->dst);
             break;
         }
-        case MIR_SHR: {
+        case MIR_SHR: case MIR_SHR_U: {
             LOAD_VR(in->a, WREG_X9);
             LOAD_VR(in->b, WREG_X10);
-            /* ARM64 LSRV: 0x1AC02400 | (Rm<<16) | (Rn<<5) | Rd */
-            uint32_t lsrv = 0x1AC02400 | (WREG_X10 << 16) | (WREG_X9 << 5) | WREG_X0;
-            warm64_emit_word(&e.enc, lsrv);
+            /* Data-processing (2 source), 64-bit:
+             *   0x9AC02C00 RORV, 0x9AC02800 ASRV, 0x9AC02400 LSRV, 0x9AC02000 LSLV
+             * The old code used 0x1AC02400 -- the LSRV form with sf=0, i.e. a
+             * 32-bit shift -- for MIR_SHR, which is ARITHMETIC and 64-bit. So a
+             * negative value shifted to zero instead of sign-extending, and half
+             * the register was thrown away. MIR_SHR_U had no case at all and the
+             * emitted code fell through into the next instruction's encoding. */
+            uint32_t base = (in->op == MIR_SHR) ? 0x9AC02800u   /* ASRV */
+                                                : 0x9AC02400u;  /* LSRV */
+            uint32_t v = base | ((uint32_t)WREG_X10 << 16)
+                              | ((uint32_t)WREG_X9 << 5) | (uint32_t)WREG_X0;
+            warm64_emit_word(&e.enc, v);
             STORE_VR(WREG_X0, in->dst);
             break;
         }

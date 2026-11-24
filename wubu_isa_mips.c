@@ -305,7 +305,15 @@ static int mips_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_siz
              * mips reported 0 for the shift test. */
             e32(&e, MIPS_LW(29, MIPS_REG_T0, (uint16_t)slot_off(in->a)));
             e32(&e, MIPS_LW(29, MIPS_REG_T1, (uint16_t)slot_off(in->b)));
-            e32(&e, R_TYPE(MIPS_REG_T1, MIPS_REG_T0, MIPS_REG_T0, 0, 0x06)); /* srav $t0,$t0,$t1 */
+            e32(&e, R_TYPE(MIPS_REG_T1, MIPS_REG_T0, MIPS_REG_T0, 0, 0x07)); /* srav $t0,$t0,$t1 */
+            e32(&e, MIPS_SW(29, MIPS_REG_T0, (uint16_t)slot_off(in->dst)));
+            break;
+        case MIR_SHR_U:
+            /* The LOGICAL twin: srlv (funct 0x02) zero-fills. MIR_SHR_U had no
+             * case at all, so shru(16,2) kept the destination's old value. */
+            e32(&e, MIPS_LW(29, MIPS_REG_T0, (uint16_t)slot_off(in->a)));
+            e32(&e, MIPS_LW(29, MIPS_REG_T1, (uint16_t)slot_off(in->b)));
+            e32(&e, R_TYPE(MIPS_REG_T1, MIPS_REG_T0, MIPS_REG_T0, 0, 0x06)); /* srlv $t0,$t0,$t1 */
             e32(&e, MIPS_SW(29, MIPS_REG_T0, (uint16_t)slot_off(in->dst)));
             break;
         case MIR_DIV: {
