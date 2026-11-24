@@ -26,7 +26,14 @@ extern const wubu_isa_driver_t wubu_isa_pic;   /* Microchip PIC (PIC16F877A) */
 extern const wubu_isa_driver_t wubu_isa_amdgpu; /* AMD GPU (RDNA2/gfx1030) */
 extern const wubu_isa_driver_t wubu_isa_ptx;  /* NVIDIA GPU (PTX/SM89) */
 extern const wubu_isa_driver_t wubu_isa_vulkan; /* ANY Vulkan card (SPIR-V) */
+/* The wasm backend has no translation unit in this tree: the router used to
+ * name it unconditionally, so every binary linking this file failed with an
+ * undefined reference and the compiler's own tests could not be built (they
+ * were orphaned, so nobody noticed). Ask for it and you get NULL, honestly,
+ * instead of a link error in an unrelated test. */
+#ifdef WUBU_HAVE_ISA_WASM
 extern const wubu_isa_driver_t wubu_isa_wasm;    /* WebAssembly MVP (portable) */
+#endif
 
 /* Portable cache clear for JIT'd code.
  * x86-64: hardware maintains i/d cache coherency — compiler barrier only.
@@ -91,7 +98,12 @@ const wubu_isa_driver_t *wubu_isa_find(const char *name)
         !strcmp(name, "spirv") || !strcmp(name, "radv") ||
         !strcmp(name, "igpu") || !strcmp(name, "740m"))
         return &wubu_isa_vulkan;
-    if (!strcmp(name, "wasm") || !strcmp(name, "web"))
+    if (!strcmp(name, "wasm") || !strcmp(name, "web")) {
+#ifdef WUBU_HAVE_ISA_WASM
         return &wubu_isa_wasm;
+#else
+        return NULL;            /* backend not built into this tree */
+#endif
+    }
     return NULL;
 }

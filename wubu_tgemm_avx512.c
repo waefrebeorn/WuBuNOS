@@ -13,6 +13,12 @@
 #include <omp.h>
 #endif
 
+/* The intrinsics below require AVX-512, but this TU is compiled into binaries
+ * that run on any x86-64 host, and the caller dispatches on have_avx512() at
+ * runtime. A per-function target attribute keeps the requirement local to this
+ * one function instead of forcing -mavx512f on every recipe that links the
+ * tensor path (which would also make the whole binary AVX-512-only). */
+__attribute__((target("avx512f,avx512dq")))
 void tgemm_avx512(int64_t *mem, int64_t A, int64_t B,
                   int64_t C, int M, int N, int K)
 {
@@ -53,6 +59,7 @@ void tgemm_avx512(int64_t *mem, int64_t A, int64_t B,
  * K-unroll by 4: 4 independent FMAs per iteration hide 5-cycle latency.
  * NC=256: B-panel = KC*NC*4 = 128*256*4 = 128KB fits L2.
  */
+__attribute__((target("avx512f,avx512dq,avx512bw")))
 void wubu_tgemm_f32_avx512(const float * __restrict__ A,
                             const float * __restrict__ B,
                             float * __restrict__ C,
@@ -180,6 +187,7 @@ void wubu_tgemm_f32_avx512(const float * __restrict__ A,
 /*
  * BF16 GEMM: convert to FP32 then use optimized FP32 path.
  */
+__attribute__((target("avx512f,avx512dq,avx512bw")))
 void wubu_tgemm_bf16_avx512(const uint16_t *A_bf16, const uint16_t *B_bf16, float *C,
                              int M, int N, int K)
 {
