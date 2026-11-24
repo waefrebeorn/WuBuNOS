@@ -84,10 +84,10 @@ static WArm64CC mir_to_arm64_cc(wubu_mir_op_t op) {
 }
 
 static int arm64_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size) {
-#if !defined(__aarch64__)
-    (void)p; (void)out; (void)out_size;
-    return -1; /* cannot compile ARM64 on this host */
-#endif
+    /* Encoding AArch64 is host-independent -- this is a cross-compiler, and
+     * refusing to emit on an x86 host meant its encoder was never exercised at
+     * all (every program reported COMPILE FAIL). What IS host-dependent is
+     * running the result, and arm64_run refuses that below. */
     /* Step 1: register allocation — 20 physical regs (X8-X27) */
     size_t assign_count = 0;
     wubu_reg_assign_t *assign = wubu_mir_alloc_regs(p, 20, &assign_count);
@@ -345,6 +345,13 @@ static int arm64_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
 }
 
 static int64_t arm64_run(const uint8_t *code, size_t size, int64_t arg) {
+    (void)code; (void)size; (void)arg;
+#if !defined(__aarch64__)
+    /* Executing AArch64 bytes as x86-64 is not "unsupported", it is undefined:
+     * the old code mapped them and called them as a function pointer, which
+     * would fault at the first instruction. Say so instead. */
+    return WUBU_ISA_NO_EXEC;
+#else
     (void)arg;
     void *mem = jit_alloc_exec(size);
     if (!mem) return -999;
@@ -354,6 +361,7 @@ static int64_t arm64_run(const uint8_t *code, size_t size, int64_t arg) {
     int64_t result = fn();
     jit_free_exec(mem, size);
     return result;
+#endif
 }
 
 static void arm64_describe(void) {

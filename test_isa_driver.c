@@ -21,6 +21,7 @@
 #include <stdint.h>
 
 static int pass = 0, fail = 0, total = 0;
+static int compiled_only = 0;   /* cross backends: encoded, not executable here */
 #define CHECK(c, m) do { total++; if (c) { pass++; } else { fail++; printf("  FAIL: %s\n", m); } } while (0)
 
 /* -- Helper: build a MIR program from a description --
@@ -31,7 +32,7 @@ static int run_with_driver(const wubu_isa_driver_t *d, const wubu_mir_prog_t *pr
 {
     uint8_t *code = NULL;
     size_t csize = 0;
-    if (d->compile(prog, &code, &csize) != 0 || !code) {
+    if (d->compile(prog, &code, &csize) != 0 || !code || csize == 0) {
         printf("    %s: COMPILE FAIL\n", d->name);
         return -1;
     }
@@ -46,6 +47,12 @@ static int run_with_driver(const wubu_isa_driver_t *d, const wubu_mir_prog_t *pr
     *result = d->run(code, csize, (int64_t)(intptr_t)mem);
     free(mem);
     free(code);
+    /* A cross backend (ARM64/PTX on x86-64) encodes correctly but cannot
+     * execute here. That is not a wrong answer, and it must not be counted as
+     * one -- it used to be reported as COMPILE FAIL, because the encoder
+     * refused outright on a foreign host. The encoding itself is still
+     * asserted: non-empty code, above. */
+    if (*result == WUBU_ISA_NO_EXEC) { compiled_only++; return 1; }
     return 0;
 }
 
@@ -721,5 +728,8 @@ int main(void)
     printf("=== %s: %d/%d passed ===\n",
            fail == 0 ? "ALL TESTS PASSED" : "SOME TESTS FAILED",
            pass, total);
+    if (compiled_only)
+        printf("    (%d checks were encode-only: the backend emits for a foreign "
+               "target and refuses to execute it here)\n", compiled_only);
     return fail == 0 ? 0 : 1;
 }

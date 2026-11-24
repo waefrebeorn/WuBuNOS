@@ -43,6 +43,13 @@ typedef enum {
     WUBU_ISA_INTERPRETED   /* code runs via a bundled interpreter */
 } wubu_isa_exec_t;
 
+/* Returned by a driver's run() when the emitted code cannot execute on THIS
+ * host (a cross target: ARM64 or PTX on x86-64). It is deliberately not -1,
+ * because -1 is a legal MIR return value -- callers must be able to tell "ran
+ * and produced X" from "did not run", or a cross backend's silence gets counted
+ * as a wrong answer. */
+#define WUBU_ISA_NO_EXEC (-987654321LL)
+
 typedef struct wubu_isa_driver {
     const char *name;          /* "x86-64" / "riscv" / "ptx" */
     const char *family;        /* "native" / "gpu" / "portable" */

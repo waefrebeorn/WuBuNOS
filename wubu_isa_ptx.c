@@ -24,6 +24,8 @@
  * C11, self-contained.
  */
 #include "wubu_isa_ptx.h"
+/* WUBU_ISA_NO_EXEC: "the stub produced no result" is not a result of zero. */
+#include "wubu_isa_driver.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -1349,7 +1351,7 @@ static int64_t ptx_run(const uint8_t *code, size_t size, int64_t arg)
     /* Ensure the host stub is compiled */
     if (ensure_stub() != 0) {
         fprintf(stderr, "[ptx] cannot run — host stub not available\n");
-        return 0;
+        return WUBU_ISA_NO_EXEC;
     }
 
     /* Write cubin to /tmp */
@@ -1391,7 +1393,7 @@ static int64_t ptx_run(const uint8_t *code, size_t size, int64_t arg)
     remove(result_path);  /* clean slate — no stale reads */
 
     static int ptx_gpu_unavailable = -1;  /* -1 = not yet probed */
-    if (ptx_gpu_unavailable == 1) return 0;  /* already known: no GPU */
+    if (ptx_gpu_unavailable == 1) return WUBU_ISA_NO_EXEC;  /* known: no GPU */
 
     pid_t child = fork();
     if (child == 0) {
@@ -1420,7 +1422,9 @@ static int64_t ptx_run(const uint8_t *code, size_t size, int64_t arg)
             fprintf(stderr, "[ptx] host stub unresponsive (no GPU?) — "
                             "disabling ptx for remaining tests\n");
             remove(result_path);
-            return 0;
+            /* Not an answer of zero: nothing ran. A caller that cannot tell
+             * these apart counts a missing GPU as a wrong result. */
+            return WUBU_ISA_NO_EXEC;
         }
         usleep(100000);  /* 100ms */
     }
@@ -1433,7 +1437,7 @@ static int64_t ptx_run(const uint8_t *code, size_t size, int64_t arg)
                         "disabling ptx for remaining tests\n",
                 WTERMSIG(status));
         remove(result_path);
-        return 0;
+        return WUBU_ISA_NO_EXEC;
     }
 
     ptx_gpu_unavailable = 0;  /* a launch completed cleanly → GPU reachable */
@@ -1448,7 +1452,11 @@ static int64_t ptx_run(const uint8_t *code, size_t size, int64_t arg)
             fclose(rf);
         }
         if (have) break;
-        if (attempt == 2) { result = 0; break; }
+        /* Three empty replies in a row: the stub ran but never reported a
+         * value. Returning 0 here made "nothing ran" indistinguishable from
+         * "the kernel returned 0", which is how a GPU-less host produced 22
+         * confident wrong answers in test_isa_driver. */
+        if (attempt == 2) { result = WUBU_ISA_NO_EXEC; break; }
         remove(result_path);
         /* relaunch once more */
         pid_t child2 = fork();
@@ -1483,7 +1491,7 @@ static int64_t ptx_run(const uint8_t *code, size_t size, int64_t arg)
     printf("--- END PTX ---\n");
     printf("[ptx] Compile with: ptxas -arch=sm_89 -o kernel.cubin kernel.ptx\n");
     (void)arg;
-    return 0;
+    return WUBU_ISA_NO_EXEC;
 #endif
 }
 
