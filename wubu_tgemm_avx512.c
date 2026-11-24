@@ -2,6 +2,13 @@
 #include <stdio.h>
 #include <stdint.h>
 #include "wubu_tgemm.h"
+/* aligned_alloc/x86 free pairing lives in the compat shim: on MinGW the memory
+ * must be released with _aligned_free, and this TU is the only one that frees
+ * what it allocates. Without the include, wubu_aligned_free is an implicit
+ * declaration and every binary linking this TU fails with an undefined
+ * reference (which is how the hosted build broke when these recipes started
+ * naming the file). */
+#include "wubu_gnu_compat.h"
 #include <immintrin.h>
 #ifdef WUBU_NO_OMP
 /* Serial fallback: used by hosted capture binaries where libgomp's
