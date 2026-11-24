@@ -115,7 +115,11 @@ static int arm64_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
 
     /* prologue */
     warm64_stp_pre(&e.enc, WREG_X29, WREG_X30, WREG_SP, -2);
-    warm64_mov_reg(&e.enc, WREG_X29, WREG_SP);
+    /* mov x29, sp -- NOT warm64_mov_reg: MOV's register form encodes 31 as XZR,
+     * so this used to emit `mov x29, xzr` and the frame pointer became 0. SP is
+     * only addressable in the ADD/SUB immediate forms, which is what
+     * warm64_mov_sp emits (add x29, sp, #0). */
+    warm64_mov_sp(&e.enc, WREG_X29, WREG_SP);
     uint32_t frame_imm = (uint32_t)(e.frame);
     uint16_t lo = frame_imm & 0xFFF;
     warm64_sub_imm(&e.enc, WREG_SP, WREG_SP, lo, 1);
@@ -299,7 +303,12 @@ static int arm64_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
         }
         case MIR_RET:
             LOAD_VR(in->a, WREG_X0);
-            warm64_mov_reg(&e.enc, WREG_SP, WREG_X29);
+            /* mov sp, x29 -- same trap in reverse: warm64_mov_reg would emit
+             * `mov xzr, x29`, leaving SP 64 bytes below the saved x29/x30, so
+             * the LDP below restored garbage into them and RET jumped into
+             * nothing. That is a SIGSEGV on any ARM64 machine; it was invisible
+             * only because this backend could never be executed before. */
+            warm64_mov_sp(&e.enc, WREG_SP, WREG_X29);
             warm64_ldp_post(&e.enc, WREG_X29, WREG_X30, WREG_SP, 2);
             warm64_ret(&e.enc, WREG_X30);
             break;
@@ -322,12 +331,25 @@ static int arm64_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
         if (t == (size_t)-1) continue;
         int32_t rel = (int32_t)((ssize_t)t - (ssize_t)patches[i].pos);
         uint32_t inst;
-        if (rel >= -1048576 && rel < 1048576) {
+        /* The patch must keep the OPCODE it is patching. This used to rewrite
+         * every patched word as a B.cond whenever the offset fit in imm19, so
+         * each unconditional `b` (0x14000000) silently became `b.eq`
+         * (0x54000000|cond=EQ) -- jumps taken only when Z happened to be set,
+         * which is stale flags from whatever comparison ran last. On ARM64 that
+         * turns every compare-return into "answer 1", and it was invisible while
+         * this backend could not be executed. */
+        uint32_t orig = (uint32_t)e.enc.buf[patches[i].pos]
+                      | ((uint32_t)e.enc.buf[patches[i].pos+1] << 8)
+                      | ((uint32_t)e.enc.buf[patches[i].pos+2] << 16)
+                      | ((uint32_t)e.enc.buf[patches[i].pos+3] << 24);
+        if (((orig >> 26) & 0x3F) == 0x15) {          /* B.cond: imm19 + cond */
             int32_t imm19 = rel / 4;
-            inst = 0x54000000 | ((imm19 & 0x7FFFF) << 5);
-        } else {
+            inst = 0x54000000 | ((imm19 & 0x7FFFF) << 5) | (orig & 0x1F);
+        } else if (((orig >> 26) & 0x3F) == 0x05) {    /* B: imm26 */
             int32_t imm26 = rel / 4;
             inst = 0x14000000 | (imm26 & 0x3FFFFFF);
+        } else {                                      /* anything else: leave it */
+            continue;
         }
         e.enc.buf[patches[i].pos] = (inst >> 0) & 0xFF;
         e.enc.buf[patches[i].pos+1] = (inst >> 8) & 0xFF;

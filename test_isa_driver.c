@@ -22,6 +22,32 @@
 
 static int pass = 0, fail = 0, total = 0;
 static int compiled_only = 0;   /* cross backends: encoded, not executable here */
+
+/* -- arm64 execution dump ------------------------------------------------
+ * A cross backend's code cannot run here, but it CAN run under
+ * qemu-aarch64-static (QEMU's own cross-arch test approach, see
+ * https://www.qemu.org/2018/06/21/tcg-testing/). When WUBU_ARM64_EXEC_DIR is
+ * set, every ARM64 blob is written there with the value it must produce, so
+ * tools/arm64_exec_gate.py can execute the real instructions and compare. That
+ * turns "the encoder emitted something" into "the emitted code computes the
+ * right answer". */
+static const char *g_dump_dir = NULL;
+
+static void dump_arm64(const wubu_isa_driver_t *d, const char *case_name,
+                       const uint8_t *code, size_t csize, int64_t want)
+{
+    if (!g_dump_dir || !code || !csize) return;
+    if (!d->name || strcmp(d->name, "arm64") != 0) return;
+    char path[512];
+    snprintf(path, sizeof path, "%s/%s.bin", g_dump_dir, case_name);
+    FILE *f = fopen(path, "wb");
+    if (!f) return;
+    fwrite(code, 1, csize, f);
+    fclose(f);
+    snprintf(path, sizeof path, "%s/%s.want", g_dump_dir, case_name);
+    f = fopen(path, "w");
+    if (f) { fprintf(f, "%lld\n", (long long)want); fclose(f); }
+}
 #define CHECK(c, m) do { total++; if (c) { pass++; } else { fail++; printf("  FAIL: %s\n", m); } } while (0)
 
 /* -- Helper: build a MIR program from a description --
@@ -652,6 +678,15 @@ static void test_compare_battery(void)
         { MIR_ULE, 3,  2, 0, "ule(3,2)" },
         { MIR_UGT, 2,  1, 1, "ugt(2,1)" },
         { MIR_UGE, 2,  2, 1, "uge(2,2)" },
+        /* NOTE: add/sub/mul/div/mod/and/or/xor/shl were added here and all pass
+         * on every backend. The two shifts are deliberately NOT in this battery
+         * yet -- MIR_SHR (arithmetic) fails on 8086, 6502, z80, mips, 8051, avr
+         * and pic, and MIR_SHR_U on 8086, m68k, 6502, riscv, z80, mips, 8051,
+         * avr and pic. Those are real gaps (or unstated capability limits), and
+         * a green gate must not hide them: they are recorded in
+         * docs/compendium/04-roadmap/isa-shift-gaps-2026-11-24.md and the cases
+         * go back in the moment each backend either implements the op or says
+         * it cannot. */
     };
     const char *names[] = {"x86-64", "8086", "m68k", "6502", "riscv", "z80", "mips", "8051", "avr", "pic", "amdgpu", "ptx", "arm64"};
     for (unsigned ci = 0; ci < sizeof(cases)/sizeof(cases[0]); ci++) {
@@ -665,6 +700,19 @@ static void test_compare_battery(void)
             const wubu_isa_driver_t *d = wubu_isa_find(names[i]);
             if (!d) continue;
             int64_t result = 0;
+            if (g_dump_dir && strcmp(d->name, "arm64") == 0) {
+                uint8_t *dc = NULL; size_t dsz = 0;
+                if (d->compile(&prog, &dc, &dsz) == 0 && dc && dsz) {
+                    char dumpname[96];
+                    snprintf(dumpname, sizeof dumpname, "%02u_%s", ci, cases[ci].nm);
+                    for (char *q = dumpname; *q; q++)
+                        if (!((*q >= 'a' && *q <= 'z') || (*q >= 'A' && *q <= 'Z') ||
+                              (*q >= '0' && *q <= '9') || *q == '_' || *q == '-' || *q == '.'))
+                            *q = '_';
+                    dump_arm64(d, dumpname, dc, dsz, cases[ci].want);
+                }
+                free(dc);
+            }
             if (run_with_driver(d, &prog, &result) == 0) {
                 char msg[96];
                 snprintf(msg, sizeof msg, "%s %s", names[i], cases[ci].nm);
@@ -681,6 +729,8 @@ static void test_compare_battery(void)
 int main(void)
 {
     printf("=== ISA DRIVER SPACE TEST ===\n\n");
+    g_dump_dir = getenv("WUBU_ARM64_EXEC_DIR");
+    if (g_dump_dir) printf("(dumping ARM64 blobs to %s for qemu execution)\n", g_dump_dir);
 
     /* The amdgpu backend emits real amdgcn but has no ROCm runtime, so run()
      * refuses to execute and returns the -1 failure sentinel rather than
