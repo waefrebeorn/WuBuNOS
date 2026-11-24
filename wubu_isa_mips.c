@@ -323,7 +323,7 @@ static int mips_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_siz
             uint32_t done = internal_label(&e);
             e32(&e, mips_bne(MIPS_REG_T1, 0, 0));  /* bne $t1,$zero,skip */
             patch_push(&patches, &np, &cp, e.n - 4, skip);
-            e32(&e, mips_ori(MIPS_REG_T0, 0, 0));  /* div by zero → 0 */
+            e32(&e, mips_ori(0, MIPS_REG_T0, 0));  /* div by zero -> 0 (ori rt,rs,imm) */
             e32(&e, mips_j(0));
             patch_push(&patches, &np, &cp, e.n - 4, done);
             note_label(&e, skip, e.n / 4);
@@ -345,7 +345,7 @@ static int mips_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_siz
             uint32_t done = internal_label(&e);
             e32(&e, mips_bne(MIPS_REG_T1, 0, 0));
             patch_push(&patches, &np, &cp, e.n - 4, skip);
-            e32(&e, mips_ori(MIPS_REG_T0, 0, 0));
+            e32(&e, mips_ori(0, MIPS_REG_T0, 0));  /* ori rt=$t0, rs=$zero, 0 */
             e32(&e, mips_j(0));
             patch_push(&patches, &np, &cp, e.n - 4, done);
             note_label(&e, skip, e.n / 4);
@@ -386,11 +386,16 @@ static int mips_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_siz
                          e32(&e, mips_or(MIPS_REG_T2, MIPS_REG_T0, MIPS_REG_T0)); break; /* $t0 = a!=b */
             default: e32(&e, mips_slt(MIPS_REG_T1, MIPS_REG_T0, MIPS_REG_T0)); break;
             }
-            /* beq $t0,$zero,done — if comparison is false, skip */
+            /* beq $t0,$zero,done — if comparison is false, skip.
+             * A MIPS branch executes the instruction in its DELAY SLOT whether
+             * or not it is taken, so the "true" instruction must not sit there:
+             * it ran on the false path too and every comparison answered 1. The
+             * nop is the delay slot. */
             e32(&e, mips_beq(MIPS_REG_T0, 0, 0));
             patch_push(&patches, &np, &cp, e.n - 4, done);
+            e32(&e, 0);                              /* delay slot */
             /* true: $t0 = 1 */
-            e32(&e, mips_ori(MIPS_REG_T0, 0, 1));
+            e32(&e, mips_ori(0, MIPS_REG_T0, 1));    /* ori rt=$t0, rs=$zero, 1 */
             note_label(&e, done, e.n / 4);
             e32(&e, MIPS_SW(29, MIPS_REG_T0, (uint16_t)slot_off(in->dst)));
             break;
@@ -424,11 +429,13 @@ static int mips_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_siz
         case MIR_JMP:
             e32(&e, mips_j(0));
             patch_push(&patches, &np, &cp, e.n - 4, in->label);
+            e32(&e, 0);                             /* delay slot */
             break;
         case MIR_JZ:
             e32(&e, MIPS_LW(29, MIPS_REG_T0, (uint16_t)slot_off(in->a)));
             e32(&e, mips_beq(MIPS_REG_T0, 0, 0));  /* beq $t0,$zero -> label */
             patch_push(&patches, &np, &cp, e.n - 4, in->label);
+            e32(&e, 0);                             /* delay slot */
             break;
         case MIR_FADD:
         case MIR_FSUB:
@@ -504,10 +511,17 @@ static int mips_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_siz
                 break;
             }
             e32(&e, MIPS_LW(29, MIPS_REG_T0, (uint16_t)slot_off(in->a)));
-            /* move $v0, $t0 */
+            /* move $v0, $t0 -- the o32 return register */
             e32(&e, R_TYPE(MIPS_REG_T0, 0, MIPS_REG_V0, 0, MF_ADD));
-            /* break — stop interpreter */
-            e32(&e, R_TYPE(0, 0, 0, 0, 0x0D));
+            /* Return to the caller instead of trapping. This emitted MIPS BREAK
+             * (funct 0x0D), which is a debugger trap, not a way to end a
+             * program: the in-tree interpreter treated it as "stop", while real
+             * MIPS (and qemu-mipsel) raises an exception, so the backend's output
+             * could never be executed anywhere except its own interpreter.
+             * jr $ra is what actually returns, and the interpreter already
+             * recognises `jr $ra with ra == 0` as a standalone return. */
+            e32(&e, mips_jr(MIPS_REG_RA));
+            e32(&e, 0);                       /* nop in the delay slot */
             break;
         default:
             break;
@@ -516,7 +530,7 @@ static int mips_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_siz
 
     /* fallback: return 0 */
     if (e.n == 0) {
-        e32(&e, mips_ori(MIPS_REG_V0, 0, 0));
+        e32(&e, mips_ori(0, MIPS_REG_V0, 0));
         e32(&e, mips_jr(MIPS_REG_RA));
     }
 
