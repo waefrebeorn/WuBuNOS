@@ -55,6 +55,7 @@ static void note_label(avr_emitter_t *e, uint32_t label, size_t off) {
 #define AVR_FUNC_RET 0x25
 #define AVR_JMP 0x26
 #define AVR_FRET 0x21   /* soft-float return */
+#define AVR_SAR  0x27   /* arithmetic shift right (MIR_SHR); 0x0F is logical */
 #define AVR_SUB  0x03
 #define AVR_AND  0x04
 #define AVR_OR   0x05
@@ -199,9 +200,13 @@ static int avr_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             ep8(&e, AVR_MOV); ep8(&e, (uint8_t)in->dst); ep8(&e, (uint8_t)in->a);
             ep8(&e, AVR_SHL); ep8(&e, (uint8_t)in->dst); ep8(&e, (uint8_t)in->b);
             break;
-        case MIR_SHR:
+        case MIR_SHR: case MIR_SHR_U:
+            /* MIR_SHR is ARITHMETIC (sar), MIR_SHR_U is LOGICAL (shr). This
+             * emitted the logical op for both, and had no case for SHR_U at all,
+             * so a negative value shifted to a large positive one. */
             ep8(&e, AVR_MOV); ep8(&e, (uint8_t)in->dst); ep8(&e, (uint8_t)in->a);
-            ep8(&e, AVR_SHR); ep8(&e, (uint8_t)in->dst); ep8(&e, (uint8_t)in->b);
+            ep8(&e, in->op == MIR_SHR ? AVR_SAR : AVR_SHR);
+            ep8(&e, (uint8_t)in->dst); ep8(&e, (uint8_t)in->b);
             break;
         case MIR_GT:
             ep8(&e, AVR_MOV); ep8(&e, (uint8_t)in->dst); ep8(&e, (uint8_t)in->a);

@@ -121,6 +121,14 @@ int64_t wubu_pic_interp(const uint8_t *code, size_t size, int64_t arg)
             else W = (uint8_t)(W >> sh);
             break;
         }
+        case PIC_SAR: { /* W = (int8_t)W >> ram[fr], sign-filling */
+            fr = code[pc++];
+            uint8_t sh = (uint8_t)ram[PIC_VR_BASE + fr];
+            int8_t sv = (int8_t)W;
+            if (sh >= 8) W = (uint8_t)(sv < 0 ? 0xFF : 0x00);
+            else W = (uint8_t)(sv >> sh);
+            break;
+        }
         case PIC_GTU: /* unsigned: W > ram[fr] */
             fr = code[pc++];
             W = (W > (uint8_t)ram[PIC_VR_BASE + fr]) ? 1 : 0;

@@ -192,10 +192,12 @@ static int pic_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             pic_ep8(&e, PIC_MVF);
             pic_ep8(&e, (uint8_t)in->dst);
             break;
-        case MIR_SHR:
+        case MIR_SHR: case MIR_SHR_U:
+            /* PIC_SHR is LOGICAL; MIR_SHR is arithmetic. This emitted the
+             * logical op for both, and had no case for SHR_U at all. */
             pic_ep8(&e, PIC_MVW);
             pic_ep8(&e, (uint8_t)in->a);
-            pic_ep8(&e, PIC_SHR);
+            pic_ep8(&e, in->op == MIR_SHR ? PIC_SAR : PIC_SHR);
             pic_ep8(&e, (uint8_t)in->b);
             pic_ep8(&e, PIC_MVF);
             pic_ep8(&e, (uint8_t)in->dst);

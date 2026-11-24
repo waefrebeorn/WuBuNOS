@@ -43,6 +43,11 @@
 #define PIC_NE       0x19 /* NE  fr   — W = (W != RAM[fr]) */
 #define PIC_AND      0x1A /* AND fr   — W = W & RAM[fr] (alias ANW) */
 #define PIC_OR       0x1B /* OR  fr   — W = W | RAM[fr] (alias ORW) */
+#define PIC_SAR      0x27 /* SAR fr   — W = (int8_t)W >> RAM[fr], ARITHMETIC.
+                           * 0x13 (SHR) is the logical one; MIR_SHR is sar and
+                           * MIR_SHR_U is shr, and this model had only the
+                           * logical op, so a negative value came back large. */
+
 #define PIC_XR       0x1C /* XR  fr   — W = W ^ RAM[fr] (alias XRW) */
 #define PIC_GEU      0x1D /* GEU fr   — W = (W >= RAM[fr]) unsigned */
 #define PIC_LEQ      0x1E /* LEQ fr   — W = (W <  RAM[fr]) unsigned */

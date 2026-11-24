@@ -47,6 +47,7 @@
 #define AVR_FUNC_RET 0x25
 #define AVR_JMP 0x26   /* soft-float hostcall */
 #define AVR_FRET 0x21   /* soft-float return */
+#define AVR_SAR  0x27   /* arithmetic shift right on the 8-bit value */
 
 int64_t wubu_avr_interp(const uint8_t *code, size_t size, int64_t arg)
 {
@@ -138,6 +139,14 @@ int64_t wubu_avr_interp(const uint8_t *code, size_t size, int64_t arg)
             a = code[pc++]; b = code[pc++];
             { int shift = vr[AVR_VR_BASE + b] & 0xFF;
               vr[AVR_VR_BASE + a] = (vr[AVR_VR_BASE + a] & 0xFF) >> shift; }
+            break;
+        case AVR_SAR:
+            /* Arithmetic: sign-extend the 8-bit value BEFORE shifting, so the
+             * sign fills. AVR's real ASR does exactly this; the pseudo-VM had no
+             * op for it, which is why MIR_SHR answered the logical result. */
+            a = code[pc++]; b = code[pc++];
+            { int shift = vr[AVR_VR_BASE + b] & 0xFF;
+              vr[AVR_VR_BASE + a] = (int64_t)((int8_t)(vr[AVR_VR_BASE + a] & 0xFF) >> shift) & 0xFF; }
             break;
         case AVR_GT: /* signed comparison */
             a = code[pc++]; b = code[pc++];

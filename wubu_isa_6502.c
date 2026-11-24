@@ -73,6 +73,7 @@ static void e16(cpu6502_emitter_t *e, uint16_t w)
 #define CMP_IMM 0xC9
 #define ASL_ZP  0x06
 #define LSR_ZP  0x46
+#define ROR_ZP  0x66   /* rotate right through carry, zero page */
 #define DEC_ZP  0xC6
 #define CLC     0x18
 #define SEC     0x38
@@ -354,7 +355,16 @@ static int cpu6502_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_
             break;
         }
 
-        case MIR_SHR: {
+        case MIR_SHR: case MIR_SHR_U: {
+            /* MIR_SHR is ARITHMETIC, MIR_SHR_U is LOGICAL. This emitted LSR (the
+             * logical op) for both and had no case for SHR_U at all, so a
+             * negative value shifted to a large positive one.
+             *
+             * Arithmetic right by one, in the loop:
+             *   CMP #$80   -> C = 1 exactly when bit 7 is set (A >= 0x80)
+             *   ROR zp     -> zp = (C << 7) | (zp >> 1)
+             * CMP does not modify the operand, so no reload is needed -- the
+             * ASL+ROR pairing would rotate the value back to itself. */
             lda_zp8(&e, zp_slot(in->a));
             sta_zp8(&e, zp_slot(in->dst));
             size_t sh_loop = e.n;
@@ -362,7 +372,13 @@ static int cpu6502_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_
             size_t sh_beq = e.n + 1;
             e8(&e, BEQ); e8(&e, 0x00);
             e8(&e, DEC_ZP); e8(&e, zp_slot(in->b));
-            e8(&e, LSR_ZP); e8(&e, zp_slot(in->dst));
+            if (in->op == MIR_SHR) {
+                lda_zp8(&e, zp_slot(in->dst));
+                e8(&e, CMP_IMM); e8(&e, 0x80);      /* C = old bit 7 */
+                e8(&e, ROR_ZP); e8(&e, zp_slot(in->dst));
+            } else {
+                e8(&e, LSR_ZP); e8(&e, zp_slot(in->dst));
+            }
             e8(&e, JMP_ABS);
             e16(&e, (uint16_t)sh_loop);
             { int32_t rel = (int32_t)(e.n - (sh_beq + 1)); e.code[sh_beq] = (uint8_t)(rel & 0xFF); }

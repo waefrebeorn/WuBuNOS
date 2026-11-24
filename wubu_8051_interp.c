@@ -34,6 +34,7 @@
 #define EXT_MOD  0x03
 #define EXT_SHL  0x04
 #define EXT_SHR  0x05
+#define EXT_SAR  0x13   /* arithmetic shift right: MIR_SHR is sar, SHR is logical */
 #define EXT_NEG  0x06
 #define EXT_NOT  0x07
 #define EXT_GT   0x08
@@ -148,6 +149,15 @@ int64_t wubu_8051_interp_exec(const uint8_t *code, size_t size, int64_t arg)
                     b = code[pc++];
                     { int shift = ram[I8051_VR_BASE + b] & 0xFF;
                       ram[0xE0] = (ram[0xE0] & 0xFF) >> shift; }
+                    break;
+                case EXT_SAR:
+                    /* Arithmetic: sign-extend the 8-bit value before shifting so
+                     * the sign fills. The real 8051 has no shift-right at all
+                     * (RRC through carry only), which is why this lives in the
+                     * extension set next to SHR rather than in real opcodes. */
+                    b = code[pc++];
+                    { int shift = ram[I8051_VR_BASE + b] & 0xFF;
+                      ram[0xE0] = (uint8_t)((int8_t)(ram[0xE0] & 0xFF) >> shift); }
                     break;
                 case EXT_NEG:
                     ram[0xE0] = (-(ram[0xE0] & 0xFF)) & 0xFF;

@@ -25,6 +25,7 @@
 #define EXT_MOD      0x03
 #define EXT_SHL      0x04
 #define EXT_SHR      0x05
+#define EXT_SAR      0x13   /* MIR_SHR is arithmetic; SHR_U is logical */
 #define EXT_GT       0x08
 #define EXT_LT       0x09
 #define EXT_GE       0x0A
@@ -200,10 +201,15 @@ static int i8051_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
             e8(&e, 0xFF); e8(&e, EXT_SHL); e8(&e, (uint8_t)in->b);
             e8(&e, 0xF5); e8(&e, slot);
             break;
-        case MIR_SHR:
+        case MIR_SHR: case MIR_SHR_U:
+            /* MIR_SHR is ARITHMETIC (sar), MIR_SHR_U is LOGICAL (shr). This
+             * emitted the logical extension for both and had no case for SHR_U,
+             * so a negative value came back large and positive. */
             sa = (uint8_t)(I8051_VR_BASE + in->a);
             e8(&e, 0xE5); e8(&e, sa);    /* MOV A, [sa] */
-            e8(&e, 0xFF); e8(&e, EXT_SHR); e8(&e, (uint8_t)in->b);
+            e8(&e, 0xFF);
+            e8(&e, in->op == MIR_SHR ? EXT_SAR : EXT_SHR);
+            e8(&e, (uint8_t)in->b);
             e8(&e, 0xF5); e8(&e, slot);
             break;
         case MIR_MOD:

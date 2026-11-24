@@ -40,14 +40,6 @@ static const char *g_dump_targets = ""; /* comma list, e.g. "arm64,riscv" */
  * reported as GAP with its reason, never silently skipped and never asserted to
  * pass. Remove a line the moment the backend implements it. */
 static const struct { const char *driver, *case_name, *why; } g_known_gaps[] = {
-    {"6502", "shr(-16,2)",  "8-bit ALU: arithmetic shift right needs ASL+ROR carry sequence"},
-    {"6502", "shru(16,2)",  "8-bit ALU: shift-by-register loop not emitted yet"},
-    {"8051", "shr(-16,2)",  "8-bit ALU: no shift-right instruction at all (RRC only)"},
-    {"8051", "shru(16,2)",  "8-bit ALU: no shift-right instruction at all (RRC only)"},
-    {"avr",  "shr(-16,2)",  "pseudo-VM models SHR as logical &0xFF; ASR pseudo-op not defined"},
-    {"avr",  "shru(16,2)",  "pseudo-VM shift-with-count not exercised"},
-    {"pic",  "shr(-16,2)",  "8-bit ALU: RRCF through carry only, no arithmetic shift"},
-    {"pic",  "shru(16,2)",  "8-bit ALU: RRCF through carry only, no arithmetic shift"},
 };
 
 static const char *known_gap(const char *driver, const char *case_name)
