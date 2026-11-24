@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <sys/stat.h>
 
 static int pass = 0, fail = 0, total = 0;
 static int compiled_only = 0;   /* cross backends: encoded, not executable here */
@@ -31,7 +32,8 @@ static int compiled_only = 0;   /* cross backends: encoded, not executable here 
  * tools/arm64_exec_gate.py can execute the real instructions and compare. That
  * turns "the encoder emitted something" into "the emitted code computes the
  * right answer". */
-static const char *g_dump_dir = NULL;
+static const char *g_dump_dir = NULL;   /* base dir; one subdir per target */
+static const char *g_dump_targets = ""; /* comma list, e.g. "arm64,riscv" */
 
 /* Declared gaps: a (backend, case) pair that this backend genuinely cannot do,
  * with the reason. Listed here so the battery stays green HONESTLY -- the case is
@@ -60,15 +62,18 @@ static const char *known_gap(const char *driver, const char *case_name)
 static void dump_arm64(const wubu_isa_driver_t *d, const char *case_name,
                        const uint8_t *code, size_t csize, int64_t want)
 {
-    if (!g_dump_dir || !code || !csize) return;
-    if (!d->name || strcmp(d->name, "arm64") != 0) return;
+    if (!g_dump_dir || !code || !csize || !d->name) return;
+    /* only the targets named in WUBU_EXEC_DUMP get dumped */
+    if (!strstr(g_dump_targets, d->name)) return;
     char path[512];
-    snprintf(path, sizeof path, "%s/%s.bin", g_dump_dir, case_name);
+    snprintf(path, sizeof path, "%s/%s", g_dump_dir, d->name);
+    mkdir(path, 0755);          /* per-target subdir; EEXIST is fine */
+    snprintf(path, sizeof path, "%s/%s/%s.bin", g_dump_dir, d->name, case_name);
     FILE *f = fopen(path, "wb");
     if (!f) return;
     fwrite(code, 1, csize, f);
     fclose(f);
-    snprintf(path, sizeof path, "%s/%s.want", g_dump_dir, case_name);
+    snprintf(path, sizeof path, "%s/%s/%s.want", g_dump_dir, d->name, case_name);
     f = fopen(path, "w");
     if (f) { fprintf(f, "%lld\n", (long long)want); fclose(f); }
 }
@@ -729,7 +734,7 @@ static void test_compare_battery(void)
                 printf("  GAP  %s %s: %s\n", d->name, cases[ci].nm, gap);
                 continue;
             }
-            if (g_dump_dir && strcmp(d->name, "arm64") == 0) {
+            if (g_dump_dir && strstr(g_dump_targets, d->name)) {
                 uint8_t *dc = NULL; size_t dsz = 0;
                 if (d->compile(&prog, &dc, &dsz) == 0 && dc && dsz) {
                     char dumpname[96];
@@ -758,7 +763,8 @@ static void test_compare_battery(void)
 int main(void)
 {
     printf("=== ISA DRIVER SPACE TEST ===\n\n");
-    g_dump_dir = getenv("WUBU_ARM64_EXEC_DIR");
+    g_dump_dir = getenv("WUBU_EXEC_DUMP_DIR");
+    g_dump_targets = getenv("WUBU_EXEC_DUMP");
     if (g_dump_dir) printf("(dumping ARM64 blobs to %s for qemu execution)\n", g_dump_dir);
 
     /* The amdgpu backend emits real amdgcn but has no ROCm runtime, so run()
