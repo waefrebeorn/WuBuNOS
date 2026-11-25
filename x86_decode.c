@@ -62,11 +62,30 @@ int x86_decode_one(const uint8_t *code, size_t n, size_t off, x86_insn_t *out)
         op == 0x6E || op == 0x7E || op == 0x2A || op == 0x2C) {
         out->has_modrm = 1;
     }
-    /* Two-byte 0F xx: ModRM follows. */
+    /* Two-byte 0F xx. What follows depends on the SECOND byte, not on 0F:
+     *
+     *   0F 80..0F 8F   Jcc rel32   -- no ModRM, four-byte displacement
+     *   0F 05 syscall, 0F 0B ud2, 0F 31/30 rdtsc, 0F 34/35 sysenter/sysexit,
+     *   0F A2 cpuid, 0F 77 emms    -- no ModRM, no immediate
+     *   everything else (SSE, movzx, imul, nop, ...) -- ModRM follows
+     *
+     * The old code set has_modrm = 1 for every 0F opcode and left `op` at 0x0F,
+     * so `0F 85 rel32` (JNE, THIRTY-TWO-BIT displacement) was measured as 3 bytes
+     * instead of 6, and the -4-byte error landed on every instruction after it.
+     * Found by the parity gate on the x86-64 backend's own loop body. */
+    int is_0f = 0;
+    uint8_t op2 = 0;
     if (op == 0x0F) {
         if (i >= n) return -1;
-        out->opcode = code[i++];
-        out->has_modrm = 1;
+        op2 = code[i++];
+        out->opcode = op2;
+        is_0f = 1;
+        if (op2 >= 0x80 && op2 <= 0x8F) out->has_modrm = 0;      /* Jcc rel32 */
+        else if (op2 == 0x05 || op2 == 0x0B || op2 == 0x30 || op2 == 0x31 ||
+                 op2 == 0x34 || op2 == 0x35 || op2 == 0x77 || op2 == 0xA2)
+            out->has_modrm = 0;                                   /* opcode-only */
+        else
+            out->has_modrm = 1;
     }
 
     if (out->has_modrm) {
@@ -107,9 +126,9 @@ int x86_decode_one(const uint8_t *code, size_t n, size_t off, x86_insn_t *out)
     else if (op >= 0x80 && op <= 0x83) imm = (op == 0x81) ? 4 : 1;
     else if (op >= 0x68 && op <= 0x69) imm = (op == 0x68) ? 4 : 4;
     else if (op == 0xC6) imm = 1;
+    else if (is_0f) imm = (op2 >= 0x80 && op2 <= 0x8F) ? 4 : 0;   /* Jcc rel32 */
     else if (op == 0xE9 || op == 0xE8) imm = 4;
     else if (op >= 0x70 && op <= 0x7F) imm = 1;
-    else if (op == 0x0F) imm = 0;
 
     if (imm > 0) {
         if ((size_t)imm > n - i) return -1;
