@@ -57,8 +57,12 @@ static const struct { const char *driver, *case_name, *why; } g_known_gaps[] = {
      * emitted) + AVR_JZ/AVR_JNZ (0x28/0x29) in both the emitter and the
      * interpreter. */
     /* pic fixed: label fixups (it had a fixup pass only for CALL) + JZ/JNZ. */
-    {"arm64","loop(1..4)", "cannot execute on this x86-64 host (NO_EXEC); executed under qemu-aarch64 it returns 5, not 10 (tools/isa_exec_gate.py KNOWN_FAIL)"},
-    {"ptx",  "loop(1..4)", "cannot compile the case at all"},
+    /* arm64 is NOT a gap either: it encodes and lands in compiled_only. The real
+     * arm64 defect is a wrong ANSWER under qemu-aarch64 (returns 5, not 10) and
+     * that is declared where it is measured: tools/isa_exec_gate.py KNOWN_FAIL. */
+    /* ptx is NOT a gap: the loop compiles and ptxas assembles it. It shows up
+     * in the compiled_only tally because this driver has no GPU execution path
+     * in-process. A declared gap here would HIDE a genuine wrong answer later. */
 };
 
 static int g_unaccounted_holes = 0;
@@ -166,7 +170,11 @@ static int run_with_driver(const wubu_isa_driver_t *d, const wubu_mir_prog_t *pr
      * one -- it used to be reported as COMPILE FAIL, because the encoder
      * refused outright on a foreign host. The encoding itself is still
      * asserted: non-empty code, above. */
-    if (*result == WUBU_ISA_NO_EXEC) { compiled_only++; return 1; }
+    /* Return the SENTINEL, not 1. run_guarded classifies "cannot execute here"
+     * by comparing rc against WUBU_ISA_NO_EXEC, so returning 1 made every
+     * cross-target case look like a compile failure -- ptx reported "the backend
+     * could not compile it" for a kernel that compiled and ptxas ASSEMBLED. */
+    if (*result == WUBU_ISA_NO_EXEC) { compiled_only++; return WUBU_ISA_NO_EXEC; }
     return 0;
 }
 
@@ -485,6 +493,8 @@ static void case_alarm(int sig)
 #define RUN_HUNG     2
 #define RUN_COMPILEFAIL 3
 
+static __thread long long last_run_rc = 0;   /* what run_with_driver returned */
+
 static int run_guarded(const wubu_isa_driver_t *d, const wubu_mir_prog_t *prog,
                        int64_t *result)
 {
@@ -498,6 +508,7 @@ static int run_guarded(const wubu_isa_driver_t *d, const wubu_mir_prog_t *prog,
     if (sigsetjmp(g_case_jmp, 1) == 0) {
         alarm(5);
         rc = run_with_driver(d, prog, result);
+        last_run_rc = rc;
         alarm(0);
     }
     sigaction(SIGALRM, &old, NULL);
@@ -577,7 +588,13 @@ static void test_loop(void)
             continue;
         }
         if (verdict == RUN_COMPILEFAIL) {
-            printf("  FAIL %s loop(1..4): the backend could not compile it\n", d->name);
+            /* Say WHICH failure this is. "could not compile it" was printed for
+             * any nonzero rc, including a run that returned NO_EXEC -- so a
+             * backend that compiled perfectly and simply has no device on this
+             * host was reported as a compile failure. */
+            printf("  FAIL %s loop(1..4): rc=%lld result=%lld%s\n", d->name,
+                   (long long)last_run_rc, (long long)result,
+                   last_run_rc == WUBU_ISA_NO_EXEC ? "" : " (compile/emit path)");
         }
         {
             char msg[96];

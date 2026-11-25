@@ -457,12 +457,17 @@ static void emit_kernel_body(ptx_emitter_t *e, const wubu_mir_prog_t *p)
                * reloads %w0, which races with the mov.b64 below and left %w0
                * holding a stale value: the shift count came out as the
                * PREVIOUS shift's count (4 instead of 2), so -48 >> 4 = -3. */
+              /* %rd0 was never declared -- ptxas rejected the whole kernel with
+               * "Unknown symbol '%rd0'". It is declared in the prologue now. */
               ptx_emit(e, "    and.b64 %%rd0, %%r%d, 63;\n", (int)ptx_vr(e, ins->b));
+              /* shr.s64 takes its shift count as .u32; passing the .b64 masked
+               * count straight in is "Arguments mismatch for instruction 'shr'". */
+              ptx_emit(e, "    cvt.u32.u64 %%rc1, %%rd0;\n");
               ptx_emit(e, "    mov.b64 %%r%d, %%r%d;\n", (int)rd, (int)ptx_vr(e, ins->a));
               /* MIR_SHR is ARITHMETIC (see wubu_mir.h): the interpreter does
                * `int64_t >> ` and x86-64 emits `sar`. shr.u64 zero-filled the
                * high bits and lost the sign; shr.s64 replicates it. */
-              ptx_emit(e, "    shr.s64 %%r%d, %%r%d, %%rd0;\n", (int)rd, (int)rd);
+              ptx_emit(e, "    shr.s64 %%r%d, %%r%d, %%rc1;\n", (int)rd, (int)rd);
               (void)cnt;
             }
             break;
@@ -1169,6 +1174,7 @@ static char *emit_ptx(const wubu_mir_prog_t *p)
 
     /* Declare registers: %r0..%r{n_vregs-1} plus rd_result */
     ptx_emit(&e, "    .reg .b64 %%r<%u>;\n", n_vregs + 1);
+    ptx_emit(&e, "    .reg .b64 %%rd0;\n");   /* masked shift count */
     ptx_emit(&e, "    .reg .b64 %%rd_result;\n");
     ptx_emit(&e, "    .reg .pred p<%u>;\n", n_preds);
     ptx_emit(&e, "    .reg .u64 %%ra<2>;\n");  /* address math for mem[] */
@@ -1258,7 +1264,7 @@ static int ptx_compile(const wubu_mir_prog_t *p, uint8_t **out_code, size_t *out
 
     /* 1. Emit PTX assembly (always works, pure C11) */
     char *ptx = emit_ptx(p);
-    if (!ptx) return -1;
+    if (!ptx) { fprintf(stderr, "[ptx] generation returned nothing\n"); return -1; }
 
 #if defined(WUBU_HOSTED) && !defined(_WIN32)
     /* 2a. Hosted: compile PTX -> cubin via ptxas (with caching) */
@@ -1299,7 +1305,7 @@ static int ptx_compile(const wubu_mir_prog_t *p, uint8_t **out_code, size_t *out
     if (need_compile) {
         fprintf(stderr, "[ptx] cache: hash=%u last=%u COMPILING\n", ptx_hash, last_hash);
         FILE *f = fopen(ptx_path, "w");
-        if (!f) { free(ptx); return -1; }
+        if (!f) { fprintf(stderr, "[ptx] cannot open %s\n", ptx_path); free(ptx); return -1; }
         fputs(ptx, f);
         fclose(f);
 
@@ -1309,7 +1315,14 @@ static int ptx_compile(const wubu_mir_prog_t *p, uint8_t **out_code, size_t *out
                  ptx_path, cubin_path);
         int rc = system(cmd);
         if (rc != 0) {
-            fprintf(stderr, "[ptx] ptxas compilation failed (rc=%d)\n", rc);
+            /* A gate that fails must leave its output somewhere, or the next
+             * reader is guessing. ptxas writes one shared log that later
+             * compiles overwrite, so keep the rejected source itself. */
+            char keep[256];
+            snprintf(keep, sizeof(keep), "/tmp/ptx_fail_%u.ptx", (unsigned)ptx_hash);
+            FILE *kf = fopen(keep, "w");
+            if (kf) { fputs(ptx, kf); fclose(kf); }
+            fprintf(stderr, "[ptx] ptxas compilation failed (rc=%d); source kept at %s\n", rc, keep);
             free(ptx);
             return -1;
         }
@@ -1317,7 +1330,7 @@ static int ptx_compile(const wubu_mir_prog_t *p, uint8_t **out_code, size_t *out
     }
 
     FILE *cf = fopen(cubin_path, "rb");
-    if (!cf) { free(ptx); return -1; }
+    if (!cf) { fprintf(stderr, "[ptx] no cubin at %s\n", cubin_path); free(ptx); return -1; }
     fseek(cf, 0, SEEK_END);
     long cubin_size = ftell(cf);
     fseek(cf, 0, SEEK_SET);
