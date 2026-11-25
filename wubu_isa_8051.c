@@ -51,7 +51,25 @@ typedef struct {
     size_t n, cap;
     size_t *label_offsets;
     size_t n_labels;
+    /* forward references: an LJMP's 16-bit operand position and its label.
+     * These backends had no patch pass at all, which is why they had no jump:
+     * a label can be forward-referenced, so the address cannot be known while
+     * emitting. */
+    size_t *patch_pos;
+    uint32_t *patch_label;
+    size_t n_patch, cap_patch;
 } i8051_emitter_t;
+
+static void add_patch(i8051_emitter_t *e, size_t pos, uint32_t label) {
+    if (e->n_patch == e->cap_patch) {
+        e->cap_patch = e->cap_patch ? e->cap_patch * 2 : 16;
+        e->patch_pos = realloc(e->patch_pos, e->cap_patch * sizeof(size_t));
+        e->patch_label = realloc(e->patch_label, e->cap_patch * sizeof(uint32_t));
+    }
+    e->patch_pos[e->n_patch] = pos;
+    e->patch_label[e->n_patch] = label;
+    e->n_patch++;
+}
 
 static void e8(i8051_emitter_t *e, uint8_t b) {
     if (e->n + 1 > e->cap) { e->cap = e->cap ? e->cap*2 : 256; e->code = realloc(e->code, e->cap); }
@@ -123,6 +141,35 @@ static int i8051_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
                 e8(&e, slot);
             }
             break;
+        case MIR_JMP: {
+            /* LJMP addr16 -- absolute, so no range limit (SJMP rel8 would cap
+             * the body at 127 bytes). Operand patched once all labels are known. */
+            e8(&e, 0x02);
+            size_t lp = e.n;
+            e8(&e, 0); e8(&e, 0);
+            add_patch(&e, lp, in->label);
+            break;
+        }
+        case MIR_JZ:
+        case MIR_JNZ: {
+            /* MOV A,[va]; JZ +3 / JNZ +3 ; LJMP label
+             * The +3 skips the absolute jump when the test says "do not branch",
+             * so the conditional never has to reach the label directly and no
+             * relative range check is needed. */
+            e8(&e, 0xE5); e8(&e, (uint8_t)(I8051_VR_BASE + in->a));
+            /* The skip branch is the INVERSE of the test: we skip the LJMP
+             * when the condition says "stay", and fall into it when it says
+             * "go". Emitting JNZ here (the same polarity as the test) skips the
+             * jump precisely when it should be taken -- the loop then ran once
+             * and returned 0. */
+            e8(&e, (in->op == MIR_JZ) ? 0x70 : 0x60);
+            e8(&e, 0x03);
+            e8(&e, 0x02);
+            size_t cp = e.n;
+            e8(&e, 0); e8(&e, 0);
+            add_patch(&e, cp, in->label);
+            break;
+        }
         case MIR_MOV:
             sa = (uint8_t)(I8051_VR_BASE + in->a);
             e8(&e, 0xE5); e8(&e, sa);    /* MOV A, [sa] */
@@ -345,6 +392,14 @@ static int i8051_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
     free(callps);
     free(func_off);
 
+    for (size_t i = 0; i < e.n_patch; i++) {
+        size_t t = (e.patch_label[i] < e.n_labels) ? e.label_offsets[e.patch_label[i]] : (size_t)-1;
+        if (t == (size_t)-1) continue;      /* undeclared label: leave 0x0000 */
+        e.code[e.patch_pos[i]]     = (uint8_t)((t >> 8) & 0xFF);
+        e.code[e.patch_pos[i] + 1] = (uint8_t)(t & 0xFF);
+    }
+    free(e.patch_pos);
+    free(e.patch_label);
     free(e.label_offsets);
     *out = e.code;
     *out_size = e.n;

@@ -72,6 +72,18 @@ int64_t wubu_8051_interp_exec(const uint8_t *code, size_t size, int64_t arg)
         case I8051_MOV_A_IMM:
             ram[0xE0] = (int64_t)(code[pc++] & 0xFF);
             break;
+        case 0x02: {                    /* LJMP addr16 */
+            uint16_t t = (uint16_t)(((uint16_t)code[pc] << 8) | code[pc + 1]);
+            pc = t;
+            break;
+        }
+        case 0x60:                      /* JZ rel  (A == 0) */
+        case 0x70: {                    /* JNZ rel (A != 0) */
+            int8_t rel = (int8_t)code[pc++];
+            int64_t v = ram[0xE0];
+            if (op == 0x60 ? (v == 0) : (v != 0)) pc = (size_t)((int64_t)pc + rel);
+            break;
+        }
         case I8051_MOV_A_DIR:
             ram[0xE0] = ram[code[pc++]];
             break;

@@ -52,7 +52,7 @@ static const struct { const char *driver, *case_name, *why; } g_known_gaps[] = {
     /* riscv was here: "the FORWARD patch resolves to pos+4". It was not the
      * label machinery -- the B-type immediate fields were transposed, so every
      * branch landed a few bytes away. Fixed in the encoder; the case passes. */
-    {"8051", "loop(1..4)", "returns 0: neither MIR_JMP nor MIR_JNZ exists, so the body runs once and falls out"},
+    /* 8051 fixed: LJMP + a patch pass + JZ/JNZ (skip-the-inverse form). */
     {"avr",  "loop(1..4)", "returns 0: neither MIR_JMP nor MIR_JNZ exists"},
     {"pic",  "loop(1..4)", "returns 0: neither MIR_JMP nor MIR_JNZ exists"},
     {"arm64","loop(1..4)", "cannot execute on this x86-64 host (NO_EXEC); executed under qemu-aarch64 it returns 5, not 10 (tools/isa_exec_gate.py KNOWN_FAIL)"},
@@ -83,7 +83,6 @@ static const char *known_hole(const char *driver, int op)
     static const struct { const char *driver; int op; const char *why; } holes[] = {
         {"arm64", MIR_LOAD,  "no load at all -- the memory selftest 'passed' because the store wrote nothing and the value stayed in a register"},
         {"arm64", MIR_STORE, "no store at all (see MIR_LOAD)"},
-        {"8051", MIR_JMP, "the 8051 pseudo-VM has no jump at all"},
         {"avr",  MIR_JMP, "the avr pseudo-VM has no jump at all"},
         {"pic",  MIR_JMP, "the pic pseudo-VM has no jump at all"},
     };
