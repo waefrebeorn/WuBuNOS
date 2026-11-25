@@ -48,7 +48,9 @@ static const struct { const char *driver, *case_name, *why; } g_known_gaps[] = {
      * 6502, z80, 8086, m68k and mips: 8086, m68k, z80 and mips now PASS -- their
      * earlier "wrong sum" numbers were the missing branch, not an allocator bug. */
     {"6502", "loop(1..4)", "returns 0: the JNZ branch is emitted now but does not fire; the exit test reads a slot the loop body never updates"},
-    {"riscv","loop(1..4)", "does not terminate: MIR_JNZ exists, but the FORWARD patch of that branch resolves to pos+4 (the next instruction)"},
+    /* riscv was here: "the FORWARD patch resolves to pos+4". It was not the
+     * label machinery -- the B-type immediate fields were transposed, so every
+     * branch landed a few bytes away. Fixed in the encoder; the case passes. */
     {"8051", "loop(1..4)", "returns 0: neither MIR_JMP nor MIR_JNZ exists, so the body runs once and falls out"},
     {"avr",  "loop(1..4)", "returns 0: neither MIR_JMP nor MIR_JNZ exists"},
     {"pic",  "loop(1..4)", "returns 0: neither MIR_JMP nor MIR_JNZ exists"},

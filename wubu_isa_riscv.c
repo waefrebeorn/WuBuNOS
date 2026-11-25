@@ -797,10 +797,20 @@ static int riscv_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
         } else {
             /* branch (B-type): imm[12|10:5|4:1|11] */
             uint8_t funct3 = (inst >> 12) & 0x7;
-            uint32_t imm12 = ((off >> 12) & 0x1) << 7;
-            imm12 |= ((off >> 5) & 0x3F) << 8;
-            imm12 |= ((off >> 1) & 0xF) << 25;
-            imm12 |= ((off >> 11) & 0x1) << 31;
+            /* B-type fields, in their actual places:
+             *   bit 31      imm[12]
+             *   bits 30:25  imm[10:5]
+             *   bits 11:8   imm[4:1]
+             *   bit 7       imm[11]
+             * These were transposed (imm[10:5] written into bits 8..12 and
+             * imm[4:1] into bits 25..28), so every branch landed a few bytes
+             * away -- `bnez t0, done` in the loop case resolved to the very next
+             * instruction and the loop never exited. Proven with
+             * riscv64-linux-gnu-objdump on the emitted blob. */
+            uint32_t imm12 = ((off >> 12) & 0x1) << 31;
+            imm12 |= ((off >> 5) & 0x3F) << 25;
+            imm12 |= ((off >> 1) & 0xF) << 8;
+            imm12 |= ((off >> 11) & 0x1) << 7;
             inst = (inst & 0x01FFF07F) | imm12 | (funct3 << 12);
         }
         memcpy(&e.code[patches[i].pos], &inst, 4);
