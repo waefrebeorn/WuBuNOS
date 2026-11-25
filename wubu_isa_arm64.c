@@ -126,6 +126,10 @@ static int arm64_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
      * only addressable in the ADD/SUB immediate forms, which is what
      * warm64_mov_sp emits (add x29, sp, #0). */
     warm64_mov_sp(&e.enc, WREG_X29, WREG_SP);
+    /* The run contract passes prog.mem in x0. Keep it in x19, which is
+     * callee-saved, so MIR_LOAD/MIR_STORE can reach memory at all -- this
+     * backend previously had no base register and no load/store of any kind. */
+    warm64_mov_reg(&e.enc, WREG_X19, WREG_X0);
     uint32_t frame_imm = (uint32_t)(e.frame);
     uint16_t lo = frame_imm & 0xFFF;
     warm64_sub_imm(&e.enc, WREG_SP, WREG_SP, lo, 1);
@@ -325,6 +329,22 @@ static int arm64_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
             warm64_ldp_post(&e.enc, WREG_X29, WREG_X30, WREG_SP, 2);
             warm64_ret(&e.enc, WREG_X30);
             break;
+        case MIR_ALLOC:
+            /* Same as x86-64: the home base is already emitted as a CONST vr,
+             * so the address in in->a is a BYTE offset into prog.mem. */
+            break;
+        case MIR_LOAD:
+            /* dst = mem[addr] -- addr is a byte offset, so no scaling. */
+            LOAD_VR(in->a, WREG_X11);
+            warm64_ldr_reg(&e.enc, WREG_X10, WREG_X19, WREG_X11, 1);
+            STORE_VR(WREG_X10, in->dst);
+            break;
+        case MIR_STORE:
+            /* mem[addr] = src. */
+            LOAD_VR(in->a, WREG_X11);
+            LOAD_VR(in->b, WREG_X10);
+            warm64_str_reg(&e.enc, WREG_X10, WREG_X19, WREG_X11, 1);
+            break;
         default:
             /* An op this backend does not implement must NOT compile to nothing:
              * that is how a missing branch becomes a no-op and a loop spins
@@ -396,8 +416,11 @@ static int64_t arm64_run(const uint8_t *code, size_t size, int64_t arg) {
     if (!mem) return -999;
     memcpy(mem, code, size);
     wubu_clear_cache(mem, size);
-    int64_t (*fn)(void) = (int64_t (*)(void))mem;
-    int64_t result = fn();
+    /* Call with the memory pointer in x0: the prologue copies it to x19. The
+     * old `fn(void)` discarded `arg` entirely, which is why a backend with no
+     * base register could never have implemented a load or a store. */
+    int64_t (*fn)(int64_t) = (int64_t (*)(int64_t))mem;
+    int64_t result = fn(arg);
     jit_free_exec(mem, size);
     return result;
 #endif
