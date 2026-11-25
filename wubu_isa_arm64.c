@@ -32,9 +32,27 @@ typedef struct {
 /* Map allocator physical register index to ARM64 register.
  * Physical 0 → X8, 1 → X9, ..., 19 → X27.
  * We skip X0-X7 (return/args/scratch) and X28-X31 (special). */
+/* Physical index -> real register.
+ *
+ * This used to be `8 + phys`, i.e. the pool was x8..x27 -- which included x9
+ * and x10, the fixed operand scratch that EVERY arithmetic case copies into
+ * before computing (LOAD_VR(in->a, WREG_X9); ... warm64_add_reg(x0, x9, x10)).
+ * So a compare clobbered the very registers holding acc and i: the emitted loop
+ * compared via x9/x10 and then summed i + four = 5 where sum(1..4) = 10 was
+ * asked for. x19 is excluded for the same class of reason -- it holds prog.mem
+ * (see the prologue), and handing it to a vreg would lose the memory base.
+ *
+ * Reserving the scratch here, in ONE place, is what keeps the 30-odd arithmetic
+ * cases honest; changing each case's scratch register would have to be redone
+ * for every new op. */
 static WArm64Reg phys_to_arm64(int phys) {
-    if (phys >= 0 && phys <= 19) return (WArm64Reg)(8 + phys);
-    return WREG_X8; /* fallback */
+    static const WArm64Reg pool[] = {
+        WREG_X8,  WREG_X11, WREG_X12, WREG_X13, WREG_X14, WREG_X15,
+        WREG_X16, WREG_X17, WREG_X18, WREG_X20, WREG_X21, WREG_X22,
+        WREG_X23, WREG_X24, WREG_X25, WREG_X26, WREG_X27
+    };
+    if (phys >= 0 && (size_t)phys < sizeof(pool) / sizeof(pool[0])) return pool[phys];
+    return WREG_X8; /* fallback: out of pool, not a register a vreg may use */
 }
 
 /* Spill slots live ABOVE the current SP, inside the frame that the prologue
