@@ -46,13 +46,20 @@ int x86_decode_one(const uint8_t *code, size_t n, size_t off, x86_insn_t *out)
     out->opcode = code[i++];
 
     uint8_t op = out->opcode;
-    /* Opcodes carrying ModRM in the subset the JIT emits. */
+    /* Opcodes carrying ModRM in the subset the JIT emits.
+     *
+     * NOTE: 0x54 / 0x57 / 0x5A do NOT belong here. In the ONE-BYTE space they are
+     * `push r12`, `push r15` and `pop rdx` -- no ModRM -- and listing them made
+     * the walker report 4 bytes for a 2-byte `41 54`. The forms that DO take a
+     * ModRM are the two-byte SSE ones (0F 54 ANDPS, 0F 57 XORPS, 0F 5A CVTPS2PD),
+     * and the 0F path below already sets has_modrm for those. Found by comparing
+     * this walker against WEMU's decoder over the compiler's own output
+     * (tools/x86_decode_parity.c): 57 disagreements, all downstream of this. */
     if ((op >= 0x00 && op <= 0x3F) || (op >= 0x80 && op <= 0x8F) ||
         (op >= 0xC0 && op <= 0xC1) || (op >= 0xC6 && op <= 0xC7) ||
         (op >= 0xD0 && op <= 0xD3) || (op >= 0xF6 && op <= 0xF7) ||
-        (op >= 0x10 && op <= 0x17 && (out->rex || 1)) ||
-        op == 0x6E || op == 0x7E || op == 0x2A || op == 0x2C ||
-        op == 0x5A || op == 0x57 || op == 0x54) {
+        (op >= 0x10 && op <= 0x17) ||
+        op == 0x6E || op == 0x7E || op == 0x2A || op == 0x2C) {
         out->has_modrm = 1;
     }
     /* Two-byte 0F xx: ModRM follows. */
