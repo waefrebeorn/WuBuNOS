@@ -656,6 +656,19 @@ static int riscv_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
             break;
         }
 
+        case MIR_JNZ: {
+            /* if (a != 0) pc = label: load a, bne t0, x0, label.
+             * MIR_JNZ had NO case here, and an unhandled op falls through the
+             * switch silently -- the branch simply was not emitted, so a loop
+             * compiled with jnz ran its body forever. Found by the loop case in
+             * test_isa_driver (it hung, and the same blob spun under
+             * qemu-riscv64: there was no branch instruction at all). */
+            load_d(&e, REG_T0, REG_FP, (int32_t)slot_off(e.frame, in->a));
+            br_patch(&e, 1, REG_T0, REG_ZERO, in->label,
+                     &patches, &np, &cp);
+            break;
+        }
+
         case MIR_JMP: {
             /* pc = label: jal x0, label */
             size_t pos = e.n;

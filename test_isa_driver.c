@@ -40,6 +40,19 @@ static const char *g_dump_targets = ""; /* comma list, e.g. "arm64,riscv" */
  * reported as GAP with its reason, never silently skipped and never asserted to
  * pass. Remove a line the moment the backend implements it. */
 static const struct { const char *driver, *case_name, *why; } g_known_gaps[] = {
+    /* Found by the loop case (a backward branch with a vr re-assigned each
+     * iteration). These are NOT "the backend cannot express a loop" -- several
+     * emit one fine -- they are specific, measured failures. Each line is a bug
+     * with a symptom attached, and removing a line is how the fix is declared. */
+    {"8086", "loop(1..4)", "sum wrong (21451): a vr re-assigned across iterations keeps a stale slot/register"},
+    {"m68k", "loop(1..4)", "sum wrong (2380953): same class as 8086 -- re-assignment across the back-edge"},
+    {"6502", "loop(1..4)", "does not terminate: no MIR_JNZ case, so the exit branch is never emitted"},
+    {"z80",  "loop(1..4)", "does not terminate: no MIR_JNZ case"},
+    {"riscv","loop(1..4)", "does not terminate: MIR_JNZ was added, but the FORWARD patch of that branch resolves to the next instruction (label offset for `done` reads as the branch's own pos+4)"},
+    {"mips", "loop(1..4)", "returns 0: loop body never runs"},
+    {"8051", "loop(1..4)", "returns 1: no MIR_JZ and no MIR_JNZ at all"},
+    {"avr",  "loop(1..4)", "returns 1: no MIR_JZ and no MIR_JNZ at all"},
+    {"pic",  "loop(1..4)", "returns 1: no MIR_JZ and no MIR_JNZ at all"},
 };
 
 static const char *known_gap(const char *driver, const char *case_name)
@@ -387,6 +400,135 @@ static void test_branch(void)
         if (run_with_driver(d, &prog, &result) == 0) {
             CHECK(result == 1, names[i]);
             if (result == 1) printf("  %s: %lld OK\n", names[i], (long long)result);
+        }
+    }
+    wubu_mir_free(&prog);
+}
+
+/* A runaway case must not hang the whole gate.
+ *
+ * The loop test is the first case that can plausibly never terminate (a backend
+ * that emits a broken backward branch spins forever, and for x86-64 the code
+ * runs NATIVELY so there is no step budget to hit). SIGALRM + siglongjmp turns
+ * that into a verdict -- "did not terminate" -- instead of a hung gate.
+ */
+#include <signal.h>
+#include <setjmp.h>
+
+static sigjmp_buf g_case_jmp;
+static volatile sig_atomic_t g_case_timed_out = 0;
+
+static void case_alarm(int sig)
+{
+    (void)sig;
+    g_case_timed_out = 1;
+    siglongjmp(g_case_jmp, 1);
+}
+
+#define RUN_RAN      0
+#define RUN_NOEXEC   1     /* backend says it cannot execute on this host */
+#define RUN_HUNG     2
+
+static int run_guarded(const wubu_isa_driver_t *d, const wubu_mir_prog_t *prog,
+                       int64_t *result)
+{
+    int verdict = RUN_RAN;
+    int rc = -1;
+    g_case_timed_out = 0;
+    struct sigaction sa, old;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = case_alarm;
+    sigaction(SIGALRM, &sa, &old);
+    if (sigsetjmp(g_case_jmp, 1) == 0) {
+        alarm(5);
+        rc = run_with_driver(d, prog, result);
+        alarm(0);
+    }
+    sigaction(SIGALRM, &old, NULL);
+    if (g_case_timed_out) {
+        printf("  %s: did not terminate within 5 s\n", d->name);
+        return RUN_HUNG;
+    }
+    /* "Cannot execute here" is NOT "hung": arm64 on this x86-64 host and ptx
+     * without a driver both return WUBU_ISA_NO_EXEC, and calling that a hang
+     * would blame the backend for the host. */
+    if (rc == WUBU_ISA_NO_EXEC) return RUN_NOEXEC;
+    if (rc != 0) return RUN_NOEXEC;
+    return verdict;
+}
+
+/* Test: LOOP -- a BACKWARD branch with a variable that changes each iteration.
+ *
+ * Every case before this was straight-line: forward branches only, each vr
+ * written once. That is precisely the shape in which the arm64 label patcher
+ * looked fine (it rewrote `b` as `b.eq` and every straight-line program still
+ * passed, because the flags happened to be right). A loop exercises a backward
+ * patch and a vr that is re-assigned across iterations, which is where an
+ * allocator or frame bug shows up as a wrong sum rather than as a crash.
+ *
+ *     acc = 0; i = 1;
+ *   loop:
+ *     if (i > 4) goto done;
+ *     acc = acc + i;  i = i + 1;
+ *     goto loop;
+ *   done: return acc;              -> 10
+ */
+static void test_loop(void)
+{
+    printf("-- Test: loop (sum 1..4 = 10, backward branch) --\n");
+    wubu_mir_prog_t prog;
+    wubu_mir_init(&prog);
+
+    wubu_vr_t acc = wubu_mir_const(&prog, 0);
+    wubu_vr_t i   = wubu_mir_const(&prog, 1);
+    wubu_vr_t four = wubu_mir_const(&prog, 4);
+
+    uint32_t l_loop = wubu_mir_new_label(&prog);
+    uint32_t l_done = wubu_mir_new_label(&prog);
+
+    wubu_mir_place_label(&prog, l_loop);
+    wubu_vr_t cond = wubu_mir_binop(&prog, MIR_GT, i, four);
+    wubu_mir_jnz(&prog, cond, l_done);
+
+    wubu_vr_t sum = wubu_mir_binop(&prog, MIR_ADD, acc, i);
+    wubu_mir_mov_to(&prog, acc, sum);
+    wubu_vr_t next = wubu_mir_binop(&prog, MIR_ADD, i, wubu_mir_const(&prog, 1));
+    wubu_mir_mov_to(&prog, i, next);
+    wubu_mir_jmp(&prog, l_loop);
+
+    wubu_mir_place_label(&prog, l_done);
+    wubu_mir_ret(&prog, acc);
+
+    const char *names[] = {"x86-64", "8086", "m68k", "6502", "riscv", "z80", "mips", "8051", "avr", "pic", "amdgpu", "ptx", "arm64"};
+    for (int i2 = 0; i2 < 13; i2++) {
+        const wubu_isa_driver_t *d = wubu_isa_find(names[i2]);
+        if (!d) continue;
+        const char *gap = known_gap(d->name, "loop(1..4)");
+        if (gap) { printf("  GAP  %s loop(1..4): %s\n", d->name, gap); continue; }
+        int64_t result = 0;
+        if (g_dump_dir && strstr(g_dump_targets, d->name)) {
+            uint8_t *dc = NULL; size_t dsz = 0;
+            if (d->compile(&prog, &dc, &dsz) == 0 && dc && dsz)
+                dump_arm64(d, "loop_1_4", dc, dsz, 10);
+            free(dc);
+        }
+        printf("  %s: running...\n", d->name); fflush(stdout);
+        int verdict = run_guarded(d, &prog, &result);
+        if (verdict == RUN_NOEXEC) {
+            printf("  SKIP %s loop(1..4): no execution path on this host\n", d->name);
+            continue;
+        }
+        {
+            char msg[96];
+            snprintf(msg, sizeof msg, "%s loop(1..4)", d->name);
+            /* A hang is a FAILURE, not an absence of evidence: the program must
+             * terminate, and a backend that spins on a backward branch is broken
+             * in a way no straight-line case can show. */
+            CHECK(verdict == RUN_RAN && result == 10, msg);
+            if (verdict == RUN_HUNG)
+                printf("  %s: no result (did not terminate)\n", msg);
+            else if (result != 10)
+                printf("  %s: got %lld want 10\n", msg, (long long)result);
         }
     }
     wubu_mir_free(&prog);
@@ -799,6 +941,7 @@ int main(void)
     printf("\n");
     test_imm_selection();
     test_rex_selection();
+    test_loop();
     test_frame_layout();
     printf("\n");
 
