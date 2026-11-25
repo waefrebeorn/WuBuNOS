@@ -662,6 +662,17 @@ static int cpu6502_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_
             patches[np].pos = jz_disp; patches[np].patch_size = 1; patches[np].label = in->label; np++;
             break;
 
+        case MIR_JNZ: {
+            /* if (a != 0) goto label: LDA slot; BNE label */
+            e8(&e, LDA_ZP); e8(&e, zp_slot(in->a));
+            e8(&e, BNE);
+            size_t jnz_disp = e.n;
+            e8(&e, 0x00);
+            if (np == cp) { cp = cp ? cp*2 : 16; patches = realloc(patches, cp * sizeof(cpu6502_patch_t)); }
+            patches[np].pos = jnz_disp; patches[np].patch_size = 1; patches[np].label = in->label; np++;
+            break;
+        }
+
         case MIR_FRET:
             /* float return: hostcall copies the 4-byte f32 at slot in->a
              * into the float-return scratch the run() exits with. */

@@ -396,6 +396,18 @@ static int m68k_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_siz
             PATCH(CC_EQ, in->label);
             e16(&e, 0x6700);   /* BEQ.s (patched in the final pass) */
             break;
+
+        case MIR_JNZ:
+        {
+            /* MIR_JNZ had no case in this backend: the branch was simply absent,
+             * so a loop's exit condition never fired. BNE.s is the mirror of the
+             * BEQ.s above. */
+            move_a6_d(&e, slot_disp(in->a), 0);
+            TST_D(0);
+            PATCH(CC_NE, in->label);
+            e16(&e, 0x6600);
+            break;
+        }
         }
         case MIR_LOAD:
             /* dst = mem[addr] via hostcall fn=25 */

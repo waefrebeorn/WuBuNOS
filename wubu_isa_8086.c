@@ -344,6 +344,17 @@ static int i8086_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_si
             patch_push(&patches, &np, &cap, pos, 0x74, in->label);
             break;
         }
+        case MIR_JNZ:
+        {
+            /* 0x75 = jnz rel8, the mirror of the jz above. MIR_JNZ had no case
+             * in this backend, so the branch was simply not emitted. */
+            emit_load_ax_slot(&e, slot_disp(in->a));
+            e8(&e, 0x85); e8(&e, 0xC0);        /* test ax,ax */
+            size_t pos = e.n;
+            e8(&e, 0x75); e8(&e, 0x00);
+            patch_push(&patches, &np, &cap, pos, 0x75, in->label);
+            break;
+        }
         case MIR_LOAD:
             /* dst = mem[addr] via hostcall fn=25 (BP-relative slot displacements) */
             e8(&e, 0xF1); e8(&e, 25);

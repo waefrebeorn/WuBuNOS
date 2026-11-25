@@ -44,16 +44,15 @@ static const struct { const char *driver, *case_name, *why; } g_known_gaps[] = {
      * iteration). These are NOT "the backend cannot express a loop" -- several
      * emit one fine -- they are specific, measured failures. Each line is a bug
      * with a symptom attached, and removing a line is how the fix is declared. */
-    {"8086", "loop(1..4)", "sum wrong (21451): a vr re-assigned across iterations keeps a stale slot/register"},
-    {"m68k", "loop(1..4)", "sum wrong (2380953): same class as 8086 -- re-assignment across the back-edge"},
-    {"6502", "loop(1..4)", "does not terminate: no MIR_JNZ case, so the exit branch is never emitted"},
-    {"z80",  "loop(1..4)", "does not terminate: no MIR_JNZ case"},
-    {"riscv","loop(1..4)", "does not terminate: MIR_JNZ was added, but the FORWARD patch of that branch resolves to the next instruction (label offset for `done` reads as the branch's own pos+4)"},
-    {"mips", "loop(1..4)", "returns 0: loop body never runs"},
-    {"8051", "loop(1..4)", "returns 1: no MIR_JZ and no MIR_JNZ at all"},
-    {"avr",  "loop(1..4)", "returns 1: no MIR_JZ and no MIR_JNZ at all"},
-    {"pic",  "loop(1..4)", "returns 1: no MIR_JZ and no MIR_JNZ at all"},
-    {"arm64","loop(1..4)", "compiles to a hole: the accumulator's re-assignment across the back edge is not emitted, so the executed result is 5, not 10 (see tools/isa_exec_gate.py KNOWN_FAIL)"},
+    /* Re-measured 2026-11-24 with WUBU_ISA_NO_GAPS=1 after MIR_JNZ was added to
+     * 6502, z80, 8086, m68k and mips: 8086, m68k, z80 and mips now PASS -- their
+     * earlier "wrong sum" numbers were the missing branch, not an allocator bug. */
+    {"6502", "loop(1..4)", "returns 0: the JNZ branch is emitted now but does not fire; the exit test reads a slot the loop body never updates"},
+    {"riscv","loop(1..4)", "does not terminate: MIR_JNZ exists, but the FORWARD patch of that branch resolves to pos+4 (the next instruction)"},
+    {"8051", "loop(1..4)", "returns 0: neither MIR_JMP nor MIR_JNZ exists, so the body runs once and falls out"},
+    {"avr",  "loop(1..4)", "returns 0: neither MIR_JMP nor MIR_JNZ exists"},
+    {"pic",  "loop(1..4)", "returns 0: neither MIR_JMP nor MIR_JNZ exists"},
+    {"arm64","loop(1..4)", "cannot execute on this x86-64 host (NO_EXEC); executed under qemu-aarch64 it returns 5, not 10 (tools/isa_exec_gate.py KNOWN_FAIL)"},
     {"ptx",  "loop(1..4)", "cannot compile the case at all"},
 };
 
@@ -558,7 +557,9 @@ static void test_loop(void)
     for (int i2 = 0; i2 < 13; i2++) {
         const wubu_isa_driver_t *d = wubu_isa_find(names[i2]);
         if (!d) continue;
-        const char *gap = known_gap(d->name, "loop(1..4)");
+        /* WUBU_ISA_NO_GAPS=1 measures every backend regardless of what the gap
+         * list claims, so a stale reason cannot stay on the books. */
+        const char *gap = getenv("WUBU_ISA_NO_GAPS") ? NULL : known_gap(d->name, "loop(1..4)");
         if (gap) { printf("  GAP  %s loop(1..4): %s\n", d->name, gap); continue; }
         int64_t result = 0;
         if (g_dump_dir && strstr(g_dump_targets, d->name)) {

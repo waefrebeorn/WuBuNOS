@@ -437,6 +437,14 @@ static int mips_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_siz
             patch_push(&patches, &np, &cp, e.n - 4, in->label);
             e32(&e, 0);                             /* delay slot */
             break;
+
+        case MIR_JNZ:
+            /* MIR_JNZ had no case here either: bne is the mirror of the beq. */
+            e32(&e, MIPS_LW(29, MIPS_REG_T0, (uint16_t)slot_off(in->a)));
+            e32(&e, mips_bne(MIPS_REG_T0, 0, 0));
+            patch_push(&patches, &np, &cp, e.n - 4, in->label);
+            e32(&e, 0);                             /* delay slot */
+            break;
         case MIR_FADD:
         case MIR_FSUB:
         case MIR_FMUL:

@@ -932,6 +932,19 @@ static int z80_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             patch_push(&e, &patches, &np, &cp, jr_disp, 1, in->label);
             break;
 
+        case MIR_JNZ:
+            /* LD A,(va); OR A (sets Z); JR NZ, label.
+             * MIR_JNZ had no case at all, so the branch was never emitted and a
+             * loop's exit test ran its body forever. */
+            e8(&e, Z80_LD_A_NN);
+            e16(&e, va);
+            e8(&e, 0xB7);
+            e8(&e, Z80_JR_NZ_D);
+            size_t jnz_disp = e.n;
+            e8(&e, 0x00);
+            patch_push(&e, &patches, &np, &cp, jnz_disp, 1, in->label);
+            break;
+
         case MIR_CALL: {
             /* hostcall fn=27 CALL: full prologue (dst/sa/sb unused) followed
              * by the 16-bit absolute code offset of the callee entry. */
