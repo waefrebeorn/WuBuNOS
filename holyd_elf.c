@@ -88,14 +88,25 @@ static void build_phdr(uint8_t *buf, uint64_t filesz) {
     wb64(buf + 48, 0x200000);   /* p_align */
 }
 
-/* _start trampoline: call main, exit via syscall */
-static const uint8_t trampoline_template[12] = {
+/* _start trampoline: call main, exit via syscall.
+ *
+ * The exit syscall number must be written to the FULL rax. This used
+ * `mov al, 60` (0xb0, 0x3c), which only replaces the low byte: main's return
+ * value stayed in bits 8..63, so the syscall number became
+ * (main_ret & ~0xFF) | 60. For main returning 0 that is 60 (exit) and it looks
+ * fine; for 323 it is 316 -- not a syscall -- and the process dies with a fault
+ * instead of exiting. Found by actually RUNNING the emitted ELF in WEMU
+ * (tools/wemu_run_elf, guest fault -6), which is the whole point of that loop.
+ *
+ * `mov eax, 60` (0xb8, 0x3c, 0, 0, 0) zero-extends, so rax is exactly 60. The
+ * trampoline grows 12 -> 15 bytes; call_disp is computed from TRAMPOLINE_SIZE. */
+static const uint8_t trampoline_template[15] = {
     0xe8, 0x00, 0x00, 0x00, 0x00,   /* call rel32 */
     0x48, 0x89, 0xc7,                  /* mov rdi, rax */
-    0xb0, 0x3c,                        /* mov al, 60 */
+    0xb8, 0x3c, 0x00, 0x00, 0x00,      /* mov eax, 60  (__NR_exit) */
     0x0f, 0x05                         /* syscall */
 };
-#define TRAMPOLINE_SIZE 12
+#define TRAMPOLINE_SIZE 15
 
 int hd_write_elf(const char *filename,
                  const uint8_t *code, size_t code_size,
