@@ -58,5 +58,7 @@
 #define PIC_CALL     0x24 /* CALL abs16 */
 #define PIC_FUNC_RET 0x25 /* FUNC_RET — result slot */
 #define PIC_JMP      0x26 /* JMP abs16 */
+#define PIC_JZ       0x28 /* JZ  fr, abs16 -- branch to addr when ram[BASE+fr] == 0 */
+#define PIC_JNZ      0x29 /* JNZ fr, abs16 -- branch to addr when ram[BASE+fr] != 0 */
 
 #endif /* WUBU_PIC_OPCODES_H */

@@ -68,6 +68,9 @@ static int pic_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
     uint32_t max_func_end = 0;
     for (int f = 0; f < p->n_funcs; f++)
         if (p->funcs[f].end > max_func_end) max_func_end = p->funcs[f].end;
+    /* label fixups: PIC had a fixup pass for CALL but none for labels, which is
+     * exactly why it had no jump -- a forward label has no address yet. */
+    size_t *labpos = NULL, *labid = NULL, nlab = 0, caplab = 0;
     size_t entry_off = (size_t)-1;
     size_t entry_jmp_pos = 0;
     if (p->n_funcs > 0) {
@@ -295,6 +298,35 @@ static int pic_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             pic_ep8(&e, (uint8_t)in->a); pic_ep8(&e, (uint8_t)in->b);
             break;
 
+        case MIR_JMP: {
+            pic_ep8(&e, PIC_JMP);
+            if (nlab == caplab) {
+                caplab = caplab ? caplab * 2 : 16;
+                labpos = realloc(labpos, caplab * sizeof(size_t));
+                labid  = realloc(labid,  caplab * sizeof(size_t));
+            }
+            labpos[nlab] = e.n;
+            labid[nlab]  = in->label;
+            nlab++;
+            e.n += 2;                 /* abs16 LE, patched after all labels are known */
+            break;
+        }
+        case MIR_JZ:
+        case MIR_JNZ: {
+            pic_ep8(&e, (in->op == MIR_JZ) ? PIC_JZ : PIC_JNZ);
+            pic_ep8(&e, (uint8_t)in->a);
+            if (nlab == caplab) {
+                caplab = caplab ? caplab * 2 : 16;
+                labpos = realloc(labpos, caplab * sizeof(size_t));
+                labid  = realloc(labid,  caplab * sizeof(size_t));
+            }
+            labpos[nlab] = e.n;
+            labid[nlab]  = in->label;
+            nlab++;
+            e.n += 2;
+            break;
+        }
+
         case MIR_CALL: {
             /* PIC_CALL: subop then abs16 LE target (patched later) */
             pic_ep8(&e, PIC_CALL);
@@ -341,6 +373,14 @@ static int pic_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
         e.code[entry_jmp_pos] = (uint8_t)(entry_off & 0xFF);
         e.code[entry_jmp_pos + 1] = (uint8_t)((entry_off >> 8) & 0xFF);
     }
+    for (size_t li = 0; li < nlab; li++) {
+        size_t t = (labid[li] < e.n_labels) ? e.label_offsets[labid[li]] : (size_t)-1;
+        if (t == (size_t)-1 || t > 0xFFFF) continue;
+        e.code[labpos[li]]     = (uint8_t)(t & 0xFF);
+        e.code[labpos[li] + 1] = (uint8_t)((t >> 8) & 0xFF);
+    }
+    free(labpos);
+    free(labid);
     free(callps);
     free(func_off);
 

@@ -218,6 +218,15 @@ int64_t wubu_pic_interp(const uint8_t *code, size_t size, int64_t arg)
             fr = code[pc++];
             W ^= (uint8_t)ram[PIC_VR_BASE + fr];
             break;
+        case PIC_JZ:
+        case PIC_JNZ: {
+            fr = code[pc++];
+            uint16_t t = (uint16_t)(code[pc] | ((uint16_t)code[pc+1] << 8));
+            pc += 2;
+            uint8_t v = (uint8_t)ram[PIC_VR_BASE + fr];
+            if (op == PIC_JZ ? (v == 0) : (v != 0)) pc = t;
+            break;
+        }
         case PIC_JMP:
             pc = (uint16_t)(code[pc] | ((uint16_t)code[pc+1] << 8));
             break;

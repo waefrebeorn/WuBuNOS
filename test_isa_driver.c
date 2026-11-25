@@ -54,7 +54,7 @@ static const struct { const char *driver, *case_name, *why; } g_known_gaps[] = {
      * branch landed a few bytes away. Fixed in the encoder; the case passes. */
     /* 8051 fixed: LJMP + a patch pass + JZ/JNZ (skip-the-inverse form). */
     {"avr",  "loop(1..4)", "returns 0: neither MIR_JMP nor MIR_JNZ exists"},
-    {"pic",  "loop(1..4)", "returns 0: neither MIR_JMP nor MIR_JNZ exists"},
+    /* pic fixed: label fixups (it had a fixup pass only for CALL) + JZ/JNZ. */
     {"arm64","loop(1..4)", "cannot execute on this x86-64 host (NO_EXEC); executed under qemu-aarch64 it returns 5, not 10 (tools/isa_exec_gate.py KNOWN_FAIL)"},
     {"ptx",  "loop(1..4)", "cannot compile the case at all"},
 };
@@ -84,7 +84,6 @@ static const char *known_hole(const char *driver, int op)
         {"arm64", MIR_LOAD,  "no load at all -- the memory selftest 'passed' because the store wrote nothing and the value stayed in a register"},
         {"arm64", MIR_STORE, "no store at all (see MIR_LOAD)"},
         {"avr",  MIR_JMP, "the avr pseudo-VM has no jump at all"},
-        {"pic",  MIR_JMP, "the pic pseudo-VM has no jump at all"},
     };
     for (size_t i = 0; i < sizeof holes / sizeof holes[0]; i++)
         if (strcmp(holes[i].driver, driver) == 0 && holes[i].op == op)
