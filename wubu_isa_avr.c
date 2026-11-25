@@ -24,7 +24,21 @@ typedef struct {
     size_t n, cap;
     size_t *label_offsets;
     size_t n_labels;
+    size_t *patch_pos;
+    uint32_t *patch_label;
+    size_t n_patch, cap_patch;
 } avr_emitter_t;
+
+static void avr_add_patch(avr_emitter_t *e, size_t pos, uint32_t label) {
+    if (e->n_patch == e->cap_patch) {
+        e->cap_patch = e->cap_patch ? e->cap_patch * 2 : 16;
+        e->patch_pos = realloc(e->patch_pos, e->cap_patch * sizeof(size_t));
+        e->patch_label = realloc(e->patch_label, e->cap_patch * sizeof(uint32_t));
+    }
+    e->patch_pos[e->n_patch] = pos;
+    e->patch_label[e->n_patch] = label;
+    e->n_patch++;
+}
 
 static void ep8(avr_emitter_t *e, uint8_t b) {
     if (e->n + 1 > e->cap) { e->cap = e->cap ? e->cap * 2 : 256; e->code = realloc(e->code, e->cap); }
@@ -55,7 +69,9 @@ static void note_label(avr_emitter_t *e, uint32_t label, size_t off) {
 #define AVR_FUNC_RET 0x25
 #define AVR_JMP 0x26
 #define AVR_FRET 0x21   /* soft-float return */
-#define AVR_SAR  0x27   /* arithmetic shift right (MIR_SHR); 0x0F is logical */
+#define AVR_SAR  0x27
+#define AVR_JZ   0x28
+#define AVR_JNZ  0x29   /* arithmetic shift right (MIR_SHR); 0x0F is logical */
 #define AVR_SUB  0x03
 #define AVR_AND  0x04
 #define AVR_OR   0x05
@@ -127,6 +143,22 @@ static int avr_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
             ep8(&e, (uint8_t)in->dst);
             ep8(&e, (uint8_t)(in->imm & 0xFF));
             break;
+        case MIR_JMP: {
+            ep8(&e, AVR_JMP);
+            size_t lp = e.n;
+            ep8(&e, 0); ep8(&e, 0);
+            avr_add_patch(&e, lp, in->label);
+            break;
+        }
+        case MIR_JZ:
+        case MIR_JNZ: {
+            ep8(&e, (in->op == MIR_JZ) ? AVR_JZ : AVR_JNZ);
+            ep8(&e, (uint8_t)in->a);
+            size_t cp = e.n;
+            ep8(&e, 0); ep8(&e, 0);
+            avr_add_patch(&e, cp, in->label);
+            break;
+        }
         case MIR_MOV:
             ep8(&e, AVR_MOV);
             ep8(&e, (uint8_t)in->dst);
@@ -319,6 +351,14 @@ static int avr_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_size
     free(callps);
     free(func_off);
 
+    for (size_t i = 0; i < e.n_patch; i++) {
+        size_t t = (e.patch_label[i] < e.n_labels) ? e.label_offsets[e.patch_label[i]] : (size_t)-1;
+        if (t == (size_t)-1) continue;
+        e.code[e.patch_pos[i]]     = (uint8_t)(t & 0xFF);
+        e.code[e.patch_pos[i] + 1] = (uint8_t)((t >> 8) & 0xFF);
+    }
+    free(e.patch_pos);
+    free(e.patch_label);
     free(e.label_offsets);
     *out = e.code;
     *out_size = e.n;

@@ -47,6 +47,8 @@
 #define AVR_FUNC_RET 0x25
 #define AVR_JMP 0x26   /* soft-float hostcall */
 #define AVR_FRET 0x21   /* soft-float return */
+#define AVR_JZ   0x28
+#define AVR_JNZ  0x29
 #define AVR_SAR  0x27   /* arithmetic shift right on the 8-bit value */
 
 int64_t wubu_avr_interp(const uint8_t *code, size_t size, int64_t arg)
@@ -237,6 +239,15 @@ int64_t wubu_avr_interp(const uint8_t *code, size_t size, int64_t arg)
             else if (mfn == 26) /* MEM_STORE */
                 vr[AVR_XMEM_BASE + (vr[AVR_VR_BASE + cell_slot] & 0xFF)] =
                     vr[AVR_VR_BASE + s2] & 0xFF;
+            break;
+        }
+        case AVR_JZ:
+        case AVR_JNZ: {
+            a = code[pc++];
+            uint16_t t = (uint16_t)(code[pc] | ((uint16_t)code[pc+1] << 8));
+            pc += 2;
+            int64_t v = vr[AVR_VR_BASE + a];
+            if (op == AVR_JZ ? (v == 0) : (v != 0)) pc = t;
             break;
         }
         case AVR_JMP:
