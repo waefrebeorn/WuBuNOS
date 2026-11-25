@@ -53,7 +53,43 @@ static const struct { const char *driver, *case_name, *why; } g_known_gaps[] = {
     {"8051", "loop(1..4)", "returns 1: no MIR_JZ and no MIR_JNZ at all"},
     {"avr",  "loop(1..4)", "returns 1: no MIR_JZ and no MIR_JNZ at all"},
     {"pic",  "loop(1..4)", "returns 1: no MIR_JZ and no MIR_JNZ at all"},
+    {"arm64","loop(1..4)", "compiles to a hole: the accumulator's re-assignment across the back edge is not emitted, so the executed result is 5, not 10 (see tools/isa_exec_gate.py KNOWN_FAIL)"},
+    {"ptx",  "loop(1..4)", "cannot compile the case at all"},
 };
+
+static int g_unaccounted_holes = 0;
+
+static const char *mir_op_name(int op)
+{
+    switch (op) {
+    case MIR_ADD: return "MIR_ADD";     case MIR_SUB: return "MIR_SUB";
+    case MIR_MUL: return "MIR_MUL";     case MIR_DIV: return "MIR_DIV";
+    case MIR_AND: return "MIR_AND";     case MIR_OR:  return "MIR_OR";
+    case MIR_XOR: return "MIR_XOR";     case MIR_GT:  return "MIR_GT";
+    case MIR_JMP: return "MIR_JMP";     case MIR_JZ:  return "MIR_JZ";
+    case MIR_JNZ: return "MIR_JNZ";     case MIR_LOAD: return "MIR_LOAD";
+    case MIR_STORE: return "MIR_STORE"; case MIR_MOV: return "MIR_MOV";
+    case MIR_RET: return "MIR_RET";
+    default: return "?";
+    }
+}
+
+/* Ops a backend genuinely cannot express yet, with the measured reason. A hole
+ * that is NOT listed here fails the run: silence is how these survived. */
+static const char *known_hole(const char *driver, int op)
+{
+    static const struct { const char *driver; int op; const char *why; } holes[] = {
+        {"arm64", MIR_LOAD,  "no load at all -- the memory selftest 'passed' because the store wrote nothing and the value stayed in a register"},
+        {"arm64", MIR_STORE, "no store at all (see MIR_LOAD)"},
+        {"8051", MIR_JMP, "the 8051 pseudo-VM has no jump at all"},
+        {"avr",  MIR_JMP, "the avr pseudo-VM has no jump at all"},
+        {"pic",  MIR_JMP, "the pic pseudo-VM has no jump at all"},
+    };
+    for (size_t i = 0; i < sizeof holes / sizeof holes[0]; i++)
+        if (strcmp(holes[i].driver, driver) == 0 && holes[i].op == op)
+            return holes[i].why;
+    return NULL;
+}
 
 static const char *known_gap(const char *driver, const char *case_name)
 {
@@ -92,8 +128,25 @@ static int run_with_driver(const wubu_isa_driver_t *d, const wubu_mir_prog_t *pr
 {
     uint8_t *code = NULL;
     size_t csize = 0;
+    wubu_isa_unsupported_op = -1;
     if (d->compile(prog, &code, &csize) != 0 || !code || csize == 0) {
         printf("    %s: COMPILE FAIL\n", d->name);
+        return -1;
+    }
+    /* A backend that hit its op-switch default emitted a HOLE, not code. Running
+     * it would test the hole and report whatever the hole produced. */
+    if (wubu_isa_unsupported_op >= 0) {
+        int op = wubu_isa_unsupported_op;
+        printf("    %s: COMPILE FAIL -- MIR op %d (%s) has no case; the emitted code "
+               "has a hole where that op should be\n", d->name, op, mir_op_name(op));
+        free(code);
+        /* EVERY test below is shaped `if (run_with_driver(...) == 0) CHECK(...)`,
+         * so a backend that cannot compile a case was silently SKIPPED from the
+         * tally -- the battery only ever checked backends that happened to
+         * compile. Count it, name it, and require it be declared. */
+        const char *why = known_hole(d->name, op);
+        if (why) printf("  GAP  %s does not implement %s: %s\n", d->name, mir_op_name(op), why);
+        else { g_unaccounted_holes++; printf("  FAIL %s: %s not implemented (undeclared)\n", d->name, mir_op_name(op)); }
         return -1;
     }
     fflush(stdout);
@@ -414,6 +467,7 @@ static void test_branch(void)
  */
 #include <signal.h>
 #include <setjmp.h>
+#include <unistd.h>
 
 static sigjmp_buf g_case_jmp;
 static volatile sig_atomic_t g_case_timed_out = 0;
@@ -428,6 +482,7 @@ static void case_alarm(int sig)
 #define RUN_RAN      0
 #define RUN_NOEXEC   1     /* backend says it cannot execute on this host */
 #define RUN_HUNG     2
+#define RUN_COMPILEFAIL 3
 
 static int run_guarded(const wubu_isa_driver_t *d, const wubu_mir_prog_t *prog,
                        int64_t *result)
@@ -453,7 +508,7 @@ static int run_guarded(const wubu_isa_driver_t *d, const wubu_mir_prog_t *prog,
      * without a driver both return WUBU_ISA_NO_EXEC, and calling that a hang
      * would blame the backend for the host. */
     if (rc == WUBU_ISA_NO_EXEC) return RUN_NOEXEC;
-    if (rc != 0) return RUN_NOEXEC;
+    if (rc != 0) return RUN_COMPILEFAIL;   /* a hole in the emitted code is a FAILURE */
     return verdict;
 }
 
@@ -517,6 +572,9 @@ static void test_loop(void)
         if (verdict == RUN_NOEXEC) {
             printf("  SKIP %s loop(1..4): no execution path on this host\n", d->name);
             continue;
+        }
+        if (verdict == RUN_COMPILEFAIL) {
+            printf("  FAIL %s loop(1..4): the backend could not compile it\n", d->name);
         }
         {
             char msg[96];
@@ -945,6 +1003,15 @@ int main(void)
     test_frame_layout();
     printf("\n");
 
+    /* A hole the backend did not declare is a failure even though no CHECK ran
+     * for it: the battery's `if (run == 0)` shape would otherwise report a clean
+     * run for a backend that compiled nothing. */
+    if (g_unaccounted_holes) {
+        printf("=== %d COMPILE HOLE(S) not declared above: a backend silently has no "
+               "code for an op the battery asked for ===\n", g_unaccounted_holes);
+        fail += g_unaccounted_holes;
+        total += g_unaccounted_holes;
+    }
     printf("=== %s: %d/%d passed ===\n",
            fail == 0 ? "ALL TESTS PASSED" : "SOME TESTS FAILED",
            pass, total);

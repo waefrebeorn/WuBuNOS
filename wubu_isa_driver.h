@@ -93,3 +93,15 @@ const wubu_isa_driver_t *wubu_isa_find(const char *name);
 void wubu_clear_cache(void *addr, size_t size);
 
 #endif /* WUBU_ISA_DRIVER_H */
+
+/* A backend MUST NOT silently ignore a MIR op it does not implement.
+ *
+ * Before this existed, `default: break;` meant "emit nothing", so a loop built
+ * with MIR_JNZ compiled to a program with no exit branch and spun forever, with
+ * no diagnostic anywhere. A backend's op-switch default now records the op here;
+ * the driver refuses to execute code that was compiled with a hole in it, and
+ * says which op was missing.
+ *
+ * Set to -1 before a compile, checked after. */
+extern int wubu_isa_unsupported_op;
+#define WUBU_MIR_UNSUPPORTED(op) (wubu_isa_unsupported_op = (int)(op))

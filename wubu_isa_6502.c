@@ -670,6 +670,10 @@ static int cpu6502_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_
             break;
 
         default:
+            /* An op this backend does not implement must NOT compile to nothing:
+             * that is how a missing branch becomes a no-op and a loop spins
+             * forever with no diagnostic. The driver refuses to run the result. */
+            WUBU_MIR_UNSUPPORTED(in->op);
             break;
         }
     }

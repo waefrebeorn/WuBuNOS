@@ -8,6 +8,12 @@
  * C11, self-contained.
  */
 #include "wubu_isa_driver.h"
+#include <stdio.h>
+
+
+/* Backends set this from their op-switch default (see wubu_isa_driver.h).
+ * -1 means "no hole"; any other value is the MIR op that was not emitted. */
+int wubu_isa_unsupported_op = -1;
 #include <string.h>
 #include <stdatomic.h>
 

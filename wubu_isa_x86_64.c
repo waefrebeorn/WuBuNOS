@@ -1826,6 +1826,12 @@ int wubu_isa_x86_64_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out
             e8(&e,0x48); e8(&e,0x83); e8(&e,0xC4); e8(&e,0x10);
             break;
         }
+        default:
+            /* Even the primary backend must not ignore an op silently: a case
+             * that is missing here compiles to NOTHING and the program runs on
+             * with a stale value. Record it and let the driver refuse the run. */
+            WUBU_MIR_UNSUPPORTED(in->op);
+            break;
         }
     }
 
