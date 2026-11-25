@@ -477,6 +477,14 @@ static int cpu6502_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_
              *   STA dst
              * done:
              */
+            /* GT is not BPL. CMP sets N from (a-b), so BPL means a >= b: the
+             * equal case took the true branch and `i > 4` behaved as `i >= 4`
+             * (the loop summed 1+2+3 = 6). There is no single flag for "greater
+             * than" (a==b and a>b both clear N), so equality is peeled off first:
+             * equal -> fall through to the false path, which is exactly +2 bytes
+             * away (the Bcc below), a constant that needs no patching. */
+            if (in->op == MIR_GT) { e8(&e, BEQ); e8(&e, 0x02); }
+
             size_t cc_pos = e.n + 1;      /* displacement byte of the Bcc */
             e8(&e, cc); e8(&e, 0x00);     /* placeholder displacement */
 
@@ -489,7 +497,14 @@ static int cpu6502_compile(const wubu_mir_prog_t *p, uint8_t **out, size_t *out_
              * LDA #1 (2) + STA dst (2) = 4 bytes. Patch it directly. */
             size_t jmp_pos = e.n;         /* JMP_ABS opcode position */
             e8(&e, JMP_ABS);
-            size_t done_pos = e.n + 3 + 4;
+            /* e.n has already advanced past the opcode, so the remaining 2
+             * bytes of the JMP plus the 4-byte true path put `done` at
+             * jmp_pos + 3 + 4. Using e.n here (as this did) yields
+             * jmp_pos + 8 and lands one byte into the true path -- on the
+             * operand of `LDA $06`, i.e. executing 0x06 as an opcode. That is
+             * why the 6502 loop summed to 0 while every straight-line case
+             * passed. */
+            size_t done_pos = (size_t)jmp_pos + 3 + 4;
             e8(&e, (uint8_t)(done_pos & 0xFF));
             e8(&e, (uint8_t)((done_pos >> 8) & 0xFF));
 

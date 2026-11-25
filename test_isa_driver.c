@@ -47,7 +47,8 @@ static const struct { const char *driver, *case_name, *why; } g_known_gaps[] = {
     /* Re-measured 2026-11-24 with WUBU_ISA_NO_GAPS=1 after MIR_JNZ was added to
      * 6502, z80, 8086, m68k and mips: 8086, m68k, z80 and mips now PASS -- their
      * earlier "wrong sum" numbers were the missing branch, not an allocator bug. */
-    {"6502", "loop(1..4)", "returns 0: the JNZ branch is emitted now but does not fire; the exit test reads a slot the loop body never updates"},
+    /* 6502 fixed: JMP_ABS to `done` was computed from e.n after the opcode
+     * (one byte into the true path), and MIR_GT was emitted as GE. */
     /* riscv was here: "the FORWARD patch resolves to pos+4". It was not the
      * label machinery -- the B-type immediate fields were transposed, so every
      * branch landed a few bytes away. Fixed in the encoder; the case passes. */
