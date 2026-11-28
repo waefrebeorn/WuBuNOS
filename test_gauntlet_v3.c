@@ -230,6 +230,14 @@ int main(int argc, char **argv) {
         }
     }
 
+    /* 4431 tests x 14 targets is a full-day run, so it cannot be part of any tier. WUBU_GAUNTLET_LIMIT
+       samples the first n tests per target; unset means the whole corpus. Configurable ceiling,
+       never a hardcoded one -- the same knob the other runner got. */
+    const char *glim = getenv("WUBU_GAUNTLET_LIMIT");
+    if (glim && atoi(glim) > 0 && atoi(glim) < n_tests) {
+        n_tests = atoi(glim);
+        fprintf(stderr, "  (limited to first %d tests)\n", n_tests);
+    }
     fprintf(stderr, "Loaded %d tests, running with %d workers\n", n_tests, n_jobs);
 
     /* Divide tests among workers */
@@ -264,10 +272,12 @@ int main(int argc, char **argv) {
     uint32_t total_pass = 0, total_fail = 0, total_err = 0, total_skip = 0;
     char line[1024];
 
+    /* Reap with waitpid(-1): waiting on worker_pids[0..n] IN ORDER leaves every worker that
+       finishes early as a zombie until worker 0 exits. A watcher saw 8 of them at 65 s old with
+       the parent blocked in do_wait -- that is this loop, not a transient exit window. */
+    for (int w = 0; w < n_jobs; w++) waitpid(-1, NULL, 0);
     for (int w = 0; w < n_jobs; w++) {
-        /* Wait for worker to FINISH first, then read its result file */
-        int status;
-        waitpid(worker_pids[w], &status, 0);
+        int status = 0;
 
         FILE *f = fopen(result_files[w], "r");
         if (!f) {
