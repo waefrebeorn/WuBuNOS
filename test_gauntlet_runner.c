@@ -277,6 +277,14 @@ int main(int argc, char **argv) {
         uint32_t batch_start = 0; /* test offset within the flat test array */
         /* Build a flat array of all test pointers for batching. */
         uint32_t total_tests = g.n_tests;
+        /* A full run is 4588 tests x 14 targets = 64k compile+execute cycles, measured in hours.
+           WUBU_GAUNTLET_LIMIT samples the FIRST n tests per target so the gate can be run inside a
+           release tier at all. Unset means full run: no hardcoded ceiling, a configurable one. */
+        const char *glim = getenv("WUBU_GAUNTLET_LIMIT");
+        if (glim && atoi(glim) > 0 && (uint32_t)atoi(glim) < total_tests) {
+            total_tests = (uint32_t)atoi(glim);
+            printf("  (limited to first %u tests per target)\n\n", total_tests);
+        }
         const test_entry_t **flat = NULL;
         uint32_t *flat_suite = NULL; /* suite index for each flat entry */
         uint32_t *flat_idx = NULL;   /* index within suite for each flat entry */

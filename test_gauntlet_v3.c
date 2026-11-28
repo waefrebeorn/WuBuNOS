@@ -99,6 +99,11 @@ for (int i = start; i < end; i++) {
     pid_t pid = fork();
     if (pid == 0) {
         /* Child: run test, write result, exit */
+        /* The compile/execute path prints its own chatter to stdout; inherited, that chatter became
+           the harness's report channel -- one 25 s run wrote 19.4 GB to stdout. The child's stdout
+           is not output anybody reads, so point it at /dev/null and keep stderr for diagnostics. */
+        FILE *dn = fopen("/dev/null", "w");
+        if (dn) { dup2(fileno(dn), STDOUT_FILENO); fclose(dn); }
         signal(SIGSEGV, SIG_DFL);
         signal(SIGBUS, SIG_DFL);
         signal(SIGILL, SIG_DFL);
